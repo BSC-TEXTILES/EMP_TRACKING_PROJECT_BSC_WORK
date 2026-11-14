@@ -1,0 +1,36 @@
+{
+  "name": "emp-tracking",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Enterprise Workforce Management, Employee Tracking, Task Allocation, Communication & KPI Platform",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm --workspace backend run dev",
+    "dev:web": "npm --workspace frontend run dev",
+    "build": "npm --workspace frontend run build && npm --workspace backend run build",
+    "start": "npm --workspace backend run start",
+    "db:create": "npm --workspace backend run db:create",
+    "db:migrate": "npm --workspace backend run db:migrate",
+    "db:seed": "npm --workspace backend run db:seed",
+    "db:setup": "npm run db:create && npm run db:migrate",
+    "test": "npm --workspace backend run test",
+    "typecheck": "npm --workspace backend run typecheck && npm --workspace frontend run typecheck",
+    "db:seed:demo": "npm --workspace backend run db:seed -- --demo"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "rollup": "npm:@rollup/wasm-node@^4.68.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
+  }
+}

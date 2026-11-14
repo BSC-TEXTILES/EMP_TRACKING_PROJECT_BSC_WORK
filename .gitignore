@@ -1,0 +1,42 @@
+node_modules/
+dist/
+backend/dist/
+frontend/dist/
+
+# Environment files: never commit real values. Templates stay tracked.
+.env
+.env.*
+!.env.example
+!.env.production.example
+backend/.env
+frontend/.env
+backend/.env.*
+!backend/.env.example
+storage/
+backend/storage/
+*.log
+.env.local
+.DS_Store
+Thumbs.db
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Website-managed encrypted configuration and recovery artifacts
+private-config/
+*.enc
+master.key
+setup-code
+
+# Local API responses and session cookies
+/cookies.txt
+/email.json
+/hr.txt
+/hr_emps.json
+/hr_login.json
+/itm.txt
+/login.json
+/t.json
+/t.txt
+/task.json
+/.freebuff/

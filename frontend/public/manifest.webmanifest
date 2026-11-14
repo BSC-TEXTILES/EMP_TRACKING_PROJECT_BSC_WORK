@@ -1,0 +1,24 @@
+{
+  "name": "Workforce — Enterprise Workforce Management",
+  "short_name": "Workforce",
+  "description": "Attendance, tasks, reporting, communication and KPI management for the whole organisation.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f1f5f9",
+  "theme_color": "#1d4ed8",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Attendance", "url": "/attendance" },
+    { "name": "Tasks", "url": "/tasks" },
+    { "name": "Messages", "url": "/chat" }
+  ]
+}

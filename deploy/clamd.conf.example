@@ -1,0 +1,12 @@
+# Private network / localhost only. Maintain signatures using freshclam.
+TCPSocket 3310
+TCPAddr 127.0.0.1
+Foreground yes
+ScanArchive yes
+StreamMaxLength 16M
+MaxFileSize 16M
+MaxScanSize 32M
+MaxRecursion 8
+MaxFiles 1000
+AlertExceedsMax yes
+AlertEncrypted yes
