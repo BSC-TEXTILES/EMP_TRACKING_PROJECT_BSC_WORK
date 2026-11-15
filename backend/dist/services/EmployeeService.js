@@ -1,0 +1,589 @@
+import { execute, query, queryOne } from '../db/index.js';
+import { recordAudit } from '../lib/audit.js';
+import { hashPassword, passwordIssues } from '../lib/crypto.js';
+import { toIso } from '../lib/dates.js';
+import { ApiError } from '../lib/http.js';
+import { subtreeIds } from '../lib/scope.js';
+import { NotificationService } from './NotificationService.js';
+import { ChatService } from './ChatService.js';
+async function employeeScope(user) {
+    if (user.permissions.includes('employees.view.all'))
+        return { clause: '1 = 1', params: [] };
+    if (user.permissions.includes('employees.view.team')) {
+        const ids = await subtreeIds(user.id);
+        if (ids.length === 0)
+            return { clause: '1 = 0', params: [] };
+        return { clause: `e.id IN (${ids.map(() => '?').join(',')})`, params: ids };
+    }
+    return { clause: 'e.id = ?', params: [user.id] };
+}
+export class EmployeeService {
+    static async list(user, filters) {
+        const scope = await employeeScope(user);
+        const clauses = [scope.clause, "e.status <> 'rejected'"];
+        const params = [...scope.params];
+        if (filters.search) {
+            clauses.push('(e.full_name LIKE ? OR e.employee_code LIKE ? OR e.email LIKE ? OR e.mobile LIKE ?)');
+            const term = `%${filters.search}%`;
+            params.push(term, term, term, term);
+        }
+        if (filters.departmentId) {
+            clauses.push('e.department_id = ?');
+            params.push(filters.departmentId);
+        }
+        if (filters.designationId) {
+            clauses.push('e.designation_id = ?');
+            params.push(filters.designationId);
+        }
+        if (filters.locationId) {
+            clauses.push('e.location_id = ?');
+            params.push(filters.locationId);
+        }
+        if (filters.managerId) {
+            clauses.push('e.manager_id = ?');
+            params.push(filters.managerId);
+        }
+        if (filters.status) {
+            clauses.push('e.status = ?');
+            params.push(filters.status);
+        }
+        if (filters.roleId) {
+            clauses.push('e.role_id = ?');
+            params.push(filters.roleId);
+        }
+        const page = Math.max(1, filters.page ?? 1);
+        const pageSize = Math.min(200, Math.max(5, filters.pageSize ?? 25));
+        const where = clauses.join(' AND ');
+        const rows = await query(`SELECT e.id, e.employee_code, e.full_name, e.email, e.mobile, e.photo_url, e.status, e.employment_type, e.joining_date,
+              e.department_id, e.manager_id, e.created_at,
+              d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
+              m.full_name AS manager_name, l.name AS location_name,
+              a.status AS attendance_status, a.check_in_at,
+              (SELECT COUNT(*) FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+                WHERE ta.employee_id = e.id AND t.status IN ('assigned','accepted','in_progress','on_hold','pending_approval')) AS open_tasks
+       FROM employees e
+       JOIN roles r ON r.id = e.role_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN employees m ON m.id = e.manager_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = CURDATE()
+       WHERE ${where}
+       ORDER BY FIELD(e.status, 'pending_verification','pending_approval','active','inactive'), e.full_name
+       LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, params);
+        const total = await queryOne(`SELECT COUNT(*) AS total FROM employees e WHERE ${where}`, params);
+        return {
+            items: rows.map((r) => ({
+                id: Number(r.id),
+                employeeCode: r.employee_code,
+                fullName: r.full_name,
+                email: r.email,
+                mobile: r.mobile,
+                photoUrl: r.photo_url,
+                status: r.status,
+                employmentType: r.employment_type,
+                joiningDate: r.joining_date,
+                departmentId: r.department_id ? Number(r.department_id) : null,
+                departmentName: r.department_name,
+                designationTitle: r.designation_title,
+                roleName: r.role_name,
+                roleSlug: r.role_slug,
+                managerId: r.manager_id ? Number(r.manager_id) : null,
+                managerName: r.manager_name,
+                locationName: r.location_name,
+                attendanceStatus: r.attendance_status,
+                checkInAt: toIso(r.check_in_at),
+                openTasks: Number(r.open_tasks),
+            })),
+            total: Number(total?.total ?? 0),
+            page,
+            pageSize,
+        };
+    }
+    static async detail(employeeId, user) {
+        const scope = await employeeScope(user);
+        const row = await queryOne(`SELECT e.*, d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
+              m.full_name AS manager_name, l.name AS location_name
+       FROM employees e
+       JOIN roles r ON r.id = e.role_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN employees m ON m.id = e.manager_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       WHERE e.id = ? AND ${scope.clause}`, [employeeId, ...scope.params]);
+        if (!row)
+            throw ApiError.notFound('Employee not found or outside your access scope');
+        const [taskStats, attendanceStats, ticketStats, kpi, reports] = await Promise.all([
+            queryOne(`SELECT COUNT(*) AS total, SUM(t.status = 'completed') AS completed,
+                SUM(t.status IN ('assigned','accepted','in_progress','on_hold','pending_approval')) AS active,
+                SUM(t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')) AS overdue
+         FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id WHERE ta.employee_id = ?`, [employeeId]),
+            queryOne(`SELECT SUM(status IN ('present','late','half_day')) AS present, SUM(is_late) AS late, COALESCE(SUM(total_minutes),0) AS minutes
+         FROM attendance WHERE employee_id = ? AND work_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`, [employeeId]),
+            queryOne(`SELECT COUNT(*) AS total, SUM(status NOT IN ('resolved','closed','cancelled')) AS open,
+                SUM(status IN ('resolved','closed')) AS resolved
+         FROM tickets WHERE requester_id = ? OR assignee_id = ?`, [employeeId, employeeId]),
+            queryOne(`SELECT period, total_score, category, status FROM employee_kpi_records WHERE employee_id = ? ORDER BY period DESC LIMIT 1`, [employeeId]),
+            queryOne(`SELECT COUNT(*) AS submitted, SUM(status = 'approved') AS approved
+         FROM daily_work_reports WHERE employee_id = ? AND report_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`, [employeeId]),
+        ]);
+        return {
+            id: Number(row.id),
+            employeeCode: row.employee_code,
+            fullName: row.full_name,
+            email: row.email,
+            mobile: row.mobile,
+            photoUrl: row.photo_url,
+            status: row.status,
+            employmentType: row.employment_type,
+            joiningDate: row.joining_date,
+            dateOfBirth: row.date_of_birth,
+            address: row.address,
+            emergencyContact: row.emergency_contact,
+            departmentId: row.department_id ? Number(row.department_id) : null,
+            departmentName: row.department_name,
+            designationId: row.designation_id ? Number(row.designation_id) : null,
+            designationTitle: row.designation_title,
+            managerId: row.manager_id ? Number(row.manager_id) : null,
+            managerName: row.manager_name,
+            locationId: row.location_id ? Number(row.location_id) : null,
+            locationName: row.location_name,
+            roleId: Number(row.role_id),
+            roleName: row.role_name,
+            roleSlug: row.role_slug,
+            mfaEnabled: Boolean(row.mfa_enabled),
+            lastLoginAt: toIso(row.last_login_at),
+            createdAt: toIso(row.created_at),
+            emailVerifiedAt: toIso(row.email_verified_at),
+            mobileVerifiedAt: toIso(row.mobile_verified_at),
+            stats: {
+                tasks: {
+                    total: Number(taskStats?.total ?? 0),
+                    completed: Number(taskStats?.completed ?? 0),
+                    active: Number(taskStats?.active ?? 0),
+                    overdue: Number(taskStats?.overdue ?? 0),
+                },
+                attendance: {
+                    presentDays: Number(attendanceStats?.present ?? 0),
+                    lateDays: Number(attendanceStats?.late ?? 0),
+                    totalMinutes: Number(attendanceStats?.minutes ?? 0),
+                },
+                tickets: {
+                    total: Number(ticketStats?.total ?? 0),
+                    open: Number(ticketStats?.open ?? 0),
+                    resolved: Number(ticketStats?.resolved ?? 0),
+                },
+                reports: {
+                    submitted: Number(reports?.submitted ?? 0),
+                    approved: Number(reports?.approved ?? 0),
+                },
+                kpi: kpi
+                    ? { period: kpi.period, score: Number(kpi.total_score), category: kpi.category, status: kpi.status }
+                    : null,
+            },
+        };
+    }
+    static async update(employeeId, actor, input) {
+        const target = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found');
+        const isSelf = Number(target.id) === actor.id;
+        if (!isSelf && !actor.permissions.includes('employees.manage')) {
+            throw ApiError.forbidden('You cannot edit this employee record.');
+        }
+        const fields = [];
+        const params = [];
+        if (input.fullName) {
+            fields.push('full_name = ?');
+            params.push(input.fullName.trim());
+        }
+        if (input.mobile) {
+            const duplicate = await queryOne('SELECT id FROM employees WHERE mobile = ? AND id <> ?', [input.mobile, employeeId]);
+            if (duplicate)
+                throw ApiError.conflict('That mobile number is already registered.');
+            fields.push('mobile = ?');
+            params.push(input.mobile.trim());
+        }
+        if (input.address !== undefined) {
+            fields.push('address = ?');
+            params.push(input.address);
+        }
+        if (input.emergencyContact !== undefined) {
+            fields.push('emergency_contact = ?');
+            params.push(input.emergencyContact);
+        }
+        if (input.dateOfBirth !== undefined) {
+            fields.push('date_of_birth = ?');
+            params.push(input.dateOfBirth || null);
+        }
+        if (input.photoUrl !== undefined) {
+            fields.push('photo_url = ?');
+            params.push(input.photoUrl);
+        }
+        if (fields.length === 0)
+            throw ApiError.badRequest('Nothing to update.');
+        await execute(`UPDATE employees SET ${fields.join(', ')} WHERE id = ?`, [...params, employeeId]);
+        await recordAudit({
+            actorId: actor.id,
+            action: isSelf ? 'employee.profile_updated' : 'employee.updated',
+            entityType: 'employee',
+            entityId: employeeId,
+            after: input,
+        });
+    }
+    /** Sensitive organisational changes always require employee management rights. */
+    static async updateOrgAssignment(employeeId, actor, input) {
+        if (!actor.permissions.includes('employees.manage'))
+            throw ApiError.forbidden('You cannot change organisational assignments.');
+        const target = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found');
+        if (input.managerId === employeeId)
+            throw ApiError.badRequest('An employee cannot report to themselves.');
+        if (input.managerId) {
+            const descendants = await subtreeIds(employeeId);
+            if (descendants.includes(input.managerId)) {
+                throw ApiError.badRequest('That manager is inside this employee\'s own reporting line.');
+            }
+        }
+        const fields = [];
+        const params = [];
+        for (const [column, value] of [
+            ['role_id', input.roleId],
+            ['department_id', input.departmentId],
+            ['designation_id', input.designationId],
+            ['manager_id', input.managerId],
+            ['location_id', input.locationId],
+            ['employment_type', input.employmentType],
+        ]) {
+            if (value !== undefined) {
+                fields.push(`${column} = ?`);
+                params.push(value);
+            }
+        }
+        if (fields.length === 0)
+            throw ApiError.badRequest('Nothing to update.');
+        await execute(`UPDATE employees SET ${fields.join(', ')} WHERE id = ?`, [...params, employeeId]);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.org_assignment_updated',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { role_id: target.role_id, department_id: target.department_id, manager_id: target.manager_id },
+            after: input,
+        });
+    }
+    static async approveRegistration(employeeId, actor, input) {
+        if (!actor.permissions.includes('employees.approve') && !actor.permissions.includes('employees.manage')) {
+            throw ApiError.forbidden('You cannot approve registrations.');
+        }
+        const employee = await queryOne('SELECT id, full_name, status, email, mobile, department_id FROM employees WHERE id = ?', [employeeId]);
+        if (!employee)
+            throw ApiError.notFound('Employee not found');
+        if (employee.status !== 'pending_approval')
+            throw ApiError.badRequest('This registration is not awaiting approval.');
+        await execute(`UPDATE employees SET status = 'active', role_id = COALESCE(?, role_id), department_id = COALESCE(?, department_id),
+              designation_id = COALESCE(?, designation_id), manager_id = COALESCE(?, manager_id), location_id = COALESCE(?, location_id),
+              joining_date = COALESCE(joining_date, CURDATE())
+       WHERE id = ?`, [
+            input.roleId ?? null,
+            input.departmentId ?? null,
+            input.designationId ?? null,
+            input.managerId ?? null,
+            input.locationId ?? null,
+            employeeId,
+        ]);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.registration_approved',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { status: employee.status },
+            after: { status: 'active', ...input },
+        });
+        await ChatService.emptyOrEnsureGeneral(employeeId, input.departmentId ?? employee.department_id);
+        await NotificationService.notify({
+            employeeIds: [employeeId],
+            type: 'account',
+            title: 'Account approved',
+            body: 'Your account is active. You can now sign in and start tracking your work.',
+            link: '/',
+            priority: 'high',
+            actorId: actor.id,
+        });
+    }
+    static async rejectRegistration(employeeId, actor, reason) {
+        if (!actor.permissions.includes('employees.approve') && !actor.permissions.includes('employees.manage')) {
+            throw ApiError.forbidden('You cannot reject registrations.');
+        }
+        if (!reason.trim())
+            throw ApiError.badRequest('Provide a reason for rejecting this registration.');
+        await execute("UPDATE employees SET status = 'rejected', deactivated_at = NOW(3) WHERE id = ? AND status IN ('pending_approval','pending_verification')", [
+            employeeId,
+        ]);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.registration_rejected',
+            entityType: 'employee',
+            entityId: employeeId,
+            after: { reason },
+        });
+    }
+    static async createByAdmin(actor, input) {
+        if (!actor.permissions.includes('employees.manage'))
+            throw ApiError.forbidden('You cannot create employees.');
+        const issues = passwordIssues(input.password);
+        if (issues.length > 0)
+            throw ApiError.badRequest(`Password must contain ${issues.join(', ')}.`);
+        const duplicate = await queryOne('SELECT id FROM employees WHERE email = ? OR mobile = ?', [input.email.toLowerCase(), input.mobile]);
+        if (duplicate)
+            throw ApiError.conflict('An employee already exists with this email or mobile.');
+        let code = input.employeeCode?.trim();
+        if (!code) {
+            const seq = await queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'employee_code_seq'");
+            const next = Number(seq?.setting_value ?? 0) + 1;
+            await execute("INSERT INTO system_settings (setting_key, setting_value) VALUES ('employee_code_seq', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)", [String(next)]);
+            code = `EMP-${1000 + next}`;
+        }
+        const result = await execute(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id,
+        location_id, employment_type, status, joining_date, email_verified_at, mobile_verified_at, must_change_password)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3), 1)`, [
+            code,
+            input.fullName.trim(),
+            input.email.toLowerCase(),
+            input.mobile,
+            await hashPassword(input.password),
+            input.roleId,
+            input.departmentId,
+            input.designationId ?? null,
+            input.managerId ?? null,
+            input.locationId ?? null,
+            input.employmentType ?? 'full_time',
+        ]);
+        await ChatService.emptyOrEnsureGeneral(result.insertId, input.departmentId);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.created',
+            entityType: 'employee',
+            entityId: result.insertId,
+            after: { employeeCode: code, email: input.email, roleId: input.roleId },
+        });
+        return { id: result.insertId, employeeCode: code };
+    }
+    static async setStatus(employeeId, actor, status, reason) {
+        if (!actor.permissions.includes('employees.manage'))
+            throw ApiError.forbidden('You cannot change employee status.');
+        if (employeeId === actor.id)
+            throw ApiError.badRequest('You cannot deactivate your own account.');
+        const target = await queryOne('SELECT status, full_name FROM employees WHERE id = ?', [employeeId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found');
+        await execute('UPDATE employees SET status = ?, deactivated_at = ? WHERE id = ?', [
+            status,
+            status === 'inactive' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null,
+            employeeId,
+        ]);
+        if (status === 'inactive') {
+            await execute('UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = ? WHERE employee_id = ? AND revoked_at IS NULL', [
+                'account_deactivated',
+                employeeId,
+            ]);
+        }
+        await recordAudit({
+            actorId: actor.id,
+            action: status === 'active' ? 'employee.reactivated' : 'employee.deactivated',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { status: target.status },
+            after: { status, reason },
+        });
+    }
+    static async hierarchy() {
+        const rows = await query(`SELECT e.id, e.full_name, e.employee_code, e.manager_id, dg.title AS designation_title, d.name AS department_name,
+              e.photo_url, r.slug AS role_slug, e.status
+       FROM employees e
+       JOIN roles r ON r.id = e.role_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       WHERE e.status IN ('active','pending_approval')
+       ORDER BY r.level DESC, e.full_name`);
+        return rows.map((r) => ({
+            id: Number(r.id),
+            name: r.full_name,
+            employeeCode: r.employee_code,
+            managerId: r.manager_id ? Number(r.manager_id) : null,
+            designation: r.designation_title,
+            department: r.department_name,
+            photoUrl: r.photo_url,
+            roleSlug: r.role_slug,
+            status: r.status,
+        }));
+    }
+    static async picker(employeeId) {
+        // Used for assignee/participant pickers: all active employees are visible organisation-wide
+        // by design (names + designations only), never confidential records.
+        return query(`SELECT e.id, e.full_name, e.employee_code, dg.title AS designation_title, d.name AS department_name, e.manager_id
+       FROM employees e
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       WHERE e.status = 'active' AND e.id <> ?
+       ORDER BY e.full_name`, [employeeId]);
+    }
+    static async structure() {
+        const [departments, designations, locations, roles] = await Promise.all([
+            query(`SELECT d.id, d.name, d.code, d.head_employee_id, h.full_name AS head_name,
+                (SELECT COUNT(*) FROM employees e WHERE e.department_id = d.id AND e.status = 'active') AS employee_count
+         FROM departments d LEFT JOIN employees h ON h.id = d.head_employee_id ORDER BY d.name`),
+            query('SELECT id, title, department_id, level FROM designations ORDER BY title'),
+            query('SELECT id, name, code, city, timezone, latitude, longitude, geofence_radius_m FROM locations ORDER BY name'),
+            query(`SELECT r.id, r.name, r.slug, r.category, r.level,
+                (SELECT COUNT(*) FROM employees e WHERE e.role_id = r.id AND e.status = 'active') AS employee_count
+         FROM roles r ORDER BY r.level DESC`),
+        ]);
+        return {
+            departments: departments.map((d) => ({ ...d, id: Number(d.id), employeeCount: Number(d.employee_count) })),
+            designations: designations.map((d) => ({ ...d, departmentId: d.department_id ? Number(d.department_id) : null })),
+            locations: locations.map((l) => ({
+                ...l,
+                latitude: l.latitude === null ? null : Number(l.latitude),
+                longitude: l.longitude === null ? null : Number(l.longitude),
+                geofenceRadiusM: l.geofence_radius_m === null ? null : Number(l.geofence_radius_m),
+            })),
+            roles: roles.map((r) => ({ ...r, employeeCount: Number(r.employee_count) })),
+        };
+    }
+    static async rolePermissions() {
+        const roles = await query('SELECT id, name, slug, level, description, is_system FROM roles ORDER BY level DESC');
+        const permissions = await query('SELECT id, code, module, action, description FROM permissions ORDER BY module, action');
+        const mapping = await query('SELECT role_id, permission_id FROM role_permissions');
+        return {
+            roles: roles.map((r) => ({
+                id: Number(r.id),
+                name: r.name,
+                slug: r.slug,
+                level: Number(r.level),
+                description: r.description,
+                isSystem: Boolean(r.is_system),
+                permissions: mapping.filter((m) => Number(m.role_id) === Number(r.id)).map((m) => Number(m.permission_id)),
+            })),
+            permissions: permissions.map((p) => ({
+                id: Number(p.id),
+                code: p.code,
+                module: p.module,
+                action: p.action,
+                description: p.description,
+            })),
+        };
+    }
+    static async updateRolePermissions(roleId, actor, permissionIds) {
+        if (!actor.permissions.includes('roles.manage'))
+            throw ApiError.forbidden('You cannot change the permission matrix.');
+        const role = await queryOne('SELECT name, slug FROM roles WHERE id = ?', [roleId]);
+        if (!role)
+            throw ApiError.notFound('Role not found');
+        const before = await query('SELECT permission_id FROM role_permissions WHERE role_id = ?', [roleId]);
+        await execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+        for (const permissionId of permissionIds) {
+            await execute('INSERT IGNORE INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [roleId, permissionId]);
+        }
+        await recordAudit({
+            actorId: actor.id,
+            action: 'role.permissions_updated',
+            entityType: 'role',
+            entityId: roleId,
+            before: { permissions: before.map((b) => Number(b.permission_id)) },
+            after: { permissions: permissionIds },
+        });
+    }
+    static async setUserPermission(employeeId, actor, permissionId, effect) {
+        if (!actor.permissions.includes('roles.manage'))
+            throw ApiError.forbidden('You cannot change user permissions.');
+        if (effect === 'clear') {
+            await execute('DELETE FROM user_permissions WHERE employee_id = ? AND permission_id = ?', [employeeId, permissionId]);
+        }
+        else {
+            await execute(`INSERT INTO user_permissions (employee_id, permission_id, effect, granted_by) VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE effect = VALUES(effect), granted_by = VALUES(granted_by)`, [employeeId, permissionId, effect, actor.id]);
+        }
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.permission_override',
+            entityType: 'employee',
+            entityId: employeeId,
+            after: { permissionId, effect },
+        });
+    }
+    static async createDepartment(actor, input) {
+        if (!actor.permissions.includes('org.manage'))
+            throw ApiError.forbidden('You cannot manage the organisation structure.');
+        const duplicate = await queryOne('SELECT id FROM departments WHERE code = ?', [input.code.toUpperCase()]);
+        if (duplicate)
+            throw ApiError.conflict('A department with that code already exists.');
+        const result = await execute('INSERT INTO departments (name, code, description, head_employee_id) VALUES (?, ?, ?, ?)', [
+            input.name,
+            input.code.toUpperCase(),
+            input.description ?? null,
+            input.headEmployeeId ?? null,
+        ]);
+        await recordAudit({ actorId: actor.id, action: 'department.created', entityType: 'department', entityId: result.insertId, after: input });
+        return result.insertId;
+    }
+    static async createDesignation(actor, input) {
+        if (!actor.permissions.includes('org.manage'))
+            throw ApiError.forbidden('You cannot manage the organisation structure.');
+        const result = await execute('INSERT INTO designations (title, department_id, level) VALUES (?, ?, ?)', [
+            input.title,
+            input.departmentId ?? null,
+            input.level ?? 1,
+        ]);
+        await recordAudit({ actorId: actor.id, action: 'designation.created', entityType: 'designation', entityId: result.insertId, after: input });
+        return result.insertId;
+    }
+    static async createLocation(actor, input) {
+        if (!actor.permissions.includes('org.manage'))
+            throw ApiError.forbidden('You cannot manage the organisation structure.');
+        const result = await execute('INSERT INTO locations (name, code, city, timezone, latitude, longitude, geofence_radius_m) VALUES (?, ?, ?, ?, ?, ?, ?)', [
+            input.name,
+            input.code.toUpperCase(),
+            input.city ?? null,
+            input.timezone ?? 'Asia/Kolkata',
+            input.latitude ?? null,
+            input.longitude ?? null,
+            input.geofenceRadiusM ?? null,
+        ]);
+        await recordAudit({ actorId: actor.id, action: 'location.created', entityType: 'location', entityId: result.insertId, after: input });
+        return result.insertId;
+    }
+    static async updateRoleDetails(actor, roleId, input) {
+        if (!actor.permissions.includes('roles.manage'))
+            throw ApiError.forbidden('You cannot manage roles.');
+        const role = await queryOne('SELECT is_system FROM roles WHERE id = ?', [roleId]);
+        if (!role)
+            throw ApiError.notFound('Role not found');
+        await execute('UPDATE roles SET name = COALESCE(?, name), description = COALESCE(?, description), level = COALESCE(?, level) WHERE id = ?', [
+            input.name ?? null,
+            input.description ?? null,
+            input.level ?? null,
+            roleId,
+        ]);
+        await recordAudit({ actorId: actor.id, action: 'role.updated', entityType: 'role', entityId: roleId, after: input });
+    }
+    static async createRole(actor, input) {
+        if (!actor.permissions.includes('roles.manage'))
+            throw ApiError.forbidden('You cannot create roles.');
+        const slug = input.slug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+        const duplicate = await queryOne('SELECT id FROM roles WHERE slug = ?', [slug]);
+        if (duplicate)
+            throw ApiError.conflict('A role with that identifier already exists.');
+        const result = await execute('INSERT INTO roles (name, slug, category, level, description) VALUES (?, ?, ?, ?, ?)', [
+            input.name,
+            slug,
+            input.category ?? 'general',
+            input.level ?? 20,
+            input.description ?? null,
+        ]);
+        await recordAudit({ actorId: actor.id, action: 'role.created', entityType: 'role', entityId: result.insertId, after: input });
+        return result.insertId;
+    }
+}
+//# sourceMappingURL=EmployeeService.js.map

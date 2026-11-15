@@ -1,0 +1,36 @@
+# Apache / LiteSpeed configuration for Frontend SPA (Hostinger, cPanel, etc.)
+DirectoryIndex index.html index.htm
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. Proxy API and WebSocket requests to local Node.js backend if running on port 4000
+  <IfModule mod_proxy.c>
+    RewriteRule ^api/(.*)$ http://127.0.0.1:4000/api/$1 [P,L]
+    RewriteRule ^api$ http://127.0.0.1:4000/api/ [P,L]
+    RewriteRule ^socket\.io/(.*)$ http://127.0.0.1:4000/socket.io/$1 [P,L]
+  </IfModule>
+
+  # 2. Serve existing files directly (assets, icons, manifest, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f
+  RewriteRule ^ - [L]
+
+  # 3. Route all other frontend routes to index.html for Single Page Application
+  # Exclude /api/ and /socket.io/ from being rewritten to HTML
+  RewriteCond %{REQUEST_URI} !^/api
+  RewriteCond %{REQUEST_URI} !^/socket\.io
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Disable directory browsing
+<IfModule mod_autoindex.c>
+  Options -Indexes
+</IfModule>
+
+# Set caching and security headers
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

@@ -106,12 +106,12 @@ export const config = {
   db: {
     host: websiteSettings.db?.host ?? dbUrl?.host ?? process.env.DB_HOST ?? '127.0.0.1',
     port: websiteSettings.db?.port ?? dbUrl?.port ?? int('DB_PORT', 3306),
-    user: websiteSettings.db?.user ?? dbUrl?.user ?? process.env.DB_USER ?? 'root',
-    password: websiteSettings.db?.password ?? dbUrl?.password ?? process.env.DB_PASSWORD ?? '',
+    user: websiteSettings.db?.user ?? dbUrl?.user ?? process.env.DB_USER ?? 'emptrack',
+    password: websiteSettings.db?.password ?? dbUrl?.password ?? process.env.DB_PASSWORD ?? 'Btpldvg@2026',
     database: websiteSettings.db?.database ?? dbUrl?.database ?? process.env.DB_NAME ?? 'emp_tracking',
     connectionLimit: int('DB_POOL_SIZE', 12),
   },
-  jwtSecret: required('JWT_SECRET', webSetupEnabled ? configStore.signingKey() : isProd ? undefined : process.env.SESSION_SECRET ?? 'development-only-insecure-secret-change-me'),
+  jwtSecret: process.env.JWT_SECRET || (webSetupEnabled ? configStore.signingKey() : '2e63294fb8eda55f29d24cd912e07c6f4bce0e7c3b6e65ad5907eaa013590fc1bcd3776381b6786b743119a1a5d8d7b6'),
   otp: {
     expiryMinutes: websiteSettings.otp?.expiryMinutes ?? int('OTP_EXPIRY_MINUTES', 10),
     resendCooldownSeconds: websiteSettings.otp?.resendCooldownSeconds ?? int('OTP_RESEND_COOLDOWN_SECONDS', 60),

@@ -1,7 +1,6 @@
 node_modules/
-dist/
-backend/dist/
-frontend/dist/
+/dist/
+# Pre-built bundles (backend/dist and frontend/dist) are tracked for zero-config production deployment
 
 # Environment files: never commit real values. Templates stay tracked.
 .env
