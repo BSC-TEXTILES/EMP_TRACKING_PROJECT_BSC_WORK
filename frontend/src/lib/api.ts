@@ -11,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = '/api';
+const BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 20_000;
 
 let refreshFlight: Promise<void> | null = null;
@@ -29,7 +29,7 @@ async function renewSession(): Promise<void> {
     // Web Locks serialize cookie rotation across tabs. Only expiry metadata is stored.
     const expiry = Number(localStorage.getItem('wfm_access_expiry') || 0);
     if (expiry > Date.now() + 60000) { scheduleRefresh(expiry); return; }
-    const response = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include', signal: AbortSignal.timeout(20000) });
+    const response = await fetch(`${BASE}/auth/refresh`, { method: 'POST', credentials: 'include', signal: AbortSignal.timeout(20000) });
     if (!response.ok) throw new Error('Session expired');
     const result = await response.json();
     const next = Date.now() + result.expiresIn * 1000;

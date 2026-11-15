@@ -211,6 +211,7 @@ export default function Register() {
                   <input
                     className="input"
                     type="password"
+                    autoComplete="new-password"
                     value={form.password}
                     onChange={(event) => setForm({ ...form, password: event.target.value })}
                     minLength={10}
@@ -221,6 +222,7 @@ export default function Register() {
                   <input
                     className="input"
                     type="password"
+                    autoComplete="new-password"
                     value={form.confirmPassword}
                     onChange={(event) => setForm({ ...form, confirmPassword: event.target.value })}
                     minLength={10}

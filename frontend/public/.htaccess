@@ -5,16 +5,25 @@ DirectoryIndex index.html index.htm
   RewriteEngine On
   RewriteBase /
 
-  # Serve existing files and directories directly
-  RewriteCond %{REQUEST_FILENAME} -f [OR]
-  RewriteCond %{REQUEST_FILENAME} -d
+  # 1. Proxy API and WebSocket requests to local Node.js backend if running on port 4000
+  <IfModule mod_proxy.c>
+    RewriteRule ^api/(.*)$ http://127.0.0.1:4000/api/$1 [P,L]
+    RewriteRule ^api$ http://127.0.0.1:4000/api/ [P,L]
+    RewriteRule ^socket\.io/(.*)$ http://127.0.0.1:4000/socket.io/$1 [P,L]
+  </IfModule>
+
+  # 2. Serve existing files directly (assets, icons, manifest, etc.)
+  RewriteCond %{REQUEST_FILENAME} -f
   RewriteRule ^ - [L]
 
-  # Route all other routes to index.html for Single Page Application
+  # 3. Route all other frontend routes to index.html for Single Page Application
+  # Exclude /api/ and /socket.io/ from being rewritten to HTML
+  RewriteCond %{REQUEST_URI} !^/api
+  RewriteCond %{REQUEST_URI} !^/socket\.io
   RewriteRule ^ index.html [L]
 </IfModule>
 
-# Disable directory browsing to prevent 403 / file listing issues
+# Disable directory browsing
 <IfModule mod_autoindex.c>
   Options -Indexes
 </IfModule>
