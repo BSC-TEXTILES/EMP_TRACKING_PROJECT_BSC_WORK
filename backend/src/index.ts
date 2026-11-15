@@ -199,6 +199,6 @@ async function main(): Promise<void> {
 if (process.env.NODE_ENV !== 'test') {
   main().catch((err) => {
     console.error('[startup] Fatal error while starting the server', err);
-    process.exit(1);
+    throw err;
   });
 }
