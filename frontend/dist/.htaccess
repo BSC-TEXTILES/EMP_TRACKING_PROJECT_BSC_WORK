@@ -1,23 +1,21 @@
-# Apache / LiteSpeed configuration for Frontend SPA (Hostinger, cPanel, etc.)
-DirectoryIndex index.html index.htm
+# Enable LiteSpeed Passenger for Node.js applications on Hostinger
+<IfModule Litespeed>
+  PassengerEngine on
+  PassengerAppType node
+  PassengerStartupFile server.js
+</IfModule>
+
+DirectoryIndex index.html index.htm index.php
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  # 1. Proxy API and WebSocket requests to local Node.js backend if running on port 4000
-  <IfModule mod_proxy.c>
-    RewriteRule ^api/(.*)$ http://127.0.0.1:4000/api/$1 [P,L]
-    RewriteRule ^api$ http://127.0.0.1:4000/api/ [P,L]
-    RewriteRule ^socket\.io/(.*)$ http://127.0.0.1:4000/socket.io/$1 [P,L]
-  </IfModule>
-
-  # 2. Serve existing files directly (assets, icons, manifest, etc.)
+  # 1. Serve existing physical files directly (CSS, JS, images, icons, index.html)
   RewriteCond %{REQUEST_FILENAME} -f
   RewriteRule ^ - [L]
 
-  # 3. Route all other frontend routes to index.html for Single Page Application
-  # Exclude /api/ and /socket.io/ from being rewritten to HTML
+  # 2. Do not rewrite /api or /socket.io requests to index.html
   RewriteCond %{REQUEST_URI} !^/api
   RewriteCond %{REQUEST_URI} !^/socket\.io
   RewriteRule ^ index.html [L]
@@ -28,7 +26,7 @@ DirectoryIndex index.html index.htm
   Options -Indexes
 </IfModule>
 
-# Set caching and security headers
+# Security headers
 <IfModule mod_headers.c>
   Header always set X-Content-Type-Options "nosniff"
   Header always set X-Frame-Options "DENY"
