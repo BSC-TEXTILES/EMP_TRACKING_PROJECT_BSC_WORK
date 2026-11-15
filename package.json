@@ -2,6 +2,8 @@
   "name": "emp-tracking",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
+  "main": "server.js",
   "description": "Enterprise Workforce Management, Employee Tracking, Task Allocation, Communication & KPI Platform",
   "workspaces": [
     "backend",

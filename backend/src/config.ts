@@ -15,17 +15,21 @@ const isProdEnv = process.env.NODE_ENV === 'production';
 const rootDir = path.resolve(here, '../..');
 const productionFile = path.join(rootDir, '.env.production');
 const localFile = path.join(rootDir, '.env.local');
-const preferredFile =
-  process.env.NODE_ENV === 'production' || (fs.existsSync(productionFile) && !fs.existsSync(localFile))
-    ? productionFile
-    : localFile;
-dotenv.config({ path: preferredFile });
-if (process.env.NODE_ENV !== 'production') {
-  // Fills any value not set by .env.local; real local overrides win.
-  dotenv.config({ path: path.join(rootDir, '.env.development') });
-  dotenv.config({ path: path.resolve(here, '../.env') });
-  dotenv.config({ path: path.join(rootDir, '.env') });
+
+// Primary environment file:
+if (process.env.NODE_ENV === 'production') {
+  if (fs.existsSync(productionFile)) dotenv.config({ path: productionFile });
+} else {
+  if (fs.existsSync(localFile)) dotenv.config({ path: localFile });
+  if (fs.existsSync(path.join(rootDir, '.env.development'))) {
+    dotenv.config({ path: path.join(rootDir, '.env.development') });
+  }
 }
+
+// Fallback environment files (for values not yet set):
+dotenv.config({ path: path.resolve(here, '../.env') });
+dotenv.config({ path: path.join(rootDir, '.env') });
+if (fs.existsSync(productionFile)) dotenv.config({ path: productionFile });
 
 /** Parses mysql://user:pass@host:port/database when DATABASE_URL is provided. */
 function parseDatabaseUrl(raw: string | undefined): { host: string; port: number; user: string; password: string; database: string } | null {
@@ -78,13 +82,22 @@ const websiteSettings = process.env.NODE_ENV === 'test' && !process.env.WORKFORC
 const webSetupEnabled = process.env.WEB_SETUP_ENABLED === 'true';
 const dbUrl = parseDatabaseUrl(process.env.DATABASE_URL);
 const appUrl = (process.env.APP_URL ?? process.env.FRONTEND_URL ?? process.env.APP_ORIGIN ?? 'http://localhost:5173').replace(/\/+$/, '');
+const configuredOrigins = (process.env.APP_ORIGIN ?? '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/+$/, ''))
+  .filter(Boolean);
+if (appUrl && !configuredOrigins.includes(appUrl)) configuredOrigins.push(appUrl);
+if (process.env.FRONTEND_URL) {
+  const feUrl = process.env.FRONTEND_URL.trim().replace(/\/+$/, '');
+  if (feUrl && !configuredOrigins.includes(feUrl)) configuredOrigins.push(feUrl);
+}
 
 export const config = {
   env: process.env.NODE_ENV ?? 'development',
   isProd,
   isTest: process.env.NODE_ENV === 'test',
   port: int('PORT', 4000),
-  appOrigin: process.env.APP_ORIGIN ?? appUrl,
+  appOrigin: configuredOrigins.join(',') || appUrl,
   appUrl,
   backendUrl: (process.env.BACKEND_URL ?? `http://localhost:${int('PORT', 4000)}`).replace(/\/+$/, ''),
   appName: websiteSettings.appName ?? process.env.APP_NAME ?? 'Workforce',

@@ -61,10 +61,15 @@ export function originGuard(req: Request, _res: Response, next: NextFunction): v
     next();
     return;
   }
-  const allowed = config.appOrigin.split(',').map((o) => o.trim());
+  const allowed = config.appOrigin.split(',').map((o) => o.trim().replace(/\/+$/, ''));
   const host = req.get('host');
-  const sameHost = host ? origin === `http://${host}` || origin === `https://${host}` : false;
-  if (!allowed.includes(origin) && !sameHost) {
+  let sameHost = false;
+  if (host) {
+    const cleanHost = host.replace(/:(?:80|443)$/, '');
+    const originClean = origin.replace(/^https?:\/\//, '').replace(/\/+$/, '').replace(/:(?:80|443)$/, '');
+    sameHost = origin === `http://${host}` || origin === `https://${host}` || originClean === cleanHost;
+  }
+  if (!allowed.includes(origin.replace(/\/+$/, '')) && !sameHost) {
     next(ApiError.forbidden('Cross-origin request blocked'));
     return;
   }

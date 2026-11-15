@@ -1,0 +1,27 @@
+# Apache / LiteSpeed configuration for Frontend SPA (Hostinger, cPanel, etc.)
+DirectoryIndex index.html index.htm
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Serve existing files and directories directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Route all other routes to index.html for Single Page Application
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Disable directory browsing to prevent 403 / file listing issues
+<IfModule mod_autoindex.c>
+  Options -Indexes
+</IfModule>
+
+# Set caching and security headers
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>

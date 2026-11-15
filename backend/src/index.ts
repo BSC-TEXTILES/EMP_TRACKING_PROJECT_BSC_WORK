@@ -39,8 +39,18 @@ export function createApp() {
   app.use('/api', apiRouter);
 
   // Serve the built SPA when it exists (single-origin production deployment).
-  const clientDir = path.resolve(here, '../../frontend/dist');
-  if (fs.existsSync(path.join(clientDir, 'index.html'))) {
+  const clientCandidates = [
+    process.env.CLIENT_DIR,
+    path.resolve(here, '../../frontend/dist'),
+    path.resolve(here, '../frontend/dist'),
+    path.resolve(process.cwd(), 'frontend/dist'),
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(process.cwd(), 'public_html'),
+  ].filter((d): d is string => Boolean(d));
+
+  const clientDir = clientCandidates.find((dir) => fs.existsSync(path.join(dir, 'index.html')));
+
+  if (clientDir) {
     app.use(
       express.static(clientDir, {
         index: false,
@@ -55,6 +65,10 @@ export function createApp() {
     );
     app.get(/^\/(?!api\/|socket\.io\/).*/, (_req: Request, res: Response) => {
       res.sendFile(path.join(clientDir, 'index.html'));
+    });
+  } else {
+    app.get('/', (_req: Request, res: Response) => {
+      res.status(200).send(`<!DOCTYPE html><html><head><title>${config.appName}</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,-apple-system,sans-serif;margin:40px;line-height:1.6;color:#1e293b;background:#f8fafc;}h1{color:#0f172a;}code{background:#e2e8f0;padding:2px 6px;border-radius:4px;font-size:0.9em;}.card{background:white;padding:24px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.1);max-width:600px;margin:20px 0;}</style></head><body><h1>${config.appName} Backend is Running</h1><div class="card"><p>The API server is operational, but the frontend client build was not detected at <code>frontend/dist</code>.</p><p>To build the frontend, run: <code>npm run build</code></p><p>API Health Check: <a href="/api/health">/api/health</a></p></div></body></html>`);
     });
   }
 

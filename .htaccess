@@ -1,0 +1,27 @@
+# Root Apache / LiteSpeed configuration for Hostinger / cPanel
+DirectoryIndex index.html index.htm index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # 1. If frontend/dist exists, route requests to frontend/dist files
+  RewriteCond %{DOCUMENT_ROOT}/frontend/dist/$1 -f
+  RewriteRule ^(.*)$ frontend/dist/$1 [L]
+
+  # 2. Route root request to frontend/dist/index.html if available
+  RewriteCond %{DOCUMENT_ROOT}/frontend/dist/index.html -f
+  RewriteRule ^$ frontend/dist/index.html [L]
+
+  # 3. Route all client SPA routes to frontend/dist/index.html if available
+  RewriteCond %{DOCUMENT_ROOT}/frontend/dist/index.html -f
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/api/
+  RewriteCond %{REQUEST_URI} !^/socket\.io/
+  RewriteRule ^(.*)$ frontend/dist/index.html [L]
+</IfModule>
+
+<IfModule mod_autoindex.c>
+  Options -Indexes
+</IfModule>
