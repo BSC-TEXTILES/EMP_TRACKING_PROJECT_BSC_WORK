@@ -124,16 +124,29 @@ async function main(): Promise<void> {
     console.log(`[setup] Open /setup. Read the one-time installation code from ${path.join(configStore.directory, 'setup-code')}.`);
     onSetupCompleted(startJobs);
   } else {
-    try { await queryOne('SELECT 1 AS ok'); }
-    catch { console.error('[startup] MySQL is unavailable. Verify server configuration.'); process.exit(1); }
-    startJobs();
+    try {
+      await queryOne('SELECT 1 AS ok');
+      startJobs();
+    } catch (err) {
+      console.error('[startup] MySQL is currently unavailable. Server will continue running and retry connection.', err);
+      const interval = setInterval(async () => {
+        try {
+          await queryOne('SELECT 1 AS ok');
+          clearInterval(interval);
+          console.log('[startup] MySQL connection established. Background jobs started.');
+          startJobs();
+        } catch {
+          // retry in background
+        }
+      }, 10_000);
+      interval.unref();
+    }
   }
 
   const envReport = validateEnvironment();
   logEnvironmentReport(envReport);
   if (!envReport.ok && config.isProd && !needsSetup()) {
-    console.error('[startup] configuration errors must be fixed before serving production traffic');
-    process.exit(1);
+    console.warn('[startup] Warning: configuration errors detected in environment settings.');
   }
 
   if (config.smtp.configured) {
@@ -144,11 +157,22 @@ async function main(): Promise<void> {
     console.log('  Email: SMTP not configured — delivery unavailable');
   }
 
-  server.listen(config.port, process.env.BIND_HOST ?? '127.0.0.1', () => {
-    console.log(`\n  ${config.appName} API ready on http://localhost:${config.port}`);
-    console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
-    console.log(`  Health: http://localhost:${config.port}/api/health\n`);
-  });
+  const rawPort = process.env.PORT;
+  const isPassenger = rawPort === 'passenger' || (typeof rawPort === 'string' && (rawPort.startsWith('/') || rawPort.startsWith('\\\\.\\pipe\\')));
+
+  if (isPassenger && rawPort) {
+    server.listen(rawPort, () => {
+      console.log(`\n  ${config.appName} API ready under Passenger socket: ${rawPort}`);
+      console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
+    });
+  } else {
+    const bindHost = process.env.BIND_HOST ?? '0.0.0.0';
+    server.listen(config.port, bindHost, () => {
+      console.log(`\n  ${config.appName} API ready on http://${bindHost}:${config.port}`);
+      console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
+      console.log(`  Health: http://localhost:${config.port}/api/health\n`);
+    });
+  }
 
   const shutdown = (signal: string) => {
     console.log(`\n[shutdown] ${signal} received, closing server`);
