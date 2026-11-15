@@ -102,9 +102,20 @@ export function createApp() {
     return app;
 }
 async function main() {
-    await recoverPendingInstallation();
+    process.on('unhandledRejection', (reason) => console.error('[process] unhandled promise rejection', reason));
+    try {
+        await recoverPendingInstallation();
+    }
+    catch (err) {
+        console.error('[startup] Could not recover pending installation; continuing.', err);
+    }
     const app = createApp();
-    await FileService.ensureStorage();
+    try {
+        await FileService.ensureStorage();
+    }
+    catch (err) {
+        console.error('[startup] Could not prepare upload storage; uploads may fail.', err);
+    }
     const server = http.createServer(app);
     initRealtime(server);
     if (needsSetup()) {
@@ -139,9 +150,11 @@ async function main() {
         console.warn('[startup] Warning: configuration errors detected in environment settings.');
     }
     if (config.smtp.configured) {
-        const { smtpStatus } = await import('./lib/mailer.js');
-        const status = await smtpStatus(true);
-        console.log(`  Email: SMTP ${status.reachable ? 'verified' : 'UNREACHABLE'} (${status.host}:${status.port})`);
+        // Never block or crash startup on the SMTP probe.
+        void import('./lib/mailer.js')
+            .then(({ smtpStatus }) => smtpStatus(true))
+            .then((status) => console.log(`  Email: SMTP ${status.reachable ? 'verified' : 'UNREACHABLE'} (${status.host}:${status.port})`))
+            .catch((err) => console.error('[startup] SMTP check failed', err));
     }
     else {
         console.log('  Email: SMTP not configured — delivery unavailable');
@@ -171,9 +184,11 @@ async function main() {
     };
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('unhandledRejection', (reason) => console.error('[process] unhandled promise rejection', reason));
 }
 if (process.env.NODE_ENV !== 'test') {
-    void main();
+    main().catch((err) => {
+        console.error('[startup] Fatal error while starting the server', err);
+        process.exit(1);
+    });
 }
 //# sourceMappingURL=index.js.map

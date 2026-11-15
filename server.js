@@ -3,15 +3,14 @@
  * Starts the compiled Workforce backend application.
  */
 import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const distFile = path.resolve(here, 'backend/dist/index.js');
-
-if (fs.existsSync(distFile)) {
-  await import('./backend/dist/index.js');
-} else {
-  console.error('[server] Fatal error: backend/dist/index.js does not exist.');
-  console.error('[server] Please run: npm run build');
+const entry = new URL('./backend/dist/index.js', import.meta.url);
+if (!fs.existsSync(entry)) {
+  console.error('[server] backend/dist/index.js not found. Set the build command to "npm run build" in the hosting panel.');
+  process.exit(1);
 }
+
+import(entry.href).catch((err) => {
+  console.error('[server] Failed to start backend:', err);
+  process.exit(1);
+});

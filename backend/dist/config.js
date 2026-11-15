@@ -68,6 +68,27 @@ function required(name, fallback) {
     }
     return value;
 }
+/**
+ * Production fallback when JWT_SECRET is not provided (e.g. a git-based deploy
+ * where the git-ignored .env.production is absent). Uses a random key persisted
+ * in the private config directory so sessions survive restarts instead of the
+ * process crashing at import time.
+ */
+function persistedSigningKey() {
+    if (process.env.JWT_SECRET)
+        return undefined;
+    try {
+        const key = configStore.signingKey();
+        if (process.env.NODE_ENV === 'production') {
+            console.warn(`[config] JWT_SECRET is not set; using a generated key stored in ${configStore.directory}. Set JWT_SECRET in the hosting panel.`);
+        }
+        return key;
+    }
+    catch (error) {
+        console.error('[config] Could not create a persisted signing key', error);
+        return undefined;
+    }
+}
 function int(name, fallback) {
     const raw = process.env[name];
     if (!raw)
@@ -108,12 +129,12 @@ export const config = {
     db: {
         host: websiteSettings.db?.host ?? dbUrl?.host ?? process.env.DB_HOST ?? '127.0.0.1',
         port: websiteSettings.db?.port ?? dbUrl?.port ?? int('DB_PORT', 3306),
-        user: websiteSettings.db?.user ?? dbUrl?.user ?? process.env.DB_USER ?? 'emptrack',
-        password: websiteSettings.db?.password ?? dbUrl?.password ?? process.env.DB_PASSWORD ?? 'Btpldvg@2026',
+        user: websiteSettings.db?.user ?? dbUrl?.user ?? process.env.DB_USER ?? 'root',
+        password: websiteSettings.db?.password ?? dbUrl?.password ?? process.env.DB_PASSWORD ?? '',
         database: websiteSettings.db?.database ?? dbUrl?.database ?? process.env.DB_NAME ?? 'emp_tracking',
         connectionLimit: int('DB_POOL_SIZE', 12),
     },
-    jwtSecret: process.env.JWT_SECRET || (webSetupEnabled ? configStore.signingKey() : '2e63294fb8eda55f29d24cd912e07c6f4bce0e7c3b6e65ad5907eaa013590fc1bcd3776381b6786b743119a1a5d8d7b6'),
+    jwtSecret: required('JWT_SECRET', webSetupEnabled || isProd ? persistedSigningKey() : process.env.SESSION_SECRET ?? 'development-only-insecure-secret-change-me'),
     otp: {
         expiryMinutes: websiteSettings.otp?.expiryMinutes ?? int('OTP_EXPIRY_MINUTES', 10),
         resendCooldownSeconds: websiteSettings.otp?.resendCooldownSeconds ?? int('OTP_RESEND_COOLDOWN_SECONDS', 60),
