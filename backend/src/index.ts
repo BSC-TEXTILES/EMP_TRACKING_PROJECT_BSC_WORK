@@ -21,7 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', process.env.TRUST_PROXY === 'loopback' ? 'loopback' : false);
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
   app.use(securityHeaders);
@@ -177,11 +177,11 @@ async function main(): Promise<void> {
       console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
     });
   } else {
-    const bindHost = process.env.BIND_HOST ?? '0.0.0.0';
-    server.listen(config.port, bindHost, () => {
-      console.log(`\n  ${config.appName} API ready on http://${bindHost}:${config.port}`);
+    const PORT = Number(process.env.PORT) || config.port || 3000;
+    server.listen(PORT, () => {
+      console.log(`\n  ${config.appName} API ready on port ${PORT}`);
       console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
-      console.log(`  Health: http://localhost:${config.port}/api/health\n`);
+      console.log(`  Health: /api/health\n`);
     });
   }
 
