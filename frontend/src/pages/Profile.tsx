@@ -3,7 +3,8 @@ import { api, errorMessage } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
-import { Avatar, Badge, Card, Field, Modal, PageHeader, SectionHeader, Skeleton, StatCard, StatusBadge } from '../components/ui';
+import { Badge, Card, Field, Modal, PageHeader, SectionHeader, Skeleton, StatCard, StatusBadge } from '../components/ui';
+import { ImageUpload } from '../components/ImageUpload';
 import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, minutesToHours, titleize } from '../lib/format';
 
@@ -136,8 +137,20 @@ export default function Profile() {
       />
 
       <Card className="card-pad">
-        <div className="flex flex-wrap items-center gap-4">
-          <Avatar name={user.fullName} src={user.photoUrl} size={64} />
+        <div className="flex flex-wrap items-center gap-5">
+          <ImageUpload
+            name={user.fullName}
+            photoUrl={detail?.photoUrl ?? user.photoUrl}
+            size={76}
+            onUploaded={async (photoUrl) => {
+              setDetail((current) => (current ? { ...current, photoUrl } : current));
+              await refresh();
+            }}
+            onRemoved={async () => {
+              setDetail((current) => (current ? { ...current, photoUrl: null } : current));
+              await refresh();
+            }}
+          />
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold text-ink-900">{user.fullName}</h2>
             <p className="text-sm text-ink-500">{user.designationTitle ?? '—'} · {user.departmentName ?? '—'} · {user.employeeCode}</p>

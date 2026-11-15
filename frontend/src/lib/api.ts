@@ -130,6 +130,11 @@ export const api = {
     form.append('file', file);
     return request<T>('/files/upload', { method: 'POST', body: form });
   },
+  uploadPhoto: <T>(file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return request<T>('/me/photo', { method: 'POST', body: form });
+  },
 };
 
 export function downloadReport(params: Record<string, string | number | undefined>): void {

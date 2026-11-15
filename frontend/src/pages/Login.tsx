@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -6,6 +6,14 @@ import { useToast } from '../contexts/ToastContext';
 import { useDocumentTitle } from '../lib/hooks';
 import type { CurrentUser } from '../lib/types';
 import { Icon } from '../components/icons';
+
+interface TestAccount {
+  role: string;
+  employeeId: string;
+  name: string;
+  email: string;
+  password: string;
+}
 
 export default function Login() {
   useDocumentTitle('Sign in');
@@ -22,6 +30,30 @@ export default function Login() {
   const [challenge, setChallenge] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [devCode, setDevCode] = useState<string | null>(null);
+  const [testAccounts, setTestAccounts] = useState<TestAccount[]>([]);
+  const [testEnvironment, setTestEnvironment] = useState<string | null>(null);
+  const [selectedTest, setSelectedTest] = useState<TestAccount | null>(null);
+
+  // Test credentials are supplied by the API at runtime and are never bundled.
+  // The endpoint returns 404 in production, so this panel cannot render there.
+  useEffect(() => {
+    api
+      .get<{ enabled: boolean; environment: string; accounts: TestAccount[] }>('/auth/test-accounts')
+      .then((result) => {
+        setTestAccounts(result.accounts);
+        setTestEnvironment(result.environment);
+        setSelectedTest(result.accounts[0] ?? null);
+      })
+      .catch(() => setTestAccounts([]));
+  }, []);
+
+  const fillTest = (account: TestAccount) => {
+    setSelectedTest(account);
+    setIdentifier(account.email);
+    setPassword(account.password);
+    setError(null);
+    setChallenge(null);
+  };
 
   const redirectTo = (location.state as { from?: string } | null)?.from ?? '/';
 
@@ -238,7 +270,60 @@ export default function Login() {
             </p>
           </div>
 
+          {testAccounts.length > 0 && (
+            <section className="mt-4 rounded-lg border border-dashed border-ink-300 bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-ink-800">Development / Testing Access</p>
+                  <p className="text-xs text-ink-500">Seeded demo accounts only. Disabled automatically in production.</p>
+                </div>
+                <span className="badge bg-amber-100 text-amber-800">
+                  {testEnvironment === 'production' ? 'Production' : `${testEnvironment?.charAt(0).toUpperCase()}${testEnvironment?.slice(1)} environment`}
+                </span>
+              </div>
 
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {testAccounts.map((account) => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    onClick={() => fillTest(account)}
+                    className={
+                      selectedTest?.email === account.email
+                        ? 'rounded-md border border-brand-300 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800'
+                        : 'rounded-md border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-600 hover:bg-ink-50'
+                    }
+                  >
+                    {account.role}
+                  </button>
+                ))}
+              </div>
+
+              {selectedTest && (
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="label">Test Employee ID</span>
+                    <input className="input font-mono text-xs" readOnly value={selectedTest.employeeId} />
+                  </label>
+                  <label className="block">
+                    <span className="label">Test password</span>
+                    <input className="input font-mono text-xs" readOnly value={selectedTest.password} />
+                  </label>
+                  <p className="text-xs text-ink-500 sm:col-span-2">
+                    {selectedTest.name} · {selectedTest.email}
+                  </p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                className="btn-secondary btn-sm mt-3 w-full"
+                onClick={() => selectedTest && fillTest(selectedTest)}
+              >
+                Auto-fill test credentials
+              </button>
+            </section>
+          )}
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ import { addDays, endOfMonth, startOfMonth, today } from '../lib/dates.js';
 import { subtreeIds } from '../lib/scope.js';
 import type { AuthUser } from './AuthService.js';
 
-export type ExportType = 'attendance' | 'tasks' | 'kpi' | 'tickets' | 'leave' | 'daily-reports' | 'employees';
+export type ExportType = 'attendance' | 'tasks' | 'kpi' | 'tickets' | 'leave' | 'daily-reports' | 'employees' | 'collections';
 export type ExportFormat = 'csv' | 'xlsx' | 'pdf';
 
 interface Column {
@@ -19,15 +19,29 @@ export class ExportService {
   static async dataset(
     type: ExportType,
     user: AuthUser,
-    filters: { from?: string; to?: string; departmentId?: number; employeeId?: number; period?: string },
+    filters: {
+      from?: string;
+      to?: string;
+      departmentId?: number;
+      employeeId?: number;
+      period?: string;
+      status?: string;
+      search?: string;
+      locationId?: number;
+    },
   ): Promise<{ columns: Column[]; rows: Record<string, unknown>[]; title: string }> {
-    if (!user.permissions.includes('reports.export') && !user.permissions.includes('analytics.view')) {
+    const collectionExport = type === 'collections';
+    const canExportCollections = ['collections.view.own', 'collections.view.team', 'collections.view.all'].some((code) =>
+      user.permissions.includes(code),
+    );
+    if (collectionExport ? !canExportCollections : !user.permissions.includes('reports.export') && !user.permissions.includes('analytics.view')) {
       throw ApiError.forbidden('You do not have permission to export reports.');
     }
-    const scopeAll =
-      user.permissions.includes('reports.view.all') ||
-      user.permissions.includes('analytics.view.all') ||
-      user.permissions.includes('employees.view.all');
+    const scopeAll = collectionExport
+      ? user.permissions.includes('collections.view.all')
+      : user.permissions.includes('reports.view.all') ||
+        user.permissions.includes('analytics.view.all') ||
+        user.permissions.includes('employees.view.all');
     const teamIds = scopeAll ? null : await subtreeIds(user.id);
     const placeholders = teamIds === null ? null : teamIds.map(() => '?').join(',') || '0';
     const from = filters.from ?? startOfMonth(today());
@@ -248,6 +262,63 @@ export class ExportService {
             { header: 'Type', key: 'employment_type', width: 14 },
             { header: 'Status', key: 'status', width: 16 },
             { header: 'Joined', key: 'joining_date', width: 12 },
+          ],
+          rows,
+        };
+      }
+      case 'collections': {
+        const collectionStatus = ['pending', 'partial', 'collected', 'cancelled'].includes(filters.status ?? '')
+          ? filters.status
+          : null;
+        const rows = await query<Record<string, unknown>>(
+          `SELECT c.reference_no AS reference, c.customer_name AS customer, c.invoice_no AS invoice,
+                  e.full_name AS collector, e.employee_code AS code, d.name AS department, l.name AS location,
+                  c.amount_due AS due_amount, c.amount_collected AS collected_amount,
+                  (c.amount_due - c.amount_collected) AS outstanding, c.currency,
+                  c.status, c.approval_status, c.payment_mode, c.due_date, c.collected_on
+             FROM collections c
+             JOIN employees e ON e.id = c.employee_id
+             LEFT JOIN departments d ON d.id = c.department_id
+             LEFT JOIN locations l ON l.id = c.location_id
+            WHERE c.deleted_at IS NULL AND c.due_date BETWEEN ? AND ?
+              ${placeholders ? `AND c.employee_id IN (${placeholders})` : ''}
+              ${filters.employeeId ? 'AND c.employee_id = ?' : ''}
+              ${filters.departmentId ? 'AND c.department_id = ?' : ''}
+              ${filters.locationId ? 'AND c.location_id = ?' : ''}
+              ${collectionStatus ? 'AND c.status = ?' : ''}
+              ${filters.search ? 'AND (c.customer_name LIKE ? OR c.reference_no LIKE ? OR c.invoice_no LIKE ?)' : ''}
+            ORDER BY c.due_date DESC, c.id DESC
+            LIMIT 5000`,
+          [
+            from,
+            to,
+            ...(teamIds ?? []),
+            ...(filters.employeeId ? [filters.employeeId] : []),
+            ...(filters.departmentId ? [filters.departmentId] : []),
+            ...(filters.locationId ? [filters.locationId] : []),
+            ...(collectionStatus ? [collectionStatus] : []),
+            ...(filters.search ? [`%${filters.search}%`, `%${filters.search}%`, `%${filters.search}%`] : []),
+          ],
+        );
+        return {
+          title: 'Collection register',
+          columns: [
+            { header: 'Reference', key: 'reference', width: 16 },
+            { header: 'Customer', key: 'customer', width: 24 },
+            { header: 'Invoice', key: 'invoice', width: 14 },
+            { header: 'Collector', key: 'collector', width: 20 },
+            { header: 'Code', key: 'code', width: 12 },
+            { header: 'Department', key: 'department', width: 16 },
+            { header: 'Location', key: 'location', width: 14 },
+            { header: 'Due', key: 'due_amount', width: 12 },
+            { header: 'Collected', key: 'collected_amount', width: 12 },
+            { header: 'Outstanding', key: 'outstanding', width: 12 },
+            { header: 'Currency', key: 'currency', width: 9 },
+            { header: 'Status', key: 'status', width: 11 },
+            { header: 'Approval', key: 'approval_status', width: 11 },
+            { header: 'Mode', key: 'payment_mode', width: 12 },
+            { header: 'Due date', key: 'due_date', width: 12 },
+            { header: 'Collected on', key: 'collected_on', width: 12 },
           ],
           rows,
         };

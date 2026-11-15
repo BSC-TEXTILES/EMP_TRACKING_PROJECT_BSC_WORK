@@ -26,6 +26,7 @@ Engine: **MySQL 8.0 (InnoDB)**, database `emp_tracking`. Character set `utf8mb4`
 | KPI | `kpi_templates`, `kpi_parameters`, `employee_kpi_records`, `manager_reviews` |
 | Leave | `leave_types`, `leave_balances`, `leave_requests` |
 | Projects | `projects`, `project_members`, `project_milestones` |
+| Collections | `collections` |
 | Notifications | `notifications`, `notification_recipients`, `announcements` |
 | Platform | `files`, `system_settings`, `audit_logs`, `job_runs`, `schema_migrations` |
 
@@ -132,6 +133,10 @@ Migrations are plain `.sql` files applied transactionally in filename order:
 1. `001_initial_schema.sql` — all core tables, FKs, indexes.
 2. `002_message_reactions.sql` — reactions.
 3. `003_project_conversation.sql` — links a project to its conversation.
+4. `004_email_delivery.sql` — transactional email queue and delivery log.
+5. `005_session_rotation.sql` — refresh-token history for rotation and reuse detection.
+6–8. Upload scanning state, ticket issue details, OTP redaction hardening.
+9. `009_collections.sql` — collection register, seven permissions and role grants.
 
 Rules: never edit an applied migration; add a new one. Always provide a rollback note in the PR description. Test against a restored copy of production data before deploying.
 

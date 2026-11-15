@@ -1,4 +1,4 @@
-import { useEffect, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { cx, initials, priorityTone, statusTone, titleize } from '../lib/format';
 
 export function Avatar({
@@ -15,8 +15,18 @@ export function Avatar({
   online?: boolean;
 }) {
   const style = { width: size, height: size, fontSize: Math.max(10, size * 0.36) };
-  const image = src ? (
-    <img src={src} alt={name ?? 'Employee'} style={style} className={cx('rounded-full object-cover border border-ink-200', className)} />
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  const image = src && !failed ? (
+    <img
+      src={src}
+      alt={name ?? 'Employee'}
+      style={style}
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      className={cx('rounded-full object-cover border border-ink-200', className)}
+    />
   ) : (
     <span
       style={style}

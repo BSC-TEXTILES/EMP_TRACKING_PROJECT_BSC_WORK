@@ -51,6 +51,7 @@ Super Admin can create additional roles and designations, and edit the permissio
 | Roles | `roles.manage` |
 | Settings | `settings.manage` |
 | Tasks | `tasks.view.own`, `tasks.view.team`, `tasks.view.all`, `tasks.create`, `tasks.assign`, `tasks.approve`, `tasks.delete` |
+| Collections | `collections.view.own`, `collections.view.team`, `collections.view.all`, `collections.create`, `collections.edit`, `collections.delete`, `collections.approve` |
 | Tickets | `tickets.view.own`, `tickets.view.team`, `tickets.view.all`, `tickets.create`, `tickets.assign`, `tickets.resolve`, `tickets.manage` |
 
 ## 4. Scope resolution (server)
@@ -86,6 +87,9 @@ else → employee_id = me
 | Chat | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Group management | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Tickets own / create | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Collections own / create | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Collections team + approve | — | ✅ | ✅ | view all | ✅ | ✅ | ✅ |
+| Collections delete | — | — | — | — | — | ✅ | ✅ |
 | Ticket assign / resolve | — | — | ✅ | — | ✅ | ✅ | ✅ |
 | Meetings schedule | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | KPI own | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

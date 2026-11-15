@@ -54,7 +54,10 @@ Build an enterprise workforce platform from an empty folder: authentication, hie
 - Analytics/admin: overview with filters, exports (CSV/XLSX/PDF), settings, audit log, job history, system health.
 - Frontend: design system, shell, 19 pages, PWA assets, responsive layouts.
 - Email: centralized env configuration, 12 HTML templates, queue with retry/backoff, delivery log, SMTP verification, admin page with test send and retry, notification fan-out (chat excluded), OTP direct delivery.
-- Tests: 18 integration tests passing; typecheck and production build passing.
+- Collections: register with derived status, approval workflow, hierarchy scope, dashboard, Excel/PDF export, permissions.
+- Environment: `.env.development`/`.env.example`/`.env.production.example`, frontend templates, startup validation service and `/admin/environment`.
+- Development login: runtime-only seeded account panel gated out of production; access JWT 15 min with rotating refresh tokens and reuse detection.
+- Tests: 50 tests across 5 files passing; typecheck and production build passing.
 
 ### Pending / not built
 - React Native client (PWA is the mobile deliverable).

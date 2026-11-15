@@ -11,6 +11,55 @@ import type { AuthedRequest } from '../middleware/auth.js';
 
 export const authRouter = Router();
 
+/**
+ * Development / staging demo accounts. Never available in production and never
+ * embedded in the frontend bundle: the browser asks the API at runtime.
+ */
+const DEMO_LOGINS = [
+  { role: 'Super Admin', email: 'admin@workforce.test' },
+  { role: 'HR Manager', email: 'hr.manager@workforce.test' },
+  { role: 'Department Manager', email: 'it.manager@workforce.test' },
+  { role: 'IT Support', email: 'it.admin@workforce.test' },
+  { role: 'Developer', email: 'ananya.rao@workforce.test' },
+  { role: 'Employee', email: 'karthik.iyer@workforce.test' },
+  { role: 'Store Manager', email: 'store.manager@workforce.test' },
+];
+
+authRouter.get(
+  '/test-accounts',
+  asyncHandler(async (_req, res) => {
+    if (config.isProd || process.env.TEST_LOGIN_ENABLED === 'false') {
+      res.status(404).json({ error: 'Not available', code: 'not_found' });
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    const employees = await query<{ full_name: string; employee_code: string; email: string }>(
+      `SELECT full_name, employee_code, email FROM employees
+        WHERE email IN (${DEMO_LOGINS.map(() => '?').join(',')}) AND status = 'active'`,
+      DEMO_LOGINS.map((account) => account.email),
+    );
+    const byEmail = new Map(employees.map((employee) => [employee.email.toLowerCase(), employee]));
+    const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
+    res.json({
+      enabled: true,
+      environment: config.env,
+      accounts: DEMO_LOGINS.flatMap((account) => {
+        const employee = byEmail.get(account.email);
+        if (!employee) return [];
+        return [
+          {
+            role: account.role,
+            employeeId: employee.employee_code,
+            name: employee.full_name,
+            email: employee.email,
+            password,
+          },
+        ];
+      }),
+    });
+  }),
+);
+
 function setSessionCookie(res: Parameters<Parameters<typeof asyncHandler>[0]>[1], token: string, refreshToken: string, expiresAt = Date.now() + config.sessionTtlDays * 86400000): void {
   res.cookie(config.cookieName, token, { httpOnly: true, sameSite: 'strict', secure: config.isProd, path: '/', maxAge: 15 * 60000 });
   res.cookie('wfm_refresh', refreshToken, { httpOnly: true, sameSite: 'strict', secure: config.isProd, path: '/api/auth', maxAge: Math.max(0, expiresAt - Date.now()) });

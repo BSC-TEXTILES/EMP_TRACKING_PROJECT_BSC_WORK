@@ -21,6 +21,8 @@ const preferredFile =
     : localFile;
 dotenv.config({ path: preferredFile });
 if (process.env.NODE_ENV !== 'production') {
+  // Fills any value not set by .env.local; real local overrides win.
+  dotenv.config({ path: path.join(rootDir, '.env.development') });
   dotenv.config({ path: path.resolve(here, '../.env') });
   dotenv.config({ path: path.join(rootDir, '.env') });
 }
@@ -108,6 +110,12 @@ export const config = {
     loginMax: int('LOGIN_RATE_LIMIT_MAX', 20),
   },
   sessionTtlDays: int('SESSION_TTL_DAYS', 7),
+  coarena: {
+    apiKey: process.env.COARENA_API_KEY?.trim() ?? '',
+    baseUrl: 'https://coarena.ai/api/v1',
+    model: process.env.COARENA_MODEL?.trim() || 'gpt-6-luna',
+    timeoutMs: int('COARENA_TIMEOUT_MS', 60_000),
+  },
   internalJobSecret: process.env.INTERNAL_JOB_SECRET ?? '',
   smtp: {
     host: websiteSettings.smtp?.host ?? process.env.SMTP_HOST ?? '',

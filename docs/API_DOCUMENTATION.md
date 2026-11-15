@@ -200,7 +200,32 @@ Server → client: `presence:list`, `presence:update`, `message:new`, `message:r
 
 All socket connections authenticate with the session cookie; room membership is checked server-side before joining meeting rooms.
 
-## 17. Email side effects
+## 17. Collections (`/collections`)
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/collections?search&status&approvalStatus&employeeId&departmentId&locationId&from&to&page&pageSize` | any `collections.view.*` | Hierarchy-scoped register |
+| GET | `/collections/dashboard?from&to` | any `collections.view.*` | Totals, status mix, department comparison, recent records |
+| GET | `/collections/meta` | authenticated | Status, approval and payment-mode options |
+| GET | `/collections/:id` | scoped | Record detail |
+| POST | `/collections` | `collections.create` | Returns `{ id, referenceNo }`; server derives status |
+| PATCH | `/collections/:id` | `collections.edit` | Partial update; status recalculated |
+| POST | `/collections/:id/decision` | `collections.approve` | `{ approve, reason? }`; rejection requires a reason |
+| DELETE | `/collections/:id` | `collections.delete` | Soft delete, audited |
+| GET | `/exports?type=collections&format=csv\|xlsx\|pdf` | any `collections.view.*` | Honours the register filters |
+
+## 18. Session refresh and development login
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/auth/refresh` | Rotates the refresh token and issues a new 15-minute access cookie; reuse of a consumed token revokes the session family |
+| GET | `/auth/test-accounts` | Development/staging only (404 in production): seven seeded demo accounts with employee code and password; never bundled into the frontend |
+| GET | `/admin/environment` | Sanitized configuration validation report (`settings.manage` / `admin.dashboard`) |
+| POST | `/me/photo` | Multipart `file`: PNG, JPEG, WebP or GIF up to 5 MB. Content-verified, downscaled client-side, returns `{ photoUrl }`; replace removes the previous image |
+| DELETE | `/me/photo` | Removes the uploaded profile photo and its stored file |
+| GET | `/files/:id` | Serves an uploaded file. Images are `inline`; public profile photos are readable by any signed-in employee, other files stay owner/linked-record only |
+
+## 19. Email side effects
 
 Notifications created by any module also queue a transactional email when SMTP is configured. Chat messages are excluded by design. Delivery is asynchronous and tracked in `email_deliveries`; see `EMAIL.md` and the admin endpoints above. A mail failure never changes the HTTP response of the business action.
 

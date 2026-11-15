@@ -22,7 +22,7 @@ The suite boots the Express app in-process (`NODE_ENV=test` skips the listener a
 
 ## 3. Automated tests (18, all passing)
 
-`backend/tests/api.test.ts` — 19 cases, all passing:
+`backend/tests/api.test.ts` — 19 cases, all passing (plus 31 tests across the security, setup, config-store and AI-assist suites; 50 total):
 
 **Authentication & session security**
 - rejects unauthenticated dashboard access
@@ -55,7 +55,16 @@ The suite boots the Express app in-process (`NODE_ENV=test` skips the listener a
 - records an audit entry for privileged settings changes and lists it
 - queues, processes and reports a transactional email without exposing credentials
 
-Latest run: `Test Files 1 passed (1)` · `Tests 19 passed (19)` · duration ≈ 9 s.
+Latest run: `Test Files 5 passed (5)` · `Tests 50 passed (50)` · duration ≈ 18 s.
+
+Added with the Collection and authentication update:
+
+- creates a collection record, derives `partial` status and scopes it to the collector;
+- blocks an employee from approving a record (403) while allowing a manager to approve within the subtree;
+- returns real collection dashboard totals and status metadata;
+- exposes seven seeded development accounts outside production only;
+- rotates refresh tokens, rejects reuse of a consumed token and revokes the session family;
+- validates environment configuration through the sanitized report (0 errors in development; warnings for absent SMTP/Redis).
 
 ## 4. Manual QA matrix
 

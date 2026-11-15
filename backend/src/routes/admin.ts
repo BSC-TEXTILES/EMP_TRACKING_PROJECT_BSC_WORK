@@ -9,6 +9,7 @@ import { connectedSocketCount, onlineEmployeeIds } from '../realtime/io.js';
 import { FileService } from '../services/FileService.js';
 import { EmailService } from '../services/EmailService.js';
 import { processEmailQueue } from '../lib/mailer.js';
+import { validateEnvironment } from '../lib/envValidation.js';
 import { getIO } from '../realtime/io.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
@@ -118,6 +119,14 @@ adminRouter.get(
         createdAt: toIso(r.created_at),
       })),
     });
+  }),
+);
+
+adminRouter.get(
+  '/environment',
+  requireAny('settings.manage', 'admin.dashboard'),
+  asyncHandler(async (_req, res) => {
+    res.json(validateEnvironment());
   }),
 );
 

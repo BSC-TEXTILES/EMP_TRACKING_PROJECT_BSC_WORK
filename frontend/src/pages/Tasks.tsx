@@ -580,7 +580,24 @@ function CreateTaskModal({
     subtasks: '',
   });
   const [selected, setSelected] = useState<number[]>([]);
+  const [assigneeSearch, setAssigneeSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const term = assigneeSearch.trim().toLowerCase();
+  const filteredAssignees = term
+    ? assignees.filter((employee) =>
+        [employee.full_name, employee.employee_code, employee.designation_title, employee.department_name]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(term)),
+      )
+    : assignees;
+  const allFilteredSelected = filteredAssignees.length > 0 && filteredAssignees.every((employee) => selected.includes(employee.id));
+  const toggleFiltered = () => {
+    const ids = filteredAssignees.map((employee) => employee.id);
+    setSelected((previous) =>
+      allFilteredSelected ? previous.filter((id) => !ids.includes(id)) : [...new Set([...previous, ...ids])],
+    );
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -610,6 +627,7 @@ function CreateTaskModal({
       toast.success('Task allocated and assignees notified.');
       setForm({ ...form, title: '', description: '', instructions: '', subtasks: '' });
       setSelected([]);
+      setAssigneeSearch('');
       onCreated();
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -699,11 +717,57 @@ function CreateTaskModal({
         </div>
 
         <div>
-          <span className="label">Assign to (reporting structure only) *</span>
-          <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-300 p-2">
+          <div className="flex items-end justify-between gap-2">
+            <span className="label mb-0">Assign to (reporting structure only) *</span>
+            <span className="text-xs font-medium text-ink-500">{selected.length} selected</span>
+          </div>
+
+          <div className="relative mt-1.5">
+            <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+            <input
+              className="input py-1.5 pl-9 pr-9 text-sm"
+              value={assigneeSearch}
+              onChange={(event) => setAssigneeSearch(event.target.value)}
+              placeholder="Search by name, employee ID, designation or department…"
+              aria-label="Search assignees"
+            />
+            {assigneeSearch && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                onClick={() => setAssigneeSearch('')}
+                aria-label="Clear assignee search"
+              >
+                <Icon name="close" size={14} />
+              </button>
+            )}
+          </div>
+
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
+            <span>
+              {filteredAssignees.length} of {assignees.length} shown
+            </span>
+            <div className="flex items-center gap-2">
+              {filteredAssignees.length > 0 && (
+                <button type="button" className="font-medium text-brand-700 hover:underline" onClick={toggleFiltered}>
+                  {allFilteredSelected ? 'Unselect shown' : 'Select all shown'}
+                </button>
+              )}
+              {selected.length > 0 && (
+                <button type="button" className="font-medium text-ink-500 hover:underline" onClick={() => setSelected([])}>
+                  Clear selection
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border border-ink-300 p-2">
             {assignees.length === 0 && <p className="p-2 text-sm text-ink-500">No employees available in your reporting structure.</p>}
-            {assignees.map((employee) => (
-              <label key={employee.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-50">
+            {assignees.length > 0 && filteredAssignees.length === 0 && (
+              <p className="p-2 text-sm text-ink-500">No one in your reporting structure matches “{assigneeSearch.trim()}”.</p>
+            )}
+            {filteredAssignees.map((employee) => (
+              <label key={employee.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-50">
                 <input
                   type="checkbox"
                   className="h-4 w-4"
@@ -712,11 +776,35 @@ function CreateTaskModal({
                     setSelected((prev) => (event.target.checked ? [...prev, employee.id] : prev.filter((id) => id !== employee.id)))
                   }
                 />
-                <span className="text-ink-800">{employee.full_name}</span>
-                <span className="text-xs text-ink-400">{employee.designation_title ?? ''}</span>
+                <span className="min-w-0 flex-1 truncate text-ink-800">
+                  {employee.full_name}
+                  {employee.employee_code && <span className="ml-1.5 text-xs text-ink-400">{employee.employee_code}</span>}
+                </span>
+                <span className="max-w-[45%] truncate text-xs text-ink-400">{employee.designation_title ?? employee.department_name ?? ''}</span>
               </label>
             ))}
           </div>
+
+          {selected.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Selected assignees">
+              {selected.map((id) => {
+                const employee = assignees.find((item) => item.id === id);
+                return (
+                  <span key={id} className="inline-flex items-center gap-1 rounded-full bg-brand-50 py-0.5 pl-2.5 pr-1 text-xs font-medium text-brand-800">
+                    {employee?.full_name ?? `Employee #${id}`}
+                    <button
+                      type="button"
+                      className="rounded-full p-0.5 hover:bg-brand-100"
+                      onClick={() => setSelected((prev) => prev.filter((value) => value !== id))}
+                      aria-label={`Remove ${employee?.full_name ?? id}`}
+                    >
+                      <Icon name="close" size={12} />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <Field label="Instructions">

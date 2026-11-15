@@ -7,7 +7,7 @@ import type { AuthedRequest } from '../middleware/auth.js';
 export const exportsRouter = Router();
 exportsRouter.use(authenticate);
 
-const VALID_TYPES: ExportType[] = ['attendance', 'tasks', 'kpi', 'tickets', 'leave', 'daily-reports', 'employees'];
+const VALID_TYPES: ExportType[] = ['attendance', 'tasks', 'kpi', 'tickets', 'leave', 'daily-reports', 'employees', 'collections'];
 const VALID_FORMATS: ExportFormat[] = ['csv', 'xlsx', 'pdf'];
 
 exportsRouter.get(
@@ -30,6 +30,9 @@ exportsRouter.get(
       departmentId: req.query.departmentId ? intParam(String(req.query.departmentId), 'departmentId') : undefined,
       employeeId: req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : undefined,
       period: req.query.period ? String(req.query.period) : undefined,
+      status: req.query.status ? String(req.query.status) : undefined,
+      search: req.query.search ? String(req.query.search) : undefined,
+      locationId: req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined,
     });
     res.setHeader('Content-Type', file.mime);
     res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);

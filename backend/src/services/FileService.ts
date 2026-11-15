@@ -54,10 +54,21 @@ export class FileService {
     }
   }
 
-  static async register(ownerId: number, input: { storageKey: string; originalName: string; mimeType: string; size: number }): Promise<number> {
+  static async register(
+    ownerId: number,
+    input: { storageKey: string; originalName: string; mimeType: string; size: number; isPrivate?: boolean; scanStatus?: 'clean' | 'validated' },
+  ): Promise<number> {
     const result = await execute(
-      "INSERT INTO files (owner_id, storage_key, original_name, mime_type, size_bytes, is_private, scan_status) VALUES (?, ?, ?, ?, ?, 1, 'clean')",
-      [ownerId, input.storageKey, input.originalName.slice(0, 250), input.mimeType, input.size],
+      'INSERT INTO files (owner_id, storage_key, original_name, mime_type, size_bytes, is_private, scan_status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        ownerId,
+        input.storageKey,
+        input.originalName.slice(0, 250),
+        input.mimeType,
+        input.size,
+        input.isPrivate === false ? 0 : 1,
+        input.scanStatus ?? 'clean',
+      ],
     );
     return result.insertId;
   }
@@ -74,8 +85,14 @@ export class FileService {
       original_name: string;
       mime_type: string;
       size_bytes: number;
-    }>("SELECT id, owner_id, storage_key, original_name, mime_type, size_bytes FROM files WHERE id = ? AND scan_status = 'clean'", [fileId]);
+      is_private: number;
+    }>(
+      "SELECT id, owner_id, storage_key, original_name, mime_type, size_bytes, is_private FROM files WHERE id = ? AND (scan_status = 'clean' OR (scan_status = 'validated' AND is_private = 0))",
+      [fileId],
+    );
     if (!file) throw ApiError.notFound('File not found');
+    // Public images (profile photos) may be viewed by any signed-in employee.
+    if (Number(file.is_private) === 0) return file;
     if (Number(file.owner_id) === user.id) return file;
 
     const [taskLink, reportLink, ticketLink, messageLink] = await Promise.all([
@@ -113,6 +130,14 @@ export class FileService {
       throw ApiError.forbidden('Invalid file path');
     }
     return resolved;
+  }
+
+  /** Removes a profile image owned by the employee, including its bytes and row. */
+  static async removeOwnedPublicFile(fileId: number, ownerId: number): Promise<void> {
+    const file = await queryOne<{ storage_key: string }>('SELECT storage_key FROM files WHERE id = ? AND owner_id = ? AND is_private = 0', [fileId, ownerId]);
+    if (!file) return;
+    await fs.unlink(FileService.absolutePath(file.storage_key)).catch(() => undefined);
+    await execute('DELETE FROM files WHERE id = ?', [fileId]);
   }
 
   static async removeFile(fileId: number, user: AuthUser): Promise<void> {

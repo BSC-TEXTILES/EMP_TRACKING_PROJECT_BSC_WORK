@@ -15,6 +15,7 @@ import { ApiError } from './lib/http.js';
 import { startJobs } from './jobs/scheduler.js';
 import { closePool, queryOne } from './db/index.js';
 import { FileService } from './services/FileService.js';
+import { logEnvironmentReport, validateEnvironment } from './lib/envValidation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -82,6 +83,8 @@ export function createApp() {
         method: req.method,
 
         code: err?.code,
+        sqlMessage: (err as { sqlMessage?: string })?.sqlMessage,
+        sql: process.env.NODE_ENV === 'production' ? undefined : (err as { sql?: string })?.sql,
       });
     }
     res.status(status).json({
@@ -110,6 +113,13 @@ async function main(): Promise<void> {
     try { await queryOne('SELECT 1 AS ok'); }
     catch { console.error('[startup] MySQL is unavailable. Verify server configuration.'); process.exit(1); }
     startJobs();
+  }
+
+  const envReport = validateEnvironment();
+  logEnvironmentReport(envReport);
+  if (!envReport.ok && config.isProd && !needsSetup()) {
+    console.error('[startup] configuration errors must be fixed before serving production traffic');
+    process.exit(1);
   }
 
   if (config.smtp.configured) {

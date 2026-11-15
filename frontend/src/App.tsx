@@ -20,6 +20,7 @@ const MeetingRoom = lazy(() => import('./pages/MeetingRoom'));
 const Kpi = lazy(() => import('./pages/Kpi'));
 const Leave = lazy(() => import('./pages/Leave'));
 const Projects = lazy(() => import('./pages/Projects'));
+const Collections = lazy(() => import('./pages/Collections'));
 const Employees = lazy(() => import('./pages/Employees'));
 const OrganizationSettings = lazy(() => import('./pages/OrganizationSettings'));
 const Organization = lazy(() => import('./pages/Organization'));
@@ -104,6 +105,7 @@ export function App() {
           <Route path="kpi" element={<Kpi />} />
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
+          <Route path="collections" element={<Collections />} />
           <Route path="admin/employees" element={<Employees />} />
           <Route path="organization" element={<Organization />} />
           <Route path="admin/organization" element={<OrganizationSettings />} />

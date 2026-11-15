@@ -1,7 +1,6 @@
 import { inspectUpload } from '../lib/uploadSecurity.js';
 import { recordAudit } from '../lib/audit.js';
 import { rateLimit } from '../middleware/security.js';
-import crypto from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { Router } from 'express';
@@ -10,25 +9,11 @@ import { config } from '../config.js';
 import { ApiError, asyncHandler, intParam } from '../lib/http.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { FileService } from '../services/FileService.js';
+import { fileStorage } from '../lib/uploadStorage.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
-const storage = multer.diskStorage({
-  destination: async (_req, _file, cb) => {
-    try {
-      await FileService.ensureStorage();
-      cb(null, FileService.uploadRoot());
-    } catch (error) {
-      cb(error as Error, FileService.uploadRoot());
-    }
-  },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase().replace(/[^a-z0-9.]/g, '');
-    cb(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${ext}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: fileStorage,
   limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
     try {
@@ -97,9 +82,10 @@ filesRouter.get(
     } catch {
       throw ApiError.notFound('File is no longer available on disk');
     }
+    const inlineImage = file.mime_type.startsWith('image/');
     res.setHeader('Content-Type', file.mime_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(file.original_name)}"`);
-    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('Content-Disposition', `${inlineImage ? 'inline' : 'attachment'}; filename="${encodeURIComponent(file.original_name)}"`);
+    res.setHeader('Cache-Control', Number(file.is_private) === 0 ? 'private, max-age=3600' : 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(absolute);
   }),

@@ -27,7 +27,12 @@ export function AppShell() {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [search, setSearch] = useState('');
   const [profileOpen, setProfileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('wfm_sidebar_collapsed') === '1');
   const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem('wfm_sidebar_collapsed', collapsed ? '1' : '0');
+  }, [collapsed]);
 
   const nav: { label: string; items: NavItem[] }[] = useMemo(
     () => [
@@ -45,6 +50,12 @@ export function AppShell() {
           { to: '/kpi', label: 'Performance', icon: 'kpi', show: has('kpi.view.own') },
           { to: '/leave', label: 'Leave', icon: 'leave', show: has('leave.apply') },
           { to: '/projects', label: 'Projects', icon: 'project', show: has('projects.view') },
+          {
+            to: '/collections',
+            label: 'Collections',
+            icon: 'wallet',
+            show: canAny('collections.view.own', 'collections.view.team', 'collections.view.all'),
+          },
         ],
       },
       {
@@ -135,14 +146,25 @@ export function AppShell() {
 
   if (!user) return null;
 
-  const sidebar = (
-    <aside className="flex h-full w-64 shrink-0 flex-col bg-ink-900 text-white">
-      <div className="flex items-center gap-2.5 px-5 py-5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">W</span>
-        <div>
-          <p className="text-sm font-semibold leading-tight">Workforce</p>
-          <p className="text-[11px] text-ink-400">Enterprise Suite</p>
-        </div>
+  const renderSidebar = (collapsedMode: boolean) => (
+    <aside className={cx('flex h-full shrink-0 flex-col bg-ink-900 text-white', collapsedMode ? 'w-[72px]' : 'w-64')}>
+      <div className={cx('flex items-center py-5', collapsedMode ? 'flex-col gap-2 px-2' : 'gap-2.5 px-5')}>
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">W</span>
+        {!collapsedMode && (
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-tight">Workforce</p>
+            <p className="text-[11px] text-ink-400">Enterprise Suite</p>
+          </div>
+        )}
+        <button
+          type="button"
+          className="hidden rounded-md p-1.5 text-ink-400 hover:bg-white/10 hover:text-white lg:block"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label={collapsedMode ? 'Expand navigation' : 'Collapse navigation'}
+          title={collapsedMode ? 'Expand navigation' : 'Collapse navigation'}
+        >
+          <Icon name="menu" size={16} />
+        </button>
       </div>
       <nav className="scroll-area flex-1 space-y-6 px-3 pb-6">
         {nav.map((group) => {
@@ -150,18 +172,21 @@ export function AppShell() {
           if (items.length === 0) return null;
           return (
             <div key={group.label}>
-              <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-ink-500">{group.label}</p>
+              {!collapsedMode && (
+                <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-ink-500">{group.label}</p>
+              )}
               <div className="space-y-0.5">
                 {items.map((item) => (
                   <NavLink
                     key={item.to}
                     to={item.to}
                     end={item.to === '/'}
-                    className={({ isActive }) => cx('nav-link', isActive && 'nav-link-active')}
+                    title={collapsedMode ? item.label : undefined}
+                    className={({ isActive }) => cx('nav-link', isActive && 'nav-link-active', collapsedMode && 'justify-center px-2')}
                   >
                     <Icon name={item.icon} size={17} />
-                    <span className="flex-1">{item.label}</span>
-                    {item.to === '/chat' && user && (
+                    {!collapsedMode && <span className="flex-1">{item.label}</span>}
+                    {!collapsedMode && item.to === '/chat' && user && (
                       <span className="text-[10px] text-ink-400">{onlineIds.length} online</span>
                     )}
                   </NavLink>
@@ -172,16 +197,27 @@ export function AppShell() {
         })}
       </nav>
       <div className="border-t border-white/10 p-3">
-        <Link to="/profile" className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white/10">
+        <Link
+          to="/profile"
+          title={collapsedMode ? 'My profile' : undefined}
+          className={cx('flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-white/10', collapsedMode && 'justify-center')}
+        >
           <Avatar name={user.fullName} src={user.photoUrl} size={34} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-white">{user.fullName}</p>
-            <p className="truncate text-[11px] text-ink-400">{user.designationTitle ?? user.roleName}</p>
-          </div>
+          {!collapsedMode && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-white">{user.fullName}</p>
+              <p className="truncate text-[11px] text-ink-400">{user.designationTitle ?? user.roleName}</p>
+            </div>
+          )}
         </Link>
-        <button type="button" onClick={() => void logout()} className="nav-link mt-1 w-full">
+        <button
+          type="button"
+          onClick={() => void logout()}
+          title={collapsedMode ? 'Sign out' : undefined}
+          className={cx('nav-link mt-1 w-full', collapsedMode && 'justify-center px-2')}
+        >
           <Icon name="logout" size={17} />
-          Sign out
+          {!collapsedMode && 'Sign out'}
         </button>
       </div>
     </aside>
@@ -189,16 +225,18 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-screen bg-ink-100">
-      <div className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex lg:w-64">{sidebar}</div>
+      <div className={cx('hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex', collapsed ? 'lg:w-[72px]' : 'lg:w-64')}>
+        {renderSidebar(collapsed)}
+      </div>
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 flex lg:hidden">
           <div className="absolute inset-0 bg-ink-900/60" onClick={() => setMobileOpen(false)} aria-hidden />
-          <div className="relative z-10 h-full">{sidebar}</div>
+          <div className="relative z-10 h-full w-64">{renderSidebar(false)}</div>
         </div>
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col lg:ml-64">
+      <div className={cx('flex min-w-0 flex-1 flex-col transition-[margin] duration-200', collapsed ? 'lg:ml-[72px]' : 'lg:ml-64')}>
         <header className="sticky top-0 z-30 border-b border-ink-200 bg-white/95 backdrop-blur">
           <div className="flex h-16 items-center gap-3 px-4 sm:px-6">
             <button type="button" className="btn-ghost btn-sm lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation">

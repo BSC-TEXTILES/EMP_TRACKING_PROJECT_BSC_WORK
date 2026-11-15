@@ -228,8 +228,8 @@ export class AttendanceService {
       ]);
       const breakMinutes = Number((breakRows as { total: number }[])[0]?.total ?? 0);
       const [totals] = await conn.query(
-        'SELECT GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) - ?) AS worked, NOW(3) AS now',
-        [breakMinutes],
+        'SELECT GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) - ?) AS worked, NOW(3) AS now FROM attendance WHERE id = ?',
+        [breakMinutes, row.id],
       );
       const worked = Number((totals as { worked: number }[])[0]?.worked ?? 0);
       const nowLocal = localTime();

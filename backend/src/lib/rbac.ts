@@ -70,6 +70,14 @@ export const PERMISSION_DEFINITIONS: PermissionDefinition[] = [
   { code: 'employees.manage', module: 'employees', action: 'manage', description: 'Create and update employees' },
   { code: 'employees.approve', module: 'employees', action: 'approve', description: 'Approve new registrations' },
 
+  { code: 'collections.view.own', module: 'collections', action: 'view.own', description: 'View own collection records' },
+  { code: 'collections.view.team', module: 'collections', action: 'view.team', description: 'View team collection records' },
+  { code: 'collections.view.all', module: 'collections', action: 'view.all', description: 'View all collection records' },
+  { code: 'collections.create', module: 'collections', action: 'create', description: 'Create collection records' },
+  { code: 'collections.edit', module: 'collections', action: 'edit', description: 'Edit collection records' },
+  { code: 'collections.delete', module: 'collections', action: 'delete', description: 'Delete collection records' },
+  { code: 'collections.approve', module: 'collections', action: 'approve', description: 'Approve or reject collection records' },
+
   { code: 'roles.manage', module: 'roles', action: 'manage', description: 'Manage roles and permission matrix' },
   { code: 'org.manage', module: 'org', action: 'manage', description: 'Manage departments, designations and locations' },
 
@@ -103,6 +111,8 @@ export const EMPLOYEE_BASE_PERMISSIONS = [
   'projects.view',
   'meetings.create',
   'notifications.send',
+  'collections.view.own',
+  'collections.create',
 ].filter((code) => code !== 'notifications.send');
 
 export const MANAGER_PERMISSIONS = [
@@ -127,6 +137,9 @@ export const MANAGER_PERMISSIONS = [
   'analytics.view',
   'reports.export',
   'projects.create',
+  'collections.view.team',
+  'collections.edit',
+  'collections.approve',
 ];
 
 export const HR_PERMISSIONS = [
@@ -139,6 +152,7 @@ export const HR_PERMISSIONS = [
   'notifications.send',
   'audit.view',
   'org.manage',
+  'collections.view.all',
 ];
 
 export const IT_ADMIN_PERMISSIONS = [
@@ -192,6 +206,8 @@ export const ROLE_DEFINITIONS: {
       'notifications.send',
       'audit.view',
       'admin.dashboard',
+      'collections.view.all',
+      'collections.delete',
     ],
   },
   {
@@ -200,7 +216,7 @@ export const ROLE_DEFINITIONS: {
     category: 'executive',
     level: 80,
     description: 'Multi-department operational leadership.',
-    permissions: [...MANAGER_PERMISSIONS, 'employees.view.all', 'kpi.view.all', 'analytics.view.all', 'admin.dashboard', 'notifications.send'],
+    permissions: [...MANAGER_PERMISSIONS, 'employees.view.all', 'kpi.view.all', 'analytics.view.all', 'admin.dashboard', 'notifications.send', 'collections.view.all', 'collections.delete'],
   },
   {
     slug: 'department_head',
@@ -240,6 +256,7 @@ export const ROLE_DEFINITIONS: {
       'reports.view.team',
       'notifications.send',
       'reports.export',
+      'collections.view.all',
     ],
   },
   {

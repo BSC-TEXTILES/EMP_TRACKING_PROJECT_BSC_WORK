@@ -4,6 +4,7 @@ import type { Express } from 'express';
 import { createApp } from '../src/index.js';
 import { execute, query, queryOne, closePool } from '../src/db/index.js';
 import { enqueueEmail, processEmailQueue } from '../src/lib/mailer.js';
+import { today } from '../src/lib/dates.js';
 
 let app: Express;
 
@@ -116,7 +117,57 @@ describe('role-based access control and hierarchy scope', () => {
   });
 });
 
+describe('profile photo upload', () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+
+  it('uploads, serves and removes a profile photo', async () => {
+    const { agent, response } = await login('admin@workforce.test');
+    expect(response.status).toBe(200);
+
+    const upload = await agent.post('/api/me/photo').attach('file', png, { filename: 'avatar.png', contentType: 'image/png' });
+    expect(upload.status).toBe(201);
+    const photoUrl = String(upload.body.photoUrl);
+    expect(photoUrl).toMatch(/^\/api\/files\/\d+\?v=\d+$/);
+
+    const me = await agent.get('/api/auth/me');
+    expect(me.body.user.photoUrl).toBe(photoUrl);
+
+    const image = await agent.get(photoUrl.split('?')[0]);
+    expect(image.status).toBe(200);
+    expect(String(image.headers['content-type'])).toContain('image/png');
+
+    const disguised = await agent
+      .post('/api/me/photo')
+      .attach('file', Buffer.from('this is not an image'), { filename: 'avatar.png', contentType: 'image/png' });
+    expect(disguised.status).toBe(400);
+
+    const removal = await agent.delete('/api/me/photo');
+    expect(removal.status).toBe(200);
+    expect(removal.body.photoUrl).toBeNull();
+    expect((await agent.get(photoUrl.split('?')[0])).status).toBe(404);
+  });
+});
+
 describe('attendance timer and duplicate prevention', () => {
+  let adminId = 0;
+
+  beforeAll(async () => {
+    const admin = await queryOne<{ id: number }>("SELECT id FROM employees WHERE email = 'admin@workforce.test'");
+    adminId = Number(admin?.id ?? 0);
+    await execute('DELETE FROM attendance WHERE employee_id = ? AND work_date = ?', [adminId, today()]);
+    await execute(
+      "INSERT INTO attendance (employee_id, work_date, check_in_at, status) VALUES (?, ?, NOW(3) - INTERVAL 45 MINUTE, 'present')",
+      [adminId, today()],
+    );
+  });
+
+  afterAll(async () => {
+    await execute('DELETE FROM attendance WHERE employee_id = ? AND work_date = ?', [adminId, today()]);
+  });
+
   it('refuses a second check-in while a session is already open', async () => {
     const { agent, response } = await login('admin@workforce.test');
     expect(response.status).toBe(200);
@@ -135,6 +186,15 @@ describe('attendance timer and duplicate prevention', () => {
     const serverNow = new Date(state.body.serverNow).getTime();
     const checkIn = new Date(state.body.checkInAt).getTime();
     expect(Math.abs(state.body.elapsedSeconds - Math.floor((serverNow - checkIn) / 1000))).toBeLessThan(120);
+  });
+
+  it('closes the day and records the worked minutes', async () => {
+    const { agent } = await login('admin@workforce.test');
+    const response = await agent.post('/api/attendance/check-out').send({});
+    expect(response.status).toBe(200);
+    expect(response.body.checkOutAt).toBeTruthy();
+    expect(response.body.totalMinutes).toBeGreaterThanOrEqual(44);
+    expect(response.body.canCheckOut).toBe(false);
   });
 
   it('returns a numeric attendance summary with a real percentage', async () => {
@@ -302,6 +362,124 @@ describe('email delivery', () => {
 
     const stored = await queryOne<{ status: string }>('SELECT status FROM email_deliveries WHERE id = ?', [id]);
     expect(stored?.status).toBe(row!.status);
+  });
+});
+
+describe('collection module', () => {
+  const customer = `QA Collection ${Date.now()}`;
+  let collectionId = 0;
+
+  afterAll(async () => {
+    await execute('DELETE FROM collections WHERE customer_name LIKE ?', ['QA Collection%']);
+  });
+
+  it('creates a collection record and scopes it to the collector', async () => {
+    const { agent, response } = await login('ananya.rao@workforce.test');
+    const create = await agent.post('/api/collections').send({
+      customerName: customer,
+      amountDue: 1250.5,
+      amountCollected: 250.5,
+      dueDate: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10),
+      notes: 'QA verification record',
+    });
+    expect(create.status).toBe(201);
+    expect(create.body.referenceNo).toMatch(/^COL-\d{4}-\d+$/);
+    collectionId = create.body.id;
+
+    const list = await agent.get('/api/collections?search=QA%20Collection');
+    expect(list.status).toBe(200);
+    const row = (list.body.items as { id: number; status: string; approvalStatus: string; employeeId: number }[]).find(
+      (item) => item.id === collectionId,
+    );
+    expect(row).toBeDefined();
+    expect(row!.status).toBe('partial');
+    expect(row!.approvalStatus).toBe('pending');
+    expect(row!.employeeId).toBe(response.body.user.id);
+  });
+
+  it('rejects an employee attempting to approve a record', async () => {
+    const { agent } = await login('ananya.rao@workforce.test');
+    const response = await agent.post(`/api/collections/${collectionId}/decision`).send({ approve: true });
+    expect(response.status).toBe(403);
+  });
+
+  it('lets a manager approve a team collection record', async () => {
+    const manager = await login('it.manager@workforce.test');
+    const list = await manager.agent.get('/api/collections?search=QA%20Collection');
+    expect(list.status).toBe(200);
+    expect((list.body.items as { id: number }[]).some((item) => item.id === collectionId)).toBe(true);
+
+    const decide = await manager.agent.post(`/api/collections/${collectionId}/decision`).send({ approve: true });
+    expect(decide.status).toBe(200);
+    expect(decide.body.approvalStatus).toBe('approved');
+
+    const employee = await login('ananya.rao@workforce.test');
+    const detail = await employee.agent.get(`/api/collections/${collectionId}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.approvalStatus).toBe('approved');
+  });
+
+  it('exposes collection dashboard totals and status metadata', async () => {
+    const { agent } = await login('it.manager@workforce.test');
+    const dashboard = await agent.get('/api/collections/dashboard');
+    expect(dashboard.status).toBe(200);
+    expect(typeof dashboard.body.summary.outstanding).toBe('number');
+    expect(Array.isArray(dashboard.body.byStatus)).toBe(true);
+    const meta = await agent.get('/api/collections/meta');
+    expect(meta.status).toBe(200);
+    expect(meta.body.statuses.length).toBe(4);
+  });
+});
+
+describe('development test login', () => {
+  it('returns seeded demo accounts outside production only', async () => {
+    const response = await request(app).get('/api/auth/test-accounts');
+    expect(response.status).toBe(200);
+    const body = response.body as { enabled: boolean; environment: string; accounts: { role: string; employeeId: string; password: string }[] };
+    expect(body.enabled).toBe(true);
+    expect(body.environment).toBe('test');
+    expect(body.accounts.length).toBe(7);
+    expect(body.accounts.map((account) => account.role)).toEqual(
+      expect.arrayContaining(['Super Admin', 'HR Manager', 'Department Manager', 'IT Support', 'Developer', 'Employee', 'Store Manager']),
+    );
+    expect(body.accounts.every((account) => account.employeeId.startsWith('EMP-'))).toBe(true);
+  });
+});
+
+describe('refresh token rotation', () => {
+  function refreshCookie(headers: Record<string, unknown>): string | undefined {
+    const raw = headers['set-cookie'] as string[] | undefined;
+    return raw?.find((cookie) => cookie.startsWith('wfm_refresh='))?.split(';')[0];
+  }
+
+  it('rotates refresh tokens and detects reuse of a consumed token', async () => {
+    const agent = request.agent(app);
+    const loginResponse = await agent
+      .post('/api/auth/login')
+      .set('Origin', 'http://localhost:5173')
+      .send({ identifier: 'karthik.iyer@workforce.test', password: PASSWORD });
+    expect(loginResponse.status).toBe(200);
+    const originalRefresh = refreshCookie(loginResponse.headers as Record<string, unknown>);
+    expect(originalRefresh).toBeTruthy();
+
+    const refreshed = await agent.post('/api/auth/refresh').set('Origin', 'http://localhost:5173');
+    expect(refreshed.status).toBe(200);
+    const me = await agent.get('/api/auth/me');
+    expect(me.status).toBe(200);
+    expect(me.body.user.email).toBe('karthik.iyer@workforce.test');
+    const rotatedRefresh = refreshCookie(refreshed.headers as Record<string, unknown>);
+    expect(rotatedRefresh).toBeTruthy();
+    expect(rotatedRefresh).not.toBe(originalRefresh);
+
+    const replay = await request(app)
+      .post('/api/auth/refresh')
+      .set('Origin', 'http://localhost:5173')
+      .set('Cookie', originalRefresh!);
+    expect(replay.status).toBe(401);
+
+    const afterReuse = await request(app).get('/api/auth/me').set('Cookie', rotatedRefresh!);
+    expect(afterReuse.status).toBe(401);
+    await agent.post('/api/auth/logout');
   });
 });
 
