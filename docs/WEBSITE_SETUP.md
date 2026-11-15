@@ -1,6 +1,6 @@
 # Website-managed setup and real business data
 
-The installation page is `/setup`. On this workstation it is http://localhost:4000/setup. The production hostname in the deployment template is https://emp.bsctextiles.in; deployment to that hostname has not been performed here.
+The installation page is `/setup`. On this workstation it is http://localhost:4000/setup. The production hostname in the deployment template is https://emptrack.bsctextiles.in; deployment to that hostname has not been performed here.
 
 ## First installation
 

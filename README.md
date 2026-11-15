@@ -14,7 +14,7 @@ npm run build
 npm start
 ```
 
-For local development use `.env.local` with `WEB_SETUP_ENABLED=true`. Open http://localhost:4000/setup and read the one-time code from `backend/storage/config/setup-code`. The operator must provide an empty MySQL database and actual SMTP credentials. For production, use `.env.production.example`, HTTPS, a durable private configuration directory and Node 22.12+, 24 or 26. The template uses emp.bsctextiles.in; the public deployment has not been verified.
+For local development use `.env.local` with `WEB_SETUP_ENABLED=true`. Open http://localhost:4000/setup and read the one-time code from `backend/storage/config/setup-code`. The operator must provide an empty MySQL database and actual SMTP credentials. For production, use `.env.production.example`, HTTPS, a durable private configuration directory and Node 22.12+, 24 or 26. The template uses emptrack.bsctextiles.in; the public deployment has not been verified.
 
 Saved credentials are encrypted outside the web root. The setup flow creates only the administrator and organization records entered by the user, plus system role/permission definitions and editable policy defaults. Backup and recovery instructions are in [WEBSITE_SETUP.md](docs/WEBSITE_SETUP.md).
 
@@ -63,7 +63,7 @@ The local setup page was inspected in a browser. Actual provider connectivity, e
 - Profile photos: `POST /api/me/photo` (multipart, ≤5 MB PNG/JPEG/WebP/GIF); the profile page offers click, drag-and-drop and mobile camera capture with client-side square cropping. Uploaded avatars appear across tasks, chat, projects, meetings and the sidebar.
 - `docs/COLLECTIONS.md`: collection register, approval workflow, permissions and exports.
 - `docs/ENVIRONMENT.md`: environment files, validation and secret management.
-- `deploy/nginx.conf`: HTTPS/API/WebSocket routing template for emp.bsctextiles.in.
+- `deploy/nginx.conf`: HTTPS/API/WebSocket routing template for emptrack.bsctextiles.in.
 - `deploy/clamd.conf.example`: private scanner configuration.
 - `docs/EMAIL_CONFIGURATION.md`: administrator SMTP and OTP workflow.
 - `docs/JWT_SESSION_MANAGEMENT.md`: rotating sessions.
