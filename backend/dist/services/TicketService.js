@@ -359,6 +359,10 @@ export class TicketService {
                 });
             }
             emitToEmployees([...recipients, user.id], 'ticket:updated', { id: ticketId, status });
+            if (['resolved', 'closed', 'reopened'].includes(status)) {
+                const { ActivityService } = await import('./ActivityService.js');
+                await ActivityService.syncTicketStatus(ticketId, status).catch((error) => console.error('[activity] incident sync failed', error));
+            }
         };
         switch (action) {
             case 'assign': {

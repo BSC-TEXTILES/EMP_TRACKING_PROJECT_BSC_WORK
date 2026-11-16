@@ -1,10 +1,11 @@
 import { execute, query, queryOne } from '../db/index.js';
+import { today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
 import { subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
+import { NotificationService } from './NotificationService.js';
 import { ActivityService, cleanText, parseJson } from './ActivityService.js';
 import type { AuthUser } from './AuthService.js';
 
-const DEFAULT_WEEK_START = `DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)`;
 
 function number(value: unknown): number {
   return Number(value ?? 0);
@@ -12,6 +13,11 @@ function number(value: unknown): number {
 
 function percent(part: number, total: number): number {
   return total > 0 ? Math.round((part / total) * 1000) / 10 : 0;
+}
+
+/** DATE columns arrive as strings (dateStrings); normalise defensively. */
+function sqlDate(value: unknown): string {
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 }
 
 function grade(score: number): string {
@@ -126,6 +132,35 @@ export class ActivityAnalyticsService {
       ),
     ]);
 
+    const [workedTasks, resolvedTickets, actionItems, milestones, meetings] = await Promise.all([
+      query<Record<string, unknown>>(
+        `SELECT t.id, t.title, t.description, t.status, p.name AS project_name, SUM(l.minutes) AS minutes
+         FROM task_time_logs l JOIN tasks t ON t.id = l.task_id LEFT JOIN projects p ON p.id = t.project_id
+         WHERE l.employee_id = ? AND DATE(l.started_at) = ? GROUP BY t.id, t.title, t.description, t.status, p.name ORDER BY minutes DESC LIMIT 10`,
+        [employeeId, date],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT ticket_no, subject FROM tickets WHERE assignee_id = ? AND DATE(resolved_at) = ? ORDER BY resolved_at`,
+        [employeeId, date],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT a.title, a.status, m.title AS meeting_title FROM meeting_action_items a JOIN meetings m ON m.id = a.meeting_id
+         WHERE a.assignee_id = ? AND (DATE(a.completed_at) = ? OR DATE(a.created_at) = ?) ORDER BY a.created_at`,
+        [employeeId, date, date],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT DISTINCT ms.title, p.name AS project_name FROM project_milestones ms JOIN projects p ON p.id = ms.project_id
+         JOIN tasks t ON t.milestone_id = ms.id JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND DATE(ms.completed_at) = ?`,
+        [employeeId, date],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT m.title, TIMESTAMPDIFF(MINUTE, m.start_at, m.end_at) AS minutes FROM meeting_participants mp JOIN meetings m ON m.id = mp.meeting_id
+         WHERE mp.employee_id = ? AND DATE(m.start_at) = ? AND m.status <> 'cancelled' ORDER BY m.start_at`,
+        [employeeId, date],
+      ),
+    ]);
+
     const appBreakdown = apps.map((row) => ({
       app: String(row.app_name),
       category: String(row.app_category),
@@ -150,15 +185,44 @@ export class ActivityAnalyticsService {
       .split(/\r?\n|(?<=\.)\s+/)
       .map((line) => cleanText(line, 180))
       .filter((line) => line.length > 8);
-    const keywordRows = await query<{ keyword: string }>('SELECT keyword FROM activity_keywords ORDER BY weight DESC LIMIT 50');
-    const combinedText = [reportLines.join(' '), completed.map((task) => task.title).join(' '), ...events.map((event) => String(event.title))].join(' ').toLowerCase();
-    const matchedKeywords = keywordRows.map((row) => row.keyword).filter((keyword) => combinedText.includes(keyword.toLowerCase()));
+    const keywordRows = await query<{ keyword: string; category: string; weight: number }>('SELECT keyword, category, weight FROM activity_keywords ORDER BY weight DESC LIMIT 100');
+    // Only permitted, work-authored sources: report, task titles/descriptions,
+    // ticket subjects, meeting action items, milestones and agent work events.
+    const combinedText = [
+      reportLines.join(' '),
+      completed.map((task) => task.title).join(' '),
+      workedTasks.map((task) => `${task.title} ${String(task.description ?? '').slice(0, 400)}`).join(' '),
+      tickets.map((ticket) => ticket.subject).join(' '),
+      resolvedTickets.map((ticket) => ticket.subject).join(' '),
+      actionItems.map((item) => item.title).join(' '),
+      milestones.map((item) => item.title).join(' '),
+      ...events.map((event) => `${String(event.title)} ${parseJson<string[]>(event.keywords, []).join(' ')}`),
+    ].join(' ').toLowerCase();
+    const matchedKeywords = keywordRows
+      .filter((row) => new RegExp(`\\b${row.keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(combinedText))
+      .map((row) => ({ keyword: row.keyword, category: row.category }));
 
-    const keyActivities = [...new Set([
-      ...completed.map((task) => `Completed: ${task.title}`),
+    const completedIds = new Set(completed.map((task) => task.id));
+    const generatedActivities = [...new Set([
+      ...completed.map((task) => `Completed ${task.title}${task.project ? ` (${task.project})` : ''}`),
+      ...milestones.map((item) => `Reached milestone ${item.title} (${item.project_name})`),
+      ...workedTasks.filter((task) => !completedIds.has(Number(task.id))).map((task) => `Worked on ${task.title}${task.project_name ? ` (${task.project_name})` : ''}`),
+      ...resolvedTickets.map((ticket) => `Resolved ticket ${ticket.ticket_no}: ${ticket.subject}`),
+      ...actionItems.filter((item) => item.status === 'done' || item.status === 'completed').map((item) => `Completed action item: ${item.title}`),
       ...events.map((event) => String(event.title)),
+      ...meetings.map((meeting) => `Attended meeting: ${meeting.title}`),
       ...reportLines,
-    ].map((line) => cleanText(line, 200)).filter(Boolean))].slice(0, 8);
+      ...(errors.length ? [`Reported ${errors.length} technical issue${errors.length > 1 ? 's' : ''}`] : []),
+    ].map((line) => cleanText(line, 200)).filter(Boolean))].slice(0, 10);
+
+    const existingSummary = await queryOne<{ key_activities: unknown; key_activities_edited: number }>(
+      'SELECT key_activities, key_activities_edited FROM daily_activity_summaries WHERE employee_id = ? AND summary_date = ?',
+      [employeeId, date],
+    );
+    // Once the employee has corrected the list, regeneration never overwrites it.
+    const keyActivities = existingSummary?.key_activities_edited
+      ? parseJson<string[]>(existingSummary.key_activities, generatedActivities)
+      : generatedActivities;
 
     const issues = errors.map((row) => ({
       title: row.incident_title ?? row.description,
@@ -185,8 +249,13 @@ export class ActivityAnalyticsService {
       keyActivities,
       issues,
       tickets,
-      report: report ? { id: Number(report.id), status: report.status, summary: report.summary } : null,
-      keywords: [...new Set(matchedKeywords)],
+      report: report ? { id: Number(report.id), status: report.status, summary: report.summary, problems: report.problems, tomorrowPlan: report.tomorrow_plan } : null,
+      keywords: matchedKeywords,
+      suggestedActivities: generatedActivities,
+      browserBreakdown: browser.map((row) => ({ domain: row.domain, category: row.category, minutes: Math.round(number(row.seconds) / 60) })),
+      meetings: meetings.map((meeting) => ({ title: meeting.title, minutes: number(meeting.minutes) })),
+      attendance: attendance ? { checkInAt: attendance.check_in_at, checkOutAt: attendance.check_out_at } : null,
+      netWorkingMinutes: Math.max(0, attendanceMinutes - breakMinutes),
       employee,
       date,
     };
@@ -228,6 +297,13 @@ export class ActivityAnalyticsService {
       issues: parseJson(row?.issues ?? extra?.issues, []),
       tickets: parseJson(row?.tickets ?? extra?.tickets, []),
       keywords: extra?.keywords ?? [],
+      keyActivitiesEdited: Boolean(row?.key_activities_edited),
+      suggestedActivities: extra?.suggestedActivities ?? [],
+      browserBreakdown: extra?.browserBreakdown ?? [],
+      meetings: extra?.meetings ?? [],
+      attendance: extra?.attendance ?? null,
+      netWorkingMinutes: extra?.netWorkingMinutes ?? Math.max(0, number(row?.attendance_minutes) - number(row?.break_minutes)),
+      report: extra?.report ?? null,
       employee: extra?.employee ?? null,
       employeeNotes: row?.employee_notes ?? null,
       status: row?.status ?? 'draft',
@@ -240,18 +316,117 @@ export class ActivityAnalyticsService {
   static async daily(user: AuthUser, employeeId: number, date: string) {
     await ActivityAnalyticsService.assertAccess(user, employeeId);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw ApiError.badRequest('Use a valid YYYY-MM-DD date.');
+    await ActivityService.logAccess(user, employeeId, 'daily');
     return ActivityAnalyticsService.generateDaily(employeeId, date);
   }
 
-  static async submitDaily(user: AuthUser, date: string, notes: string) {
+  /** Employee submits the day, optionally correcting the extracted key activities. */
+  static async submitDaily(user: AuthUser, date: string, notes: string, keyActivities?: unknown) {
+    if (date > today()) throw ApiError.badRequest('You cannot submit a future day.');
     const summary = await ActivityAnalyticsService.generateDaily(user.id, date);
     if (!summary?.id) throw ApiError.badRequest('Unable to generate the daily summary.');
+    if (summary.status === 'approved') throw ApiError.conflict('This summary is already approved.');
+    const edited = Array.isArray(keyActivities)
+      ? [...new Set(keyActivities.map((item) => cleanText(item, 200)).filter(Boolean))].slice(0, 15)
+      : null;
     await execute(
-      "UPDATE daily_activity_summaries SET employee_notes = ?, status = 'submitted', submitted_at = NOW(3) WHERE id = ?",
-      [cleanText(notes, 2000) || null, summary.id],
+      `UPDATE daily_activity_summaries SET employee_notes = ?, status = 'submitted', submitted_at = NOW(3),
+              key_activities = COALESCE(?, key_activities), key_activities_edited = IF(? IS NULL, key_activities_edited, 1)
+       WHERE id = ?`,
+      [cleanText(notes, 2000) || null, edited ? JSON.stringify(edited) : null, edited ? 1 : null, summary.id],
     );
-    await ActivityService.audit(user.id, 'activity.daily_submitted', user.id, 'daily_activity_summary', summary.id, { date });
-    return ActivityAnalyticsService.daily(user, user.id, date);
+    await ActivityService.audit(user.id, 'activity.daily_submitted', user.id, 'daily_activity_summary', summary.id, { date, editedActivities: Boolean(edited) });
+    const managers = await query<{ manager_id: number | null }>('SELECT manager_id FROM employees WHERE id = ?', [user.id]);
+    if (managers[0]?.manager_id) {
+      await NotificationService.notify({
+        employeeIds: [Number(managers[0].manager_id)],
+        type: 'activity_daily',
+        title: 'Daily activity summary submitted',
+        body: `${user.fullName} submitted the summary for ${date}.`,
+        link: '/activity?tab=team',
+        actorId: user.id,
+        dedupeKey: `daily_submitted:${summary.id}:${Date.now()}`,
+      });
+    }
+    return ActivityAnalyticsService.generateDaily(user.id, date);
+  }
+
+  /** Chronological work timeline (applications, approved websites, platform modules). */
+  static async timeline(user: AuthUser, employeeId: number, date: string) {
+    await ActivityAnalyticsService.assertAccess(user, employeeId);
+    const rows = await query<Record<string, unknown>>(
+      `SELECT * FROM (
+         SELECT 'app' AS kind, id, app_name AS label, app_category AS category, started_at, ended_at, active_seconds FROM application_usage_logs
+         WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'browser', id, domain, category, started_at, ended_at, active_seconds FROM browser_usage_logs
+         WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'module', id, module, 'Platform', entered_at, exited_at, active_seconds FROM internal_module_activity
+         WHERE employee_id = ? AND DATE(entered_at) = ?
+       ) segments ORDER BY started_at DESC LIMIT 300`,
+      [employeeId, date, employeeId, date, employeeId, date],
+    );
+    return rows.map((row) => ({
+      kind: row.kind,
+      id: Number(row.id),
+      label: row.label,
+      category: row.category,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      seconds: number(row.active_seconds),
+    }));
+  }
+
+  /** Scheduler: refresh every summary for employees who attended or were monitored on the date. */
+  static async generateAllDaily(date: string) {
+    const rows = await query<{ employee_id: number }>(
+      `SELECT employee_id FROM attendance WHERE work_date = ? AND check_in_at IS NOT NULL
+       UNION SELECT employee_id FROM monitoring_sessions WHERE work_date = ?`,
+      [date, date],
+    );
+    let generated = 0;
+    for (const row of rows) {
+      try { await ActivityAnalyticsService.generateDaily(Number(row.employee_id), date); generated += 1; }
+      catch (error) { console.error('[activity] daily summary failed', row.employee_id, (error as Error).message); }
+    }
+    return generated;
+  }
+
+  /** Scheduler: calculate preliminary weekly reports for every active employee and notify them. */
+  static async generateAllWeekly(weekStart: string) {
+    const rows = await query<{ id: number; manager_id: number | null }>("SELECT id, manager_id FROM employees WHERE status = 'active'");
+    let generated = 0;
+    const byManager = new Map<number, number>();
+    for (const row of rows) {
+      try {
+        const report = await ActivityAnalyticsService.generateWeekly(Number(row.id), weekStart);
+        if (!report || report.status === 'final') continue;
+        generated += 1;
+        await NotificationService.notify({
+          employeeIds: [Number(row.id)],
+          type: 'activity_weekly',
+          title: 'Preliminary weekly performance published',
+          body: `Week of ${weekStart}: preliminary score ${report.score}. Add feedback before your manager finalises it.`,
+          link: '/activity?tab=weekly',
+          dedupeKey: `weekly_published:${row.id}:${weekStart}`,
+        });
+        if (row.manager_id) byManager.set(Number(row.manager_id), (byManager.get(Number(row.manager_id)) ?? 0) + 1);
+      } catch (error) {
+        console.error('[activity] weekly report failed', row.id, (error as Error).message);
+      }
+    }
+    for (const [managerId, count] of byManager) {
+      await NotificationService.notify({
+        employeeIds: [managerId],
+        type: 'activity_weekly',
+        title: 'Weekly scores ready for review',
+        body: `${count} preliminary weekly report(s) for the week of ${weekStart} await your review.`,
+        link: '/activity?tab=team',
+        dedupeKey: `weekly_review:${managerId}:${weekStart}`,
+      });
+    }
+    return generated;
   }
 
   static async reviewDaily(user: AuthUser, id: number, decision: 'approved' | 'returned', note: string) {
@@ -268,120 +443,196 @@ export class ActivityAnalyticsService {
     return ActivityAnalyticsService.mapDaily(stored);
   }
 
-  /** Calculates a transparent weekly performance score from platform records. */
+  /**
+   * Calculates a transparent weekly performance score from platform records.
+   * Parameters without data for the week (e.g. no tasks assigned) are marked
+   * not applicable and their weight is redistributed, so nobody is rewarded or
+   * penalised for missing data. Application usage is reported as context only.
+   */
   static async generateWeekly(employeeId: number, weekStart?: string) {
     const week = weekStart && /^\d{4}-\d{2}-\d{2}$/.test(weekStart)
-      ? await queryOne<{ start: string; end: string }>('SELECT DATE(?) AS start, DATE_ADD(DATE(?), INTERVAL 6 DAY) AS end', [weekStart, weekStart])
-      : await queryOne<{ start: string; end: string }>(`SELECT ${DEFAULT_WEEK_START} AS start, DATE_ADD(${DEFAULT_WEEK_START}, INTERVAL 6 DAY) AS end`);
+      ? await queryOne<{ start: string; end: string }>(
+        'SELECT DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY) AS start, DATE_ADD(DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY), INTERVAL 6 DAY) AS end',
+        [weekStart, weekStart, weekStart, weekStart],
+      )
+      : await queryOne<{ start: string; end: string }>('SELECT DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY) AS start, DATE_ADD(DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY), INTERVAL 6 DAY) AS end', [today(), today(), today(), today()]);
     if (!week) throw ApiError.badRequest('Unable to resolve the week.');
-    const start = String(week.start).slice(0, 10);
-    const end = String(week.end).slice(0, 10);
+    const start = sqlDate(week.start);
+    const end = sqlDate(week.end);
+    const employee = await queryOne<{ id: number }>('SELECT id FROM employees WHERE id = ?', [employeeId]);
+    if (!employee) throw ApiError.notFound('Employee not found');
 
-    const [tasks, attendance, reports, meetings, messages, apps, existing] = await Promise.all([
+    const [tasks, completedRows, overdue, pendingRows, attendance, reports, meetings, messages, apps, ticketsResolved, existing, previousWeek, kpiFeedback] = await Promise.all([
+      // Tasks due in the week, or assigned in the week without a due date.
       queryOne<Record<string, unknown>>(
-        `SELECT COUNT(*) AS assigned,
-                SUM(t.status IN ('completed','approved')) AS completed,
-                SUM(t.status IN ('completed','approved') AND (t.completed_at <= TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')))) AS on_time,
-                SUM(t.approved_at IS NOT NULL) AS approved,
-                SUM(t.project_id IS NOT NULL) AS with_project
-         FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
-         WHERE ta.employee_id = ? AND DATE(ta.assigned_at) BETWEEN ? AND ?`,
-        [employeeId, start, end],
-      ),
-      queryOne<Record<string, unknown>>(
-        `SELECT COUNT(*) AS present_days,
-                COALESCE(SUM(CASE WHEN check_out_at IS NULL AND work_date = CURDATE() THEN TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) ELSE total_minutes END),0) AS minutes
-         FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('present','late','half_day')`,
-        [employeeId, start, end],
+        `SELECT COUNT(*) AS assigned FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('cancelled')
+           AND (t.due_date BETWEEN ? AND ? OR (t.due_date IS NULL AND DATE(ta.assigned_at) BETWEEN ? AND ?))`,
+        [employeeId, start, end, start, end],
       ),
       query<Record<string, unknown>>(
-        "SELECT report_date, status FROM daily_work_reports WHERE employee_id = ? AND report_date BETWEEN ? AND ?",
+        `SELECT t.id, t.title, t.project_id, t.approved_at, t.rejection_reason, p.name AS project_name,
+                COALESCE(t.completed_at, ta.completed_at) AS completed_at,
+                (COALESCE(t.completed_at, ta.completed_at) <= TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')) OR t.due_date IS NULL) AS on_time,
+                TIMESTAMPDIFF(MINUTE, COALESCE(ta.started_at, ta.assigned_at), COALESCE(t.completed_at, ta.completed_at)) AS cycle_minutes
+         FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id LEFT JOIN projects p ON p.id = t.project_id
+         WHERE ta.employee_id = ? AND DATE(COALESCE(t.completed_at, ta.completed_at)) BETWEEN ? AND ?
+           AND t.status IN ('completed','approved','submitted')`,
         [employeeId, start, end],
       ),
       queryOne<Record<string, unknown>>(
-        `SELECT COUNT(*) AS attended FROM meeting_participants WHERE employee_id = ? AND attended = 1`,
+        `SELECT COUNT(*) AS total FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('completed','approved','cancelled','rejected') AND t.due_date < LEAST(?, ?)`,
+        [employeeId, end, today()],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT t.id, t.task_no, t.title, t.due_date, t.priority FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('completed','approved','cancelled','rejected') ORDER BY t.due_date IS NULL, t.due_date LIMIT 10`,
         [employeeId],
       ),
       queryOne<Record<string, unknown>>(
-        `SELECT COUNT(*) AS sent FROM messages WHERE sender_id = ? AND DATE(created_at) BETWEEN ? AND ?`,
+        `SELECT COUNT(*) AS present_days, SUM(is_late = 1) AS late_days,
+                COALESCE(SUM(CASE WHEN check_out_at IS NULL AND work_date = ? THEN TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) ELSE total_minutes END),0) AS minutes,
+                COALESCE(SUM(break_minutes),0) AS break_minutes
+         FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('present','late','half_day')`,
+        [today(), employeeId, start, end],
+      ),
+      query<Record<string, unknown>>(
+        'SELECT report_date, status FROM daily_work_reports WHERE employee_id = ? AND report_date BETWEEN ? AND ?',
+        [employeeId, start, end],
+      ),
+      queryOne<Record<string, unknown>>(
+        `SELECT COUNT(*) AS invited, SUM(mp.attended = 1) AS attended,
+                COALESCE(SUM(IF(mp.attended = 1, TIMESTAMPDIFF(MINUTE, m.start_at, m.end_at), 0)),0) AS minutes
+         FROM meeting_participants mp JOIN meetings m ON m.id = mp.meeting_id
+         WHERE mp.employee_id = ? AND DATE(m.start_at) BETWEEN ? AND ? AND m.status <> 'cancelled'`,
+        [employeeId, start, end],
+      ),
+      queryOne<Record<string, unknown>>(
+        'SELECT COUNT(*) AS sent FROM messages WHERE sender_id = ? AND DATE(created_at) BETWEEN ? AND ?',
         [employeeId, start, end],
       ),
       query<Record<string, unknown>>(
         `SELECT app_category, SUM(active_seconds) AS seconds FROM application_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) BETWEEN ? AND ? GROUP BY app_category`,
+         WHERE employee_id = ? AND DATE(started_at) BETWEEN ? AND ? GROUP BY app_category ORDER BY seconds DESC`,
+        [employeeId, start, end],
+      ),
+      queryOne<Record<string, unknown>>(
+        'SELECT COUNT(*) AS total FROM tickets WHERE assignee_id = ? AND DATE(resolved_at) BETWEEN ? AND ?',
         [employeeId, start, end],
       ),
       queryOne<Record<string, unknown>>('SELECT score, status FROM weekly_performance_reports WHERE employee_id = ? AND week_start = ?', [employeeId, start]),
+      queryOne<Record<string, unknown>>(
+        'SELECT score, metrics FROM weekly_performance_reports WHERE employee_id = ? AND week_start = DATE_SUB(?, INTERVAL 7 DAY)',
+        [employeeId, start],
+      ),
+      queryOne<Record<string, unknown>>(
+        'SELECT manager_remarks FROM weekly_performance_reports WHERE employee_id = ? AND week_start < ? AND manager_remarks IS NOT NULL ORDER BY week_start DESC LIMIT 1',
+        [employeeId, start],
+      ),
     ]);
 
-    const assigned = number(tasks?.assigned);
-    const completed = number(tasks?.completed);
-    const onTime = number(tasks?.on_time);
-    const approved = number(tasks?.approved);
-    const withProject = number(tasks?.with_project);
+    const completed = completedRows.length;
+    const assigned = Math.max(number(tasks?.assigned), completed);
+    const onTime = completedRows.filter((row) => Number(row.on_time) === 1).length;
+    const reviewed = completedRows.filter((row) => row.approved_at || row.rejection_reason);
+    const approved = completedRows.filter((row) => row.approved_at).length;
+    const withProject = completedRows.filter((row) => row.project_id).length;
+    const cycleMinutes = completedRows.map((row) => number(row.cycle_minutes)).filter((value) => value > 0);
+    const averageCompletionHours = cycleMinutes.length ? Math.round(cycleMinutes.reduce((sum, value) => sum + value, 0) / cycleMinutes.length / 6) / 10 : null;
     const presentDays = number(attendance?.present_days);
+    const lateDays = number(attendance?.late_days);
+
     const workDaysSetting = await queryOne<{ setting_value: string }>("SELECT setting_value FROM system_settings WHERE setting_key = 'work_days'");
     const workDays = new Set(String(workDaysSetting?.setting_value ?? '1,2,3,4,5,6').split(',').map((value) => Number(value.trim())));
-    const dayRows = await query<{ d: string }>(
-      `SELECT DATE_FORMAT(day, '%Y-%m-%d') AS d FROM (
-         SELECT DATE(?) + INTERVAL seq DAY AS day FROM (
-           SELECT 0 AS seq UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
-           UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6
-         ) days
-       ) calendar WHERE day BETWEEN ? AND ? AND day <= CURDATE()`,
-      [start, start, end],
-    );
-    const elapsedWorkDays = dayRows.filter((row) => workDays.has(new Date(`${row.d}T00:00:00`).getDay())).length || 1;
+    const [leaveRows, holidayRows] = await Promise.all([
+      query<{ work_date: string }>("SELECT work_date FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('leave','on_leave','holiday')", [employeeId, start, end]).catch(() => []),
+      query<{ holiday_date: string }>('SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN ? AND ?', [start, end]).catch(() => []),
+    ]);
+    const excluded = new Set([...leaveRows.map((row) => sqlDate(row.work_date)), ...holidayRows.map((row) => sqlDate(row.holiday_date))]);
+    const lastDay = end < today() ? end : today();
+    let elapsedWorkDays = 0;
+    for (let cursor = new Date(`${start}T00:00:00Z`); cursor.toISOString().slice(0, 10) <= lastDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+      const iso = cursor.toISOString().slice(0, 10);
+      if (workDays.has(cursor.getUTCDay()) && !excluded.has(iso)) elapsedWorkDays += 1;
+    }
     const submittedReports = reports.filter((row) => row.status !== 'draft').length;
 
-    const taskCompletion = assigned > 0 ? percent(completed, assigned) : 70;
-    const onTimeDelivery = completed > 0 ? percent(onTime, completed) : 70;
-    const workQuality = completed > 0 ? percent(approved, completed) : 70;
-    const attendanceScore = percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays);
-    const dailyReporting = percent(Math.min(submittedReports, elapsedWorkDays), elapsedWorkDays);
-    const projectContribution = completed > 0 ? percent(withProject, completed) : 0;
-    const collaboration = Math.min(100, 60 + Math.min(25, number(messages?.sent)) + Math.min(15, number(meetings?.attended) * 5));
+    // null = not applicable this week; its weight is redistributed.
+    const raw: Record<keyof typeof KPI_WEIGHTS, number | null> = {
+      taskCompletion: assigned > 0 ? percent(completed, assigned) : null,
+      onTimeDelivery: completed > 0 ? percent(onTime, completed) : null,
+      workQuality: reviewed.length > 0 ? percent(approved, reviewed.length) : null,
+      attendance: elapsedWorkDays > 0 ? Math.max(0, percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays) - Math.min(20, lateDays * 2)) : null,
+      dailyReporting: elapsedWorkDays > 0 ? percent(Math.min(submittedReports, elapsedWorkDays), elapsedWorkDays) : null,
+      projectContribution: completed > 0 ? percent(withProject, completed) : null,
+      collaboration: number(meetings?.invited) + number(messages?.sent) + number(ticketsResolved?.total) > 0
+        ? Math.min(100, (number(meetings?.invited) > 0 ? percent(number(meetings?.attended), number(meetings?.invited)) * 0.6 : 60)
+          + Math.min(25, number(messages?.sent)) + Math.min(15, number(ticketsResolved?.total) * 5))
+        : null,
+    };
+    const applicableWeight = (Object.keys(KPI_WEIGHTS) as (keyof typeof KPI_WEIGHTS)[])
+      .filter((key) => raw[key] !== null).reduce((sum, key) => sum + KPI_WEIGHTS[key], 0);
+    const score = applicableWeight > 0
+      ? Math.round((Object.keys(KPI_WEIGHTS) as (keyof typeof KPI_WEIGHTS)[])
+        .reduce((sum, key) => sum + (raw[key] ?? 0) * KPI_WEIGHTS[key], 0) / applicableWeight * 10) / 10
+      : 0;
 
+    const labels: Record<keyof typeof KPI_WEIGHTS, string> = {
+      taskCompletion: 'Task completion', onTimeDelivery: 'On-time delivery', workQuality: 'Work quality',
+      attendance: 'Attendance and punctuality', dailyReporting: 'Daily reporting', projectContribution: 'Project contribution', collaboration: 'Collaboration',
+    };
+    const improvementAreas = (Object.keys(raw) as (keyof typeof KPI_WEIGHTS)[])
+      .filter((key) => raw[key] !== null && (raw[key] as number) < 60)
+      .map((key) => `${labels[key]} is ${raw[key]}%`);
+    if (number(overdue?.total) > 0) improvementAreas.push(`${number(overdue?.total)} overdue task(s) need attention`);
+
+    const previousScore = previousWeek?.score === undefined || previousWeek?.score === null ? null : number(previousWeek.score);
     const metrics = {
       weights: KPI_WEIGHTS,
-      taskCompletion,
-      onTimeDelivery,
-      workQuality,
-      attendance: attendanceScore,
-      dailyReporting,
-      projectContribution,
-      collaboration,
+      effectiveWeightTotal: applicableWeight,
+      notApplicable: (Object.keys(raw) as (keyof typeof KPI_WEIGHTS)[]).filter((key) => raw[key] === null),
+      taskCompletion: raw.taskCompletion ?? 0,
+      onTimeDelivery: raw.onTimeDelivery ?? 0,
+      workQuality: raw.workQuality ?? 0,
+      attendance: raw.attendance ?? 0,
+      dailyReporting: raw.dailyReporting ?? 0,
+      projectContribution: raw.projectContribution ?? 0,
+      collaboration: raw.collaboration ?? 0,
       assigned,
       completed,
       onTime,
       approved,
+      reviewed: reviewed.length,
+      overdueTasks: number(overdue?.total),
+      averageCompletionHours,
       presentDays,
+      lateDays,
       elapsedWorkDays,
+      attendancePercentage: elapsedWorkDays > 0 ? percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays) : null,
       reportsSubmitted: submittedReports,
       meetingsAttended: number(meetings?.attended),
+      meetingMinutes: number(meetings?.minutes),
       messagesSent: number(messages?.sent),
+      ticketsResolved: number(ticketsResolved?.total),
       attendanceMinutes: number(attendance?.minutes),
+      breakMinutes: number(attendance?.break_minutes),
+      accomplishments: completedRows.slice(0, 10).map((row) => `${row.title}${row.project_name ? ` (${row.project_name})` : ''}`),
+      pendingAssignments: pendingRows.map((row) => ({ id: Number(row.id), taskNo: row.task_no, title: row.title, dueDate: row.due_date, priority: row.priority })),
+      improvementAreas,
+      previousManagerFeedback: kpiFeedback?.manager_remarks ?? null,
+      weekOverWeekChange: previousScore === null ? null : Math.round((score - previousScore) * 10) / 10,
       applicationUsage: apps.map((row) => ({ category: row.app_category, minutes: Math.round(number(row.seconds) / 60) })),
-      applicationUsageNote: 'Application duration is contextual only and is not scored as productivity.',
+      applicationUsageNote: 'Application duration is contextual only and is not scored. Meetings, documentation, research, troubleshooting, approved breaks and offline work are never penalised.',
     };
-    const score = Math.round((
-      taskCompletion * KPI_WEIGHTS.taskCompletion +
-      onTimeDelivery * KPI_WEIGHTS.onTimeDelivery +
-      workQuality * KPI_WEIGHTS.workQuality +
-      attendanceScore * KPI_WEIGHTS.attendance +
-      dailyReporting * KPI_WEIGHTS.dailyReporting +
-      projectContribution * KPI_WEIGHTS.projectContribution +
-      collaboration * KPI_WEIGHTS.collaboration
-    ) / 100 * 10) / 10;
 
-    const previous = existing?.score === undefined ? null : number(existing.score);
     if (!existing || String(existing.status) !== 'final') {
       await execute(
         `INSERT INTO weekly_performance_reports (employee_id, week_start, week_end, metrics, score, grade, status, previous_score, generated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'preliminary', ?, NOW(3))
          ON DUPLICATE KEY UPDATE week_end = VALUES(week_end), metrics = VALUES(metrics), score = VALUES(score),
            grade = VALUES(grade), previous_score = VALUES(previous_score), generated_at = NOW(3)`,
-        [employeeId, start, end, JSON.stringify(metrics), score, grade(score), previous],
+        [employeeId, start, end, JSON.stringify(metrics), score, grade(score), previousScore],
       );
     }
 
@@ -434,6 +685,7 @@ export class ActivityAnalyticsService {
 
   static async weeklyList(user: AuthUser, employeeId: number, limit = 8) {
     await ActivityAnalyticsService.assertAccess(user, employeeId);
+    await ActivityService.logAccess(user, employeeId, 'weekly');
     const rows = await query<Record<string, unknown>>(
       'SELECT * FROM weekly_performance_reports WHERE employee_id = ? ORDER BY week_start DESC LIMIT ?',
       [employeeId, Math.min(26, Math.max(1, limit))],
@@ -446,7 +698,7 @@ export class ActivityAnalyticsService {
     const session = await ActivityService.currentSession(user);
     const [daily, errors, tickets, weekly, devices, browser, recentSessions] = await Promise.all([
       ActivityAnalyticsService.daily(user, user.id, date),
-      ActivityService.listErrors(user),
+      ActivityService.listErrors(user, { ownOnly: true }),
       query<Record<string, unknown>>(
         `SELECT t.id, t.ticket_no, t.subject, t.status, t.priority, t.created_at,
                 (SELECT COUNT(*) FROM automatic_ticket_links l WHERE l.ticket_id = t.id) AS automatic
@@ -476,7 +728,10 @@ export class ActivityAnalyticsService {
       session,
       devices,
       daily,
-      errors: errors.filter((error) => error.employeeName === user.fullName).slice(0, 8),
+      errors: errors.slice(0, 10),
+      timeline: await ActivityAnalyticsService.timeline(user, user.id, date),
+      corrections: await ActivityService.listCorrections(user).then((rows) => rows.filter((row) => row.employeeId === user.id).slice(0, 20)),
+      accessHistory: (await ActivityService.accessHistory(user)).slice(0, 20),
       tickets,
       browser: browser.map((row) => ({ domain: row.domain, category: row.category, minutes: Math.round(number(row.seconds) / 60) })),
       weekly: weekly.map((row) => ActivityAnalyticsService.mapWeekly(row)),
@@ -520,6 +775,20 @@ export class ActivityAnalyticsService {
         ids,
       ),
     ]);
+    const [overdueRows, issueRows] = await Promise.all([
+      query<Record<string, unknown>>(
+        `SELECT ta.employee_id, COUNT(*) AS total FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE t.status NOT IN ('completed','approved','cancelled','rejected') AND t.due_date < ? AND ta.employee_id IN (${placeholders}) GROUP BY ta.employee_id`,
+        [date, ...ids],
+      ),
+      query<Record<string, unknown>>(
+        `SELECT e.employee_id, COUNT(DISTINCT e.incident_id) AS total FROM system_error_events e JOIN error_incidents i ON i.id = e.incident_id
+         WHERE i.status IN ('open','suggested','ticket_created') AND e.employee_id IN (${placeholders}) GROUP BY e.employee_id`,
+        ids,
+      ),
+    ]);
+    const overdueMap = new Map(overdueRows.map((row) => [Number(row.employee_id), number(row.total)]));
+    const issueMap = new Map(issueRows.map((row) => [Number(row.employee_id), number(row.total)]));
     const appMap = new Map(appTotals.map((row) => [Number(row.employee_id), Math.round(number(row.seconds) / 60)]));
     const taskMap = new Map(taskTotals.map((row) => [Number(row.employee_id), number(row.completed)]));
     const summaryMap = new Map(summaries.map((row) => [Number(row.employee_id), row]));
@@ -543,7 +812,9 @@ export class ActivityAnalyticsService {
         keyActivities: parseJson(summary?.key_activities, []),
         weeklyScore: week ? number(week.score) : null,
         weeklyGrade: week?.grade ?? null,
-        needsAssistance: Boolean(summary && summary.status === 'submitted' && (week ? number(week.score) < 60 : false)),
+        overdueTasks: overdueMap.get(Number(employee.id)) ?? 0,
+        openIssues: issueMap.get(Number(employee.id)) ?? 0,
+        needsAssistance: (week ? number(week.score) < 60 : false) || (overdueMap.get(Number(employee.id)) ?? 0) >= 3 || (issueMap.get(Number(employee.id)) ?? 0) > 0 || summary?.status === 'returned',
       };
     });
     return {
@@ -556,6 +827,7 @@ export class ActivityAnalyticsService {
         activeMinutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0),
         tasksCompleted: rows.reduce((sum, row) => sum + row.tasksCompleted, 0),
         pendingReviews: rows.filter((row) => row.dailyStatus === 'submitted').length,
+        needsAssistance: rows.filter((row) => row.needsAssistance).length,
       },
     };
   }
@@ -789,8 +1061,10 @@ export class ActivityAnalyticsService {
 
   static async employeeProfile(user: AuthUser, employeeId: number, date: string) {
     await ActivityAnalyticsService.assertAccess(user, employeeId);
+    await ActivityService.logAccess(user, employeeId, 'profile');
     const daily = await ActivityAnalyticsService.generateDaily(employeeId, date);
     const weekly = await ActivityAnalyticsService.weeklyList(user, employeeId, 6);
-    return { daily, weekly };
+    const timeline = await ActivityAnalyticsService.timeline(user, employeeId, date);
+    return { daily, weekly, timeline };
   }
 }

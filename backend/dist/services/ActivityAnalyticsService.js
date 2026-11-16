@@ -1,6 +1,8 @@
 import { execute, query, queryOne } from '../db/index.js';
+import { today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
 import { subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
+import { NotificationService } from './NotificationService.js';
 import { ActivityService, cleanText, parseJson } from './ActivityService.js';
 const DEFAULT_WEEK_START = `DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)`;
 function number(value) {
@@ -88,6 +90,19 @@ export class ActivityAnalyticsService {
          WHERE t.requester_id = ? AND DATE(t.created_at) = ? ORDER BY t.created_at DESC`, [employeeId, date]),
             query(`SELECT title, detail, keywords FROM work_activity_events WHERE employee_id = ? AND DATE(occurred_at) = ? ORDER BY occurred_at`, [employeeId, date]),
         ]);
+        const [workedTasks, resolvedTickets, actionItems, milestones, meetings] = await Promise.all([
+            query(`SELECT t.id, t.title, t.description, t.status, p.name AS project_name, SUM(l.minutes) AS minutes
+         FROM task_time_logs l JOIN tasks t ON t.id = l.task_id LEFT JOIN projects p ON p.id = t.project_id
+         WHERE l.employee_id = ? AND DATE(l.started_at) = ? GROUP BY t.id, t.title, t.description, t.status, p.name ORDER BY minutes DESC LIMIT 10`, [employeeId, date]),
+            query(`SELECT ticket_no, subject FROM tickets WHERE assignee_id = ? AND DATE(resolved_at) = ? ORDER BY resolved_at`, [employeeId, date]),
+            query(`SELECT a.title, a.status, m.title AS meeting_title FROM meeting_action_items a JOIN meetings m ON m.id = a.meeting_id
+         WHERE a.assignee_id = ? AND (DATE(a.completed_at) = ? OR DATE(a.created_at) = ?) ORDER BY a.created_at`, [employeeId, date, date]),
+            query(`SELECT DISTINCT ms.title, p.name AS project_name FROM project_milestones ms JOIN projects p ON p.id = ms.project_id
+         JOIN tasks t ON t.milestone_id = ms.id JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND DATE(ms.completed_at) = ?`, [employeeId, date]),
+            query(`SELECT m.title, TIMESTAMPDIFF(MINUTE, m.start_at, m.end_at) AS minutes FROM meeting_participants mp JOIN meetings m ON m.id = mp.meeting_id
+         WHERE mp.employee_id = ? AND DATE(m.start_at) = ? AND m.status <> 'cancelled' ORDER BY m.start_at`, [employeeId, date]),
+        ]);
         const appBreakdown = apps.map((row) => ({
             app: String(row.app_name),
             category: String(row.app_category),
@@ -110,14 +125,39 @@ export class ActivityAnalyticsService {
             .split(/\r?\n|(?<=\.)\s+/)
             .map((line) => cleanText(line, 180))
             .filter((line) => line.length > 8);
-        const keywordRows = await query('SELECT keyword FROM activity_keywords ORDER BY weight DESC LIMIT 50');
-        const combinedText = [reportLines.join(' '), completed.map((task) => task.title).join(' '), ...events.map((event) => String(event.title))].join(' ').toLowerCase();
-        const matchedKeywords = keywordRows.map((row) => row.keyword).filter((keyword) => combinedText.includes(keyword.toLowerCase()));
-        const keyActivities = [...new Set([
-                ...completed.map((task) => `Completed: ${task.title}`),
+        const keywordRows = await query('SELECT keyword, category, weight FROM activity_keywords ORDER BY weight DESC LIMIT 100');
+        // Only permitted, work-authored sources: report, task titles/descriptions,
+        // ticket subjects, meeting action items, milestones and agent work events.
+        const combinedText = [
+            reportLines.join(' '),
+            completed.map((task) => task.title).join(' '),
+            workedTasks.map((task) => `${task.title} ${String(task.description ?? '').slice(0, 400)}`).join(' '),
+            tickets.map((ticket) => ticket.subject).join(' '),
+            resolvedTickets.map((ticket) => ticket.subject).join(' '),
+            actionItems.map((item) => item.title).join(' '),
+            milestones.map((item) => item.title).join(' '),
+            ...events.map((event) => `${String(event.title)} ${parseJson(event.keywords, []).join(' ')}`),
+        ].join(' ').toLowerCase();
+        const matchedKeywords = keywordRows
+            .filter((row) => new RegExp(`\\b${row.keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(combinedText))
+            .map((row) => ({ keyword: row.keyword, category: row.category }));
+        const completedIds = new Set(completed.map((task) => task.id));
+        const generatedActivities = [...new Set([
+                ...completed.map((task) => `Completed ${task.title}${task.project ? ` (${task.project})` : ''}`),
+                ...milestones.map((item) => `Reached milestone ${item.title} (${item.project_name})`),
+                ...workedTasks.filter((task) => !completedIds.has(Number(task.id))).map((task) => `Worked on ${task.title}${task.project_name ? ` (${task.project_name})` : ''}`),
+                ...resolvedTickets.map((ticket) => `Resolved ticket ${ticket.ticket_no}: ${ticket.subject}`),
+                ...actionItems.filter((item) => item.status === 'done' || item.status === 'completed').map((item) => `Completed action item: ${item.title}`),
                 ...events.map((event) => String(event.title)),
+                ...meetings.map((meeting) => `Attended meeting: ${meeting.title}`),
                 ...reportLines,
-            ].map((line) => cleanText(line, 200)).filter(Boolean))].slice(0, 8);
+                ...(errors.length ? [`Reported ${errors.length} technical issue${errors.length > 1 ? 's' : ''}`] : []),
+            ].map((line) => cleanText(line, 200)).filter(Boolean))].slice(0, 10);
+        const existingSummary = await queryOne('SELECT key_activities, key_activities_edited FROM daily_activity_summaries WHERE employee_id = ? AND summary_date = ?', [employeeId, date]);
+        // Once the employee has corrected the list, regeneration never overwrites it.
+        const keyActivities = existingSummary?.key_activities_edited
+            ? parseJson(existingSummary.key_activities, generatedActivities)
+            : generatedActivities;
         const issues = errors.map((row) => ({
             title: row.incident_title ?? row.description,
             severity: row.severity,
@@ -141,8 +181,13 @@ export class ActivityAnalyticsService {
             keyActivities,
             issues,
             tickets,
-            report: report ? { id: Number(report.id), status: report.status, summary: report.summary } : null,
-            keywords: [...new Set(matchedKeywords)],
+            report: report ? { id: Number(report.id), status: report.status, summary: report.summary, problems: report.problems, tomorrowPlan: report.tomorrow_plan } : null,
+            keywords: matchedKeywords,
+            suggestedActivities: generatedActivities,
+            browserBreakdown: browser.map((row) => ({ domain: row.domain, category: row.category, minutes: Math.round(number(row.seconds) / 60) })),
+            meetings: meetings.map((meeting) => ({ title: meeting.title, minutes: number(meeting.minutes) })),
+            attendance: attendance ? { checkInAt: attendance.check_in_at, checkOutAt: attendance.check_out_at } : null,
+            netWorkingMinutes: Math.max(0, attendanceMinutes - breakMinutes),
             employee,
             date,
         };
@@ -176,6 +221,13 @@ export class ActivityAnalyticsService {
             issues: parseJson(row?.issues ?? extra?.issues, []),
             tickets: parseJson(row?.tickets ?? extra?.tickets, []),
             keywords: extra?.keywords ?? [],
+            keyActivitiesEdited: Boolean(row?.key_activities_edited),
+            suggestedActivities: extra?.suggestedActivities ?? [],
+            browserBreakdown: extra?.browserBreakdown ?? [],
+            meetings: extra?.meetings ?? [],
+            attendance: extra?.attendance ?? null,
+            netWorkingMinutes: extra?.netWorkingMinutes ?? Math.max(0, number(row?.attendance_minutes) - number(row?.break_minutes)),
+            report: extra?.report ?? null,
             employee: extra?.employee ?? null,
             employeeNotes: row?.employee_notes ?? null,
             status: row?.status ?? 'draft',
@@ -188,15 +240,115 @@ export class ActivityAnalyticsService {
         await ActivityAnalyticsService.assertAccess(user, employeeId);
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
             throw ApiError.badRequest('Use a valid YYYY-MM-DD date.');
+        await ActivityService.logAccess(user, employeeId, 'daily');
         return ActivityAnalyticsService.generateDaily(employeeId, date);
     }
-    static async submitDaily(user, date, notes) {
+    /** Employee submits the day, optionally correcting the extracted key activities. */
+    static async submitDaily(user, date, notes, keyActivities) {
+        if (date > today())
+            throw ApiError.badRequest('You cannot submit a future day.');
         const summary = await ActivityAnalyticsService.generateDaily(user.id, date);
         if (!summary?.id)
             throw ApiError.badRequest('Unable to generate the daily summary.');
-        await execute("UPDATE daily_activity_summaries SET employee_notes = ?, status = 'submitted', submitted_at = NOW(3) WHERE id = ?", [cleanText(notes, 2000) || null, summary.id]);
-        await ActivityService.audit(user.id, 'activity.daily_submitted', user.id, 'daily_activity_summary', summary.id, { date });
-        return ActivityAnalyticsService.daily(user, user.id, date);
+        if (summary.status === 'approved')
+            throw ApiError.conflict('This summary is already approved.');
+        const edited = Array.isArray(keyActivities)
+            ? [...new Set(keyActivities.map((item) => cleanText(item, 200)).filter(Boolean))].slice(0, 15)
+            : null;
+        await execute(`UPDATE daily_activity_summaries SET employee_notes = ?, status = 'submitted', submitted_at = NOW(3),
+              key_activities = COALESCE(?, key_activities), key_activities_edited = IF(? IS NULL, key_activities_edited, 1)
+       WHERE id = ?`, [cleanText(notes, 2000) || null, edited ? JSON.stringify(edited) : null, edited ? 1 : null, summary.id]);
+        await ActivityService.audit(user.id, 'activity.daily_submitted', user.id, 'daily_activity_summary', summary.id, { date, editedActivities: Boolean(edited) });
+        const managers = await query('SELECT manager_id FROM employees WHERE id = ?', [user.id]);
+        if (managers[0]?.manager_id) {
+            await NotificationService.notify({
+                employeeIds: [Number(managers[0].manager_id)],
+                type: 'activity_daily',
+                title: 'Daily activity summary submitted',
+                body: `${user.fullName} submitted the summary for ${date}.`,
+                link: '/activity?tab=team',
+                actorId: user.id,
+                dedupeKey: `daily_submitted:${summary.id}:${Date.now()}`,
+            });
+        }
+        return ActivityAnalyticsService.generateDaily(user.id, date);
+    }
+    /** Chronological work timeline (applications, approved websites, platform modules). */
+    static async timeline(user, employeeId, date) {
+        await ActivityAnalyticsService.assertAccess(user, employeeId);
+        const rows = await query(`SELECT * FROM (
+         SELECT 'app' AS kind, id, app_name AS label, app_category AS category, started_at, ended_at, active_seconds FROM application_usage_logs
+         WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'browser', id, domain, category, started_at, ended_at, active_seconds FROM browser_usage_logs
+         WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'module', id, module, 'Platform', entered_at, exited_at, active_seconds FROM internal_module_activity
+         WHERE employee_id = ? AND DATE(entered_at) = ?
+       ) segments ORDER BY started_at DESC LIMIT 300`, [employeeId, date, employeeId, date, employeeId, date]);
+        return rows.map((row) => ({
+            kind: row.kind,
+            id: Number(row.id),
+            label: row.label,
+            category: row.category,
+            startedAt: row.started_at,
+            endedAt: row.ended_at,
+            seconds: number(row.active_seconds),
+        }));
+    }
+    /** Scheduler: refresh every summary for employees who attended or were monitored on the date. */
+    static async generateAllDaily(date) {
+        const rows = await query(`SELECT employee_id FROM attendance WHERE work_date = ? AND check_in_at IS NOT NULL
+       UNION SELECT employee_id FROM monitoring_sessions WHERE work_date = ?`, [date, date]);
+        let generated = 0;
+        for (const row of rows) {
+            try {
+                await ActivityAnalyticsService.generateDaily(Number(row.employee_id), date);
+                generated += 1;
+            }
+            catch (error) {
+                console.error('[activity] daily summary failed', row.employee_id, error.message);
+            }
+        }
+        return generated;
+    }
+    /** Scheduler: calculate preliminary weekly reports for every active employee and notify them. */
+    static async generateAllWeekly(weekStart) {
+        const rows = await query("SELECT id, manager_id FROM employees WHERE status = 'active'");
+        let generated = 0;
+        const byManager = new Map();
+        for (const row of rows) {
+            try {
+                const report = await ActivityAnalyticsService.generateWeekly(Number(row.id), weekStart);
+                if (!report || report.status === 'final')
+                    continue;
+                generated += 1;
+                await NotificationService.notify({
+                    employeeIds: [Number(row.id)],
+                    type: 'activity_weekly',
+                    title: 'Preliminary weekly performance published',
+                    body: `Week of ${weekStart}: preliminary score ${report.score}. Add feedback before your manager finalises it.`,
+                    link: '/activity?tab=weekly',
+                    dedupeKey: `weekly_published:${row.id}:${weekStart}`,
+                });
+                if (row.manager_id)
+                    byManager.set(Number(row.manager_id), (byManager.get(Number(row.manager_id)) ?? 0) + 1);
+            }
+            catch (error) {
+                console.error('[activity] weekly report failed', row.id, error.message);
+            }
+        }
+        for (const [managerId, count] of byManager) {
+            await NotificationService.notify({
+                employeeIds: [managerId],
+                type: 'activity_weekly',
+                title: 'Weekly scores ready for review',
+                body: `${count} preliminary weekly report(s) for the week of ${weekStart} await your review.`,
+                link: '/activity?tab=team',
+                dedupeKey: `weekly_review:${managerId}:${weekStart}`,
+            });
+        }
+        return generated;
     }
     static async reviewDaily(user, id, decision, note) {
         if (!user.permissions.includes('activity.review'))

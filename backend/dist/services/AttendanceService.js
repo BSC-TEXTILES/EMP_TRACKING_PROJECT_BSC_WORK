@@ -4,6 +4,16 @@ import { ApiError } from '../lib/http.js';
 import { addDays, daysBetween, endOfMonth, localDate, localTime, parseUtc, startOfMonth, today, toIso, toSqlTimestamp } from '../lib/dates.js';
 import { emitToEmployee } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
+/** Keeps monitoring sessions aligned with attendance without failing the attendance action. */
+async function syncMonitoring(action) {
+    try {
+        const { ActivityService } = await import('./ActivityService.js');
+        await action(ActivityService);
+    }
+    catch (error) {
+        console.error('[activity] monitoring session sync failed', error);
+    }
+}
 const SETTING_KEYS = ['work_start_time', 'work_end_time', 'late_grace_minutes', 'half_day_hours', 'full_day_hours', 'overtime_after_hours'];
 async function shiftConfig() {
     const s = await getSettings(SETTING_KEYS);
@@ -156,6 +166,8 @@ export class AttendanceService {
             ip: input.ip,
             userAgent: input.userAgent,
         });
+        // Monitoring is only authorised during attendance: checking out ends it.
+        await syncMonitoring((service) => service.endSessionsForEmployee(employeeId, 'attendance_checkout'));
         emitToEmployee(employeeId, 'attendance:update', state);
         return state;
     }
@@ -170,6 +182,7 @@ export class AttendanceService {
         if (open)
             throw ApiError.conflict('A break is already running.');
         await execute('INSERT INTO attendance_breaks (attendance_id, employee_id, started_at) VALUES (?, ?, NOW(3))', [row.id, employeeId]);
+        await syncMonitoring((service) => service.setBreakState(employeeId, true));
         const state = await AttendanceService.stateFor(employeeId, date);
         emitToEmployee(employeeId, 'attendance:update', state);
         return state;
@@ -184,6 +197,7 @@ export class AttendanceService {
             throw ApiError.badRequest('No break is currently running.');
         await execute('UPDATE attendance_breaks SET ended_at = NOW(3), minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, started_at, NOW(3))) WHERE id = ?', [open.id]);
         await execute('UPDATE attendance SET break_minutes = (SELECT COALESCE(SUM(minutes),0) FROM attendance_breaks WHERE attendance_id = ?) WHERE id = ?', [row.id, row.id]);
+        await syncMonitoring((service) => service.setBreakState(employeeId, false));
         const state = await AttendanceService.stateFor(employeeId, date);
         emitToEmployee(employeeId, 'attendance:update', state);
         return state;
@@ -380,6 +394,7 @@ export class AttendanceService {
                 entityId: Number(row.id),
                 after: { reason: 'missing_checkout', graceHours },
             });
+            await syncMonitoring((service) => service.endSessionsForEmployee(Number(row.employee_id), 'attendance_autoclosed'));
             await NotificationService.notify({
                 employeeIds: [Number(row.employee_id)],
                 type: 'attendance',

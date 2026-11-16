@@ -5,6 +5,17 @@ import { addDays, daysBetween, endOfMonth, localDate, localTime, parseUtc, start
 import { emitToEmployee } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
+import type { ActivityService as ActivityServiceType } from './ActivityService.js';
+
+/** Keeps monitoring sessions aligned with attendance without failing the attendance action. */
+async function syncMonitoring(action: (service: typeof ActivityServiceType) => Promise<unknown>): Promise<void> {
+  try {
+    const { ActivityService } = await import('./ActivityService.js');
+    await action(ActivityService);
+  } catch (error) {
+    console.error('[activity] monitoring session sync failed', error);
+  }
+}
 
 interface AttendanceRow {
   id: number;
@@ -255,6 +266,8 @@ export class AttendanceService {
       ip: input.ip,
       userAgent: input.userAgent,
     });
+    // Monitoring is only authorised during attendance: checking out ends it.
+    await syncMonitoring((service) => service.endSessionsForEmployee(employeeId, 'attendance_checkout'));
     emitToEmployee(employeeId, 'attendance:update', state);
     return state;
   }
@@ -270,6 +283,7 @@ export class AttendanceService {
     );
     if (open) throw ApiError.conflict('A break is already running.');
     await execute('INSERT INTO attendance_breaks (attendance_id, employee_id, started_at) VALUES (?, ?, NOW(3))', [row.id, employeeId]);
+    await syncMonitoring((service) => service.setBreakState(employeeId, true));
     const state = await AttendanceService.stateFor(employeeId, date);
     emitToEmployee(employeeId, 'attendance:update', state);
     return state;
@@ -292,6 +306,7 @@ export class AttendanceService {
       'UPDATE attendance SET break_minutes = (SELECT COALESCE(SUM(minutes),0) FROM attendance_breaks WHERE attendance_id = ?) WHERE id = ?',
       [row.id, row.id],
     );
+    await syncMonitoring((service) => service.setBreakState(employeeId, false));
     const state = await AttendanceService.stateFor(employeeId, date);
     emitToEmployee(employeeId, 'attendance:update', state);
     return state;
@@ -567,6 +582,7 @@ export class AttendanceService {
         entityId: Number(row.id),
         after: { reason: 'missing_checkout', graceHours },
       });
+      await syncMonitoring((service) => service.endSessionsForEmployee(Number(row.employee_id), 'attendance_autoclosed'));
       await NotificationService.notify({
         employeeIds: [Number(row.employee_id)],
         type: 'attendance',
