@@ -1,0 +1,9 @@
+{
+  "domain": "emptrack.bsctextiles.in",
+  "type": "nodejs",
+  "app_type": "express",
+  "root_directory": "/",
+  "build_script": "build",
+  "output_directory": "",
+  "entry_file": "server.js"
+}
