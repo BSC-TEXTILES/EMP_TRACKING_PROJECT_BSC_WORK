@@ -34,6 +34,22 @@ export class ConfigStore {
     return key;
   }
   signingKey(): string { return crypto.createHmac('sha256', this.key()).update('workforce-jwt-signing-v1').digest('hex'); }
+  /** Encrypts a sensitive database field (e.g. a TOTP secret) with a key held outside the database. */
+  encryptField(plain: string): string {
+    const key = crypto.createHmac('sha256', this.key()).update('workforce-field-encryption-v1').digest();
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const data = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+    return `v1.${Buffer.concat([iv, cipher.getAuthTag(), data]).toString('base64')}`;
+  }
+  decryptField(value: string): string {
+    if (!value.startsWith('v1.')) throw new Error('Unsupported encrypted field');
+    const raw = Buffer.from(value.slice(3), 'base64');
+    const key = crypto.createHmac('sha256', this.key()).update('workforce-field-encryption-v1').digest();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, raw.subarray(0, 12));
+    decipher.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]).toString('utf8');
+  }
   read(): WebsiteSettings {
     const file = path.join(this.directory, 'settings.enc');
     if (!fs.existsSync(file)) return {};

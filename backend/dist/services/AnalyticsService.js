@@ -1,6 +1,6 @@
 import { query, queryOne } from '../db/index.js';
 import { addDays, endOfMonth, localDate, startOfMonth, today } from '../lib/dates.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 function dateRange(filters) {
     const to = filters.to ?? today();
     const from = filters.from ?? addDays(to, -29);
@@ -13,7 +13,7 @@ export class AnalyticsService {
         }
         const { from, to } = dateRange(filters);
         const scopeAll = actor.permissions.includes('analytics.view.all') || actor.permissions.includes('admin.dashboard');
-        const managerIds = scopeAll ? null : await subtreeIds(actor.id);
+        const managerIds = scopeAll ? await locationEmployeeIds(actor) : await subtreeIds(actor.id);
         const empClauses = ["e.status = 'active'"];
         const empParams = [];
         if (filters.departmentId) {

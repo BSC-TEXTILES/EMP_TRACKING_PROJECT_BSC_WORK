@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { LeaveService } from '../services/LeaveService.js';
+import { assertEmployeeAccess } from '../lib/scope.js';
 import { addDays, endOfMonth, startOfMonth, today } from '../lib/dates.js';
 export const leaveRouter = Router();
 leaveRouter.use(authenticate);
@@ -12,6 +13,7 @@ leaveRouter.get('/types', asyncHandler(async (_req, res) => {
 leaveRouter.get('/balances', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    await assertEmployeeAccess(user, employeeId, 'leave');
     const year = req.query.year ? Number(req.query.year) : new Date().getFullYear();
     res.json({ balances: await LeaveService.balancesForAdmin(employeeId, year), year });
 }));

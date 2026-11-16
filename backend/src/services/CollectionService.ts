@@ -2,7 +2,7 @@ import { execute, query, queryOne, transaction, nextSequence } from '../db/index
 import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeClause, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
 
@@ -59,7 +59,7 @@ function deriveStatus(amountDue: number, amountCollected: number, requested?: st
 export class CollectionService {
   /** Returns null for organisation-wide visibility, otherwise an explicit employee id list. */
   private static async scope(user: AuthUser): Promise<number[] | null> {
-    if (user.permissions.includes('collections.view.all')) return null;
+    if (user.permissions.includes('collections.view.all')) return locationEmployeeIds(user);
     if (user.permissions.includes('collections.view.team')) return subtreeIds(user.id);
     return [user.id];
   }

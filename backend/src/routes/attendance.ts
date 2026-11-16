@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, hasPermission, requireAny } from '../middleware/auth.js';
 import { AttendanceService } from '../services/AttendanceService.js';
-import { assertEmployeeAccess, visibleEmployeeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, locationEmployeeIds, visibleEmployeeIds } from '../lib/scope.js';
 import { addDays, endOfMonth, periodOf, startOfMonth, today } from '../lib/dates.js';
 import { LeaveService } from '../services/LeaveService.js';
 import { query } from '../db/index.js';
@@ -151,7 +151,7 @@ attendanceRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const scopeAll = hasPermission(user, 'attendance.corrections.approve') || hasPermission(user, 'attendance.view.all');
-    const ids = scopeAll ? null : [user.id];
+    const ids = scopeAll ? await locationEmployeeIds(user) : [user.id];
     const rows = await AttendanceService.correctionsFor(ids, req.query.status ? String(req.query.status) : undefined);
     res.json({ records: rows });
   }),

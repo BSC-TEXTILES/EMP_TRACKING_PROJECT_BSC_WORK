@@ -77,6 +77,20 @@ activityRouter.delete('/devices/:id', asyncHandler(async (req, res) => {
     await ActivityService.revokeDevice(currentUser(req), intParam(req.params.id));
     res.json({ ok: true });
 }));
+activityRouter.post('/auto-start', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const result = await ActivityService.autoStartTracking(user, {
+        ip: req.ip,
+        userAgent: req.get('user-agent'),
+        machineFingerprint: req.body?.machineFingerprint,
+    });
+    res.json(result);
+}));
+activityRouter.post('/auto-stop', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const result = await ActivityService.stopTracking(user.id);
+    res.json(result);
+}));
 activityRouter.post('/sessions/start', asyncHandler(async (req, res) => {
     const deviceId = Number(req.body?.deviceId);
     if (!deviceId)

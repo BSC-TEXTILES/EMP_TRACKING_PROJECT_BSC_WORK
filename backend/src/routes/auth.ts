@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { asyncHandler, ApiError, clientIp, parseBody } from '../lib/http.js';
 import { AuthService } from '../services/AuthService.js';
+import { ActivityService } from '../services/ActivityService.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { rateLimit } from '../middleware/security.js';
@@ -105,6 +106,10 @@ authRouter.post(
       return;
     }
     setSessionCookie(res, result.token, result.refreshToken);
+    void ActivityService.autoStartTracking(result.user, {
+      ip: clientIp(req),
+      userAgent: req.get('user-agent'),
+    });
     res.json({ user: result.user });
   }),
 );
@@ -124,7 +129,7 @@ authRouter.post(
   rateLimit({ windowMs: 10 * 60 * 1000, max: 15, keyPrefix: 'login-otp-verify' }),
   asyncHandler(async (req, res) => {
     const body = parseBody(
-      z.object({ challenge: z.string().min(10), code: z.string().min(4).max(10), remember: z.boolean().optional() }),
+      z.object({ challenge: z.string().min(10), code: z.string().min(4).max(20), remember: z.boolean().optional(), method: z.enum(['email', 'totp', 'recovery']).optional() }),
       req.body,
     );
     const result = await AuthService.completeOtpLogin(
@@ -133,8 +138,13 @@ authRouter.post(
       clientIp(req),
       req.get('user-agent') ?? 'unknown',
       Boolean(body.remember),
+      body.method ?? 'email',
     );
     setSessionCookie(res, result.token, result.refreshToken);
+    void ActivityService.autoStartTracking(result.user, {
+      ip: clientIp(req),
+      userAgent: req.get('user-agent'),
+    });
     res.json({ user: result.user });
   }),
 );
@@ -142,6 +152,14 @@ authRouter.post(
 authRouter.post(
   '/logout',
   asyncHandler(async (req, res) => {
+    try {
+      const session = await AuthService.authenticateToken(req.cookies?.[config.cookieName]);
+      if (session) {
+        await ActivityService.stopTracking(session.id);
+      }
+    } catch {
+      /* ignore */
+    }
     await AuthService.logoutRefresh(req.cookies?.wfm_refresh);
     await AuthService.logout(req.cookies?.[config.cookieName]);
     clearSessionCookies(res);

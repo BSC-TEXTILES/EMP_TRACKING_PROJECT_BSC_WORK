@@ -27,8 +27,7 @@ const DEPARTMENTS = [
 ];
 const DESIGNATIONS = [
     // Executive
-    { title: 'Super Admin', dept: 'EXEC', level: 20 },
-    { title: 'Company Owner', dept: 'EXEC', level: 20 },
+    { title: 'Owner', dept: 'EXEC', level: 20 },
     { title: 'Managing Director', dept: 'EXEC', level: 20 },
     { title: 'Chief Executive Officer', dept: 'EXEC', level: 20 },
     { title: 'Chief Operating Officer', dept: 'EXEC', level: 19 },
@@ -47,6 +46,9 @@ const DESIGNATIONS = [
     { title: 'HR Recruiter', dept: 'HR', level: 9 },
     { title: 'HR Coordinator', dept: 'HR', level: 8 },
     { title: 'Payroll Administrator', dept: 'FIN', level: 11 },
+    { title: 'Payroll Manager', dept: 'HR', level: 13 },
+    { title: 'Payroll Executive', dept: 'HR', level: 8 },
+    { title: 'HR Administrator', dept: 'HR', level: 10 },
     { title: 'Admin Manager', dept: 'HR', level: 13 },
     { title: 'Admin Executive', dept: 'HR', level: 8 },
     { title: 'Office Administrator', dept: 'HR', level: 7 },
@@ -63,15 +65,15 @@ const DESIGNATIONS = [
     { title: 'QA Engineer', dept: 'IT', level: 8 },
     { title: 'Software Tester', dept: 'IT', level: 7 },
     { title: 'DevOps Engineer', dept: 'IT', level: 11 },
-    { title: 'Network Engineer', dept: 'IT', level: 10 },
+    { title: 'Network Administrator', dept: 'IT', level: 10 },
     { title: 'System Administrator', dept: 'IT', level: 10 },
-    { title: 'Cybersecurity Analyst', dept: 'IT', level: 11 },
+    { title: 'Cybersecurity Engineer', dept: 'IT', level: 11 },
     { title: 'Database Administrator', dept: 'IT', level: 11 },
-    { title: 'Technical Support Engineer', dept: 'IT', level: 8 },
-    { title: 'IT Helpdesk Executive', dept: 'IT', level: 6 },
+    { title: 'IT Support Executive', dept: 'IT', level: 8 },
+    { title: 'Helpdesk Technician', dept: 'IT', level: 6 },
     // Digital & Marketing
     { title: 'Digital Marketing Manager', dept: 'MKT', level: 15 },
-    { title: 'SEO Specialist', dept: 'MKT', level: 9 },
+    { title: 'SEO Executive', dept: 'MKT', level: 9 },
     { title: 'Social Media Manager', dept: 'MKT', level: 11 },
     { title: 'Content Writer', dept: 'MKT', level: 7 },
     { title: 'Graphic Designer', dept: 'MKT', level: 7 },
@@ -83,11 +85,13 @@ const DESIGNATIONS = [
     { title: 'Data Analyst', dept: 'OPS', level: 9 },
     { title: 'Business Analyst', dept: 'OPS', level: 10 },
     { title: 'MIS Executive', dept: 'OPS', level: 7 },
-    { title: 'Reporting Analyst', dept: 'OPS', level: 8 },
+    { title: 'Reporting Executive', dept: 'OPS', level: 8 },
     { title: 'Operations Analyst', dept: 'OPS', level: 8 },
     { title: 'Business Development Executive', dept: 'OPS', level: 8 },
     { title: 'Customer Support Executive', dept: 'OPS', level: 6 },
     { title: 'CRM Manager', dept: 'OPS', level: 13 },
+    { title: 'CRM Executive', dept: 'OPS', level: 7 },
+    { title: 'Sales Executive', dept: 'OPS', level: 6 },
     { title: 'Telecaller', dept: 'OPS', level: 4 },
     { title: 'Sales Executive', dept: 'RETAIL', level: 6 },
     // Retail & store operations
@@ -104,7 +108,7 @@ const DESIGNATIONS = [
     { title: 'Inventory Executive', dept: 'RETAIL', level: 6 },
     { title: 'Visual Merchandiser', dept: 'RETAIL', level: 6 },
     { title: 'Customer Relationship Executive', dept: 'RETAIL', level: 6 },
-    { title: 'Store Support Staff', dept: 'RETAIL', level: 3 },
+    { title: 'Store Support Executive', dept: 'RETAIL', level: 3 },
     // Finance
     { title: 'Finance Manager', dept: 'FIN', level: 14 },
     { title: 'Accounts Executive', dept: 'FIN', level: 8 },
@@ -113,30 +117,30 @@ const DESIGNATIONS = [
     { title: 'Internal Auditor', dept: 'FIN', level: 11 },
 ];
 const LOCATIONS = [
-    { code: 'HQ', name: 'Head Office · Mumbai', city: 'Mumbai', address: 'Bandra Kurla Complex, Mumbai', lat: 19.0662, lng: 72.8686, radius: 300 },
-    { code: 'AND', name: 'Andheri Branch', city: 'Mumbai', address: 'Andheri East, Mumbai', lat: 19.1136, lng: 72.8697, radius: 250 },
-    { code: 'PUN', name: 'Pune Store', city: 'Pune', address: 'Baner Road, Pune', lat: 18.5591, lng: 73.7868, radius: 200 },
+    { code: 'BEL', name: 'Belagavi', city: 'Belagavi', address: null, lat: null, lng: null, radius: null },
+    { code: 'DAV', name: 'Davanagere', city: 'Davanagere', address: null, lat: null, lng: null, radius: null },
+    { code: 'SHI', name: 'Shivamogga', city: 'Shivamogga', address: null, lat: null, lng: null, radius: null },
 ];
 const EMPLOYEES = [
-    { code: 'EMP-1001', name: 'Aarti Sharma', email: 'admin@workforce.test', mobile: '9810000001', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'HQ' },
-    { code: 'EMP-1002', name: 'Rajesh Menon', email: 'ceo@workforce.test', mobile: '9810000002', role: 'executive', dept: 'EXEC', designation: 'Chief Executive Officer', manager: 'EMP-1001', location: 'HQ' },
-    { code: 'EMP-1003', name: 'Priya Nair', email: 'coo@workforce.test', mobile: '9810000003', role: 'executive', dept: 'EXEC', designation: 'Chief Operating Officer', manager: 'EMP-1002', location: 'HQ' },
-    { code: 'EMP-1004', name: 'Vikram Singh', email: 'vikram.singh@workforce.test', mobile: '9810000004', role: 'general_manager', dept: 'OPS', designation: 'General Manager', manager: 'EMP-1003', location: 'HQ' },
-    { code: 'EMP-1005', name: 'Neha Kapoor', email: 'hr.manager@workforce.test', mobile: '9810000005', role: 'hr_manager', dept: 'HR', designation: 'HR Manager', manager: 'EMP-1003', location: 'HQ' },
-    { code: 'EMP-1006', name: 'Simran Kaur', email: 'hr.exec@workforce.test', mobile: '9810000006', role: 'hr_executive', dept: 'HR', designation: 'HR Executive', manager: 'EMP-1005', location: 'HQ' },
-    { code: 'EMP-1007', name: 'Arjun Patel', email: 'it.manager@workforce.test', mobile: '9810000007', role: 'manager', dept: 'IT', designation: 'IT Manager', manager: 'EMP-1003', location: 'HQ' },
-    { code: 'EMP-1008', name: 'Rohan Gupta', email: 'it.admin@workforce.test', mobile: '9810000008', role: 'it_admin', dept: 'IT', designation: 'IT Administrator', manager: 'EMP-1007', location: 'HQ' },
-    { code: 'EMP-1009', name: 'Ananya Rao', email: 'ananya.rao@workforce.test', mobile: '9810000009', role: 'employee', dept: 'IT', designation: 'Frontend Developer', manager: 'EMP-1007', location: 'HQ' },
-    { code: 'EMP-1010', name: 'Karthik Iyer', email: 'karthik.iyer@workforce.test', mobile: '9810000010', role: 'employee', dept: 'IT', designation: 'Backend Developer', manager: 'EMP-1007', location: 'HQ' },
-    { code: 'EMP-1011', name: 'Meera Joshi', email: 'meera.joshi@workforce.test', mobile: '9810000011', role: 'employee', dept: 'IT', designation: 'QA Engineer', manager: 'EMP-1007', location: 'AND' },
-    { code: 'EMP-1012', name: 'Sanjay Verma', email: 'marketing.manager@workforce.test', mobile: '9810000012', role: 'manager', dept: 'MKT', designation: 'Digital Marketing Manager', manager: 'EMP-1003', location: 'HQ' },
-    { code: 'EMP-1013', name: 'Divya Desai', email: 'divya.desai@workforce.test', mobile: '9810000013', role: 'employee', dept: 'MKT', designation: 'Content Writer', manager: 'EMP-1012', location: 'HQ' },
-    { code: 'EMP-1014', name: 'Aditya Kulkarni', email: 'aditya.kulkarni@workforce.test', mobile: '9810000014', role: 'employee', dept: 'MKT', designation: 'Graphic Designer', manager: 'EMP-1012', location: 'HQ' },
-    { code: 'EMP-1015', name: 'Pooja Reddy', email: 'pooja.reddy@workforce.test', mobile: '9810000015', role: 'employee', dept: 'OPS', designation: 'Data Analyst', manager: 'EMP-1004', location: 'HQ' },
-    { code: 'EMP-1016', name: 'Farhan Khan', email: 'store.manager@workforce.test', mobile: '9810000016', role: 'store_manager', dept: 'RETAIL', designation: 'Store Manager', manager: 'EMP-1004', location: 'PUN' },
-    { code: 'EMP-1017', name: 'Ritu Bansal', email: 'ritu.bansal@workforce.test', mobile: '9810000017', role: 'employee', dept: 'RETAIL', designation: 'Cashier', manager: 'EMP-1016', location: 'PUN' },
-    { code: 'EMP-1018', name: 'Manish Yadav', email: 'manish.yadav@workforce.test', mobile: '9810000018', role: 'employee', dept: 'RETAIL', designation: 'Sales Executive', manager: 'EMP-1016', location: 'AND' },
-    { code: 'EMP-1019', name: 'Isha Malhotra', email: 'isha.malhotra@workforce.test', mobile: '9810000019', role: 'employee', dept: 'MKT', designation: 'Content Writer', manager: 'EMP-1012', location: 'HQ', status: 'pending_approval' },
+    { code: 'EMP-1001', name: 'Aarti Sharma', email: 'admin@workforce.test', mobile: '9810000001', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'BEL' },
+    { code: 'EMP-1002', name: 'Rajesh Menon', email: 'ceo@workforce.test', mobile: '9810000002', role: 'executive', dept: 'EXEC', designation: 'Chief Executive Officer', manager: 'EMP-1001', location: 'BEL' },
+    { code: 'EMP-1003', name: 'Priya Nair', email: 'coo@workforce.test', mobile: '9810000003', role: 'executive', dept: 'EXEC', designation: 'Chief Operating Officer', manager: 'EMP-1002', location: 'BEL' },
+    { code: 'EMP-1004', name: 'Vikram Singh', email: 'vikram.singh@workforce.test', mobile: '9810000004', role: 'general_manager', dept: 'OPS', designation: 'General Manager', manager: 'EMP-1003', location: 'BEL' },
+    { code: 'EMP-1005', name: 'Neha Kapoor', email: 'hr.manager@workforce.test', mobile: '9810000005', role: 'hr_manager', dept: 'HR', designation: 'HR Manager', manager: 'EMP-1003', location: 'BEL' },
+    { code: 'EMP-1006', name: 'Simran Kaur', email: 'hr.exec@workforce.test', mobile: '9810000006', role: 'hr_executive', dept: 'HR', designation: 'HR Executive', manager: 'EMP-1005', location: 'BEL' },
+    { code: 'EMP-1007', name: 'Arjun Patel', email: 'it.manager@workforce.test', mobile: '9810000007', role: 'manager', dept: 'IT', designation: 'IT Manager', manager: 'EMP-1003', location: 'BEL' },
+    { code: 'EMP-1008', name: 'Rohan Gupta', email: 'it.admin@workforce.test', mobile: '9810000008', role: 'it_admin', dept: 'IT', designation: 'IT Administrator', manager: 'EMP-1007', location: 'BEL' },
+    { code: 'EMP-1009', name: 'Ananya Rao', email: 'ananya.rao@workforce.test', mobile: '9810000009', role: 'employee', dept: 'IT', designation: 'Frontend Developer', manager: 'EMP-1007', location: 'BEL' },
+    { code: 'EMP-1010', name: 'Karthik Iyer', email: 'karthik.iyer@workforce.test', mobile: '9810000010', role: 'employee', dept: 'IT', designation: 'Backend Developer', manager: 'EMP-1007', location: 'BEL' },
+    { code: 'EMP-1011', name: 'Meera Joshi', email: 'meera.joshi@workforce.test', mobile: '9810000011', role: 'employee', dept: 'IT', designation: 'QA Engineer', manager: 'EMP-1007', location: 'DAV' },
+    { code: 'EMP-1012', name: 'Sanjay Verma', email: 'marketing.manager@workforce.test', mobile: '9810000012', role: 'manager', dept: 'MKT', designation: 'Digital Marketing Manager', manager: 'EMP-1003', location: 'BEL' },
+    { code: 'EMP-1013', name: 'Divya Desai', email: 'divya.desai@workforce.test', mobile: '9810000013', role: 'employee', dept: 'MKT', designation: 'Content Writer', manager: 'EMP-1012', location: 'BEL' },
+    { code: 'EMP-1014', name: 'Aditya Kulkarni', email: 'aditya.kulkarni@workforce.test', mobile: '9810000014', role: 'employee', dept: 'MKT', designation: 'Graphic Designer', manager: 'EMP-1012', location: 'BEL' },
+    { code: 'EMP-1015', name: 'Pooja Reddy', email: 'pooja.reddy@workforce.test', mobile: '9810000015', role: 'employee', dept: 'OPS', designation: 'Data Analyst', manager: 'EMP-1004', location: 'BEL' },
+    { code: 'EMP-1016', name: 'Farhan Khan', email: 'store.manager@workforce.test', mobile: '9810000016', role: 'store_manager', dept: 'RETAIL', designation: 'Store Manager', manager: 'EMP-1004', location: 'SHI' },
+    { code: 'EMP-1017', name: 'Ritu Bansal', email: 'ritu.bansal@workforce.test', mobile: '9810000017', role: 'employee', dept: 'RETAIL', designation: 'Cashier', manager: 'EMP-1016', location: 'SHI' },
+    { code: 'EMP-1018', name: 'Manish Yadav', email: 'manish.yadav@workforce.test', mobile: '9810000018', role: 'employee', dept: 'RETAIL', designation: 'Sales Executive', manager: 'EMP-1016', location: 'DAV' },
+    { code: 'EMP-1019', name: 'Isha Malhotra', email: 'isha.malhotra@workforce.test', mobile: '9810000019', role: 'employee', dept: 'MKT', designation: 'Content Writer', manager: 'EMP-1012', location: 'BEL', status: 'pending_approval' },
 ];
 async function seedReferenceData() {
     for (const permission of PERMISSION_DEFINITIONS) {
@@ -164,8 +168,13 @@ async function seedReferenceData() {
     }
     const departments = new Map((await query('SELECT id, code FROM departments')).map((d) => [d.code, Number(d.id)]));
     for (const designation of DESIGNATIONS) {
-        await execute(`INSERT INTO designations (title, department_id, level) VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE level = VALUES(level)`, [designation.title, departments.get(designation.dept) ?? null, designation.level]);
+        await execute(`INSERT INTO designations (title, code, department_id, level) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE level = VALUES(level)`, [
+            designation.title,
+            `${designation.dept}-${designation.title.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`.slice(0, 32),
+            departments.get(designation.dept) ?? null,
+            designation.level,
+        ]);
     }
     for (const location of LOCATIONS) {
         await execute(`INSERT INTO locations (name, code, city, address, latitude, longitude, geofence_radius_m, timezone)

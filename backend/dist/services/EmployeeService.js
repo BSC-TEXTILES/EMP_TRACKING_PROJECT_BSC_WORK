@@ -1,14 +1,14 @@
-import { execute, query, queryOne } from '../db/index.js';
+import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { hashPassword, passwordIssues } from '../lib/crypto.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ChatService } from './ChatService.js';
 async function employeeScope(user) {
     if (user.permissions.includes('employees.view.all'))
-        return { clause: '1 = 1', params: [] };
+        return locationEmployeeClause(user, 'e.id');
     if (user.permissions.includes('employees.view.team')) {
         const ids = await subtreeIds(user.id);
         if (ids.length === 0)
@@ -434,20 +434,36 @@ export class EmployeeService {
             query(`SELECT d.id, d.name, d.code, d.head_employee_id, h.full_name AS head_name,
                 (SELECT COUNT(*) FROM employees e WHERE e.department_id = d.id AND e.status = 'active') AS employee_count
          FROM departments d LEFT JOIN employees h ON h.id = d.head_employee_id ORDER BY d.name`),
-            query('SELECT id, title, department_id, level FROM designations ORDER BY title'),
-            query('SELECT id, name, code, city, timezone, latitude, longitude, geofence_radius_m FROM locations ORDER BY name'),
+            query(`SELECT g.id, g.title, g.code, g.department_id, g.level, g.reporting_designation_id, g.employment_category, g.description, g.is_active,
+                (SELECT COUNT(*) FROM employees e WHERE e.designation_id = g.id AND e.status = 'active') AS employee_count,
+                (SELECT GROUP_CONCAT(dl.location_id) FROM designation_locations dl WHERE dl.designation_id = g.id) AS location_ids
+         FROM designations g ORDER BY g.is_active DESC, g.level DESC, g.title`),
+            query(`SELECT l.id, l.name, l.code, l.city, l.state, l.address, l.timezone, l.latitude, l.longitude, l.geofence_radius_m, l.is_active,
+                (SELECT COUNT(*) FROM employees e WHERE e.location_id = l.id AND e.status = 'active') AS employee_count
+         FROM locations l ORDER BY l.is_active DESC, l.name`),
             query(`SELECT r.id, r.name, r.slug, r.category, r.level,
                 (SELECT COUNT(*) FROM employees e WHERE e.role_id = r.id AND e.status = 'active') AS employee_count
          FROM roles r ORDER BY r.level DESC`),
         ]);
         return {
             departments: departments.map((d) => ({ ...d, id: Number(d.id), employeeCount: Number(d.employee_count) })),
-            designations: designations.map((d) => ({ ...d, departmentId: d.department_id ? Number(d.department_id) : null })),
+            designations: designations.map((d) => ({
+                ...d,
+                id: Number(d.id),
+                departmentId: d.department_id ? Number(d.department_id) : null,
+                reportingDesignationId: d.reporting_designation_id ? Number(d.reporting_designation_id) : null,
+                employmentCategory: d.employment_category,
+                isActive: Boolean(d.is_active),
+                employeeCount: Number(d.employee_count),
+                locationIds: d.location_ids ? String(d.location_ids).split(',').map(Number) : [],
+            })),
             locations: locations.map((l) => ({
                 ...l,
                 latitude: l.latitude === null ? null : Number(l.latitude),
                 longitude: l.longitude === null ? null : Number(l.longitude),
                 geofenceRadiusM: l.geofence_radius_m === null ? null : Number(l.geofence_radius_m),
+                isActive: Boolean(l.is_active),
+                employeeCount: Number(l.employee_count),
             })),
             roles: roles.map((r) => ({ ...r, employeeCount: Number(r.employee_count) })),
         };
@@ -528,31 +544,197 @@ export class EmployeeService {
         await recordAudit({ actorId: actor.id, action: 'department.created', entityType: 'department', entityId: result.insertId, after: input });
         return result.insertId;
     }
+    // --------------------------- Designations ---------------------------------
+    /** Rejects a reporting designation that would create a cycle (A reports to B reports to A). */
+    static async assertNoReportingCycle(designationId, reportingId) {
+        if (!reportingId)
+            return;
+        if (designationId && reportingId === designationId)
+            throw ApiError.badRequest('A designation cannot report to itself.');
+        let cursor = reportingId;
+        for (let depth = 0; cursor && depth < 30; depth += 1) {
+            const row = await queryOne('SELECT reporting_designation_id, is_active FROM designations WHERE id = ?', [cursor]);
+            if (!row)
+                throw ApiError.badRequest('The reporting designation does not exist.');
+            if (depth === 0 && !row.is_active)
+                throw ApiError.badRequest('The reporting designation is inactive.');
+            cursor = row.reporting_designation_id ? Number(row.reporting_designation_id) : null;
+            if (designationId && cursor === designationId)
+                throw ApiError.badRequest('That reporting line would create a cycle.');
+        }
+    }
+    static async validateLocations(ids) {
+        const unique = [...new Set((ids ?? []).filter((id) => Number.isInteger(id) && id > 0))];
+        if (unique.length === 0)
+            return [];
+        const rows = await query(`SELECT id FROM locations WHERE is_active = 1 AND id IN (${unique.map(() => '?').join(',')})`, unique);
+        if (rows.length !== unique.length)
+            throw ApiError.badRequest('One or more selected locations are invalid or inactive.');
+        return unique;
+    }
     static async createDesignation(actor, input) {
         if (!actor.permissions.includes('org.manage'))
             throw ApiError.forbidden('You cannot manage the organisation structure.');
-        const result = await execute('INSERT INTO designations (title, department_id, level) VALUES (?, ?, ?)', [
-            input.title,
-            input.departmentId ?? null,
-            input.level ?? 1,
-        ]);
-        await recordAudit({ actorId: actor.id, action: 'designation.created', entityType: 'designation', entityId: result.insertId, after: input });
-        return result.insertId;
+        const title = input.title.trim().replace(/\s+/g, ' ');
+        if (title.length < 2)
+            throw ApiError.badRequest('Enter a designation title.');
+        if (input.departmentId) {
+            const department = await queryOne('SELECT id, code FROM departments WHERE id = ?', [input.departmentId]);
+            if (!department)
+                throw ApiError.badRequest('Select a valid department.');
+        }
+        const duplicate = await queryOne('SELECT id FROM designations WHERE title = ? AND department_id <=> ?', [title, input.departmentId ?? null]);
+        if (duplicate)
+            throw ApiError.conflict('This designation already exists in that department.');
+        const department = input.departmentId ? await queryOne('SELECT code FROM departments WHERE id = ?', [input.departmentId]) : null;
+        const code = (input.code?.trim() || `${department?.code ?? 'GEN'}-${title.toUpperCase().replace(/[^A-Z0-9]+/g, '-')}`).toUpperCase().slice(0, 32);
+        if (!/^[A-Z0-9][A-Z0-9-]{1,31}$/.test(code))
+            throw ApiError.badRequest('Use 2–32 letters, digits or hyphens for the designation code.');
+        if (await queryOne('SELECT id FROM designations WHERE code = ?', [code]))
+            throw ApiError.conflict('That designation code is already used.');
+        await EmployeeService.assertNoReportingCycle(null, input.reportingDesignationId ?? null);
+        const locations = await EmployeeService.validateLocations(input.locationIds);
+        const id = await transaction(async (conn) => {
+            const [result] = await conn.query(`INSERT INTO designations (title, code, department_id, level, reporting_designation_id, employment_category, description, created_by, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [title, code, input.departmentId ?? null, input.level ?? 1, input.reportingDesignationId ?? null,
+                input.employmentCategory ?? 'staff', input.description?.trim() || null, actor.id, actor.id]);
+            for (const locationId of locations) {
+                await conn.query('INSERT INTO designation_locations (designation_id, location_id) VALUES (?, ?)', [result.insertId, locationId]);
+            }
+            return Number(result.insertId);
+        });
+        await recordAudit({ actorId: actor.id, action: 'designation.created', entityType: 'designation', entityId: id, after: { ...input, code } });
+        return id;
     }
+    /** Updates or deactivates a designation. Employees keep their designation id; history is untouched. */
+    static async updateDesignation(actor, id, input) {
+        if (!actor.permissions.includes('org.manage'))
+            throw ApiError.forbidden('You cannot manage the organisation structure.');
+        const current = await queryOne('SELECT * FROM designations WHERE id = ?', [id]);
+        if (!current)
+            throw ApiError.notFound('Designation not found');
+        const title = input.title === undefined ? String(current.title) : input.title.trim().replace(/\s+/g, ' ');
+        const departmentId = input.departmentId === undefined ? current.department_id : input.departmentId;
+        if (title.length < 2)
+            throw ApiError.badRequest('Enter a designation title.');
+        const duplicate = await queryOne('SELECT id FROM designations WHERE title = ? AND department_id <=> ? AND id <> ?', [title, departmentId ?? null, id]);
+        if (duplicate)
+            throw ApiError.conflict('Another designation with this title already exists in that department.');
+        const code = input.code === undefined ? String(current.code) : input.code.trim().toUpperCase();
+        if (!/^[A-Z0-9][A-Z0-9-]{1,31}$/.test(code))
+            throw ApiError.badRequest('Use 2–32 letters, digits or hyphens for the designation code.');
+        if (await queryOne('SELECT id FROM designations WHERE code = ? AND id <> ?', [code, id]))
+            throw ApiError.conflict('That designation code is already used.');
+        const reportingId = input.reportingDesignationId === undefined ? current.reporting_designation_id : input.reportingDesignationId;
+        await EmployeeService.assertNoReportingCycle(id, reportingId ? Number(reportingId) : null);
+        if (input.isActive === false) {
+            const dependants = await queryOne('SELECT COUNT(*) AS total FROM designations WHERE reporting_designation_id = ? AND is_active = 1', [id]);
+            if (Number(dependants?.total ?? 0) > 0)
+                throw ApiError.conflict('Other active designations report to this one. Reassign their reporting line first.');
+        }
+        const locations = input.locationIds === undefined ? null : await EmployeeService.validateLocations(input.locationIds);
+        await transaction(async (conn) => {
+            await conn.query(`UPDATE designations SET title = ?, code = ?, department_id = ?, level = ?, reporting_designation_id = ?, employment_category = ?,
+                description = ?, is_active = ?, updated_by = ? WHERE id = ?`, [title, code, departmentId ?? null, input.level ?? current.level, reportingId ?? null,
+                input.employmentCategory ?? current.employment_category, input.description === undefined ? current.description : (input.description?.trim() || null),
+                input.isActive === undefined ? current.is_active : (input.isActive ? 1 : 0), actor.id, id]);
+            if (locations) {
+                await conn.query('DELETE FROM designation_locations WHERE designation_id = ?', [id]);
+                for (const locationId of locations)
+                    await conn.query('INSERT INTO designation_locations (designation_id, location_id) VALUES (?, ?)', [id, locationId]);
+            }
+        });
+        await recordAudit({
+            actorId: actor.id,
+            action: input.isActive === false ? 'designation.deactivated' : 'designation.updated',
+            entityType: 'designation',
+            entityId: id,
+            before: { title: current.title, code: current.code, departmentId: current.department_id, reportingDesignationId: current.reporting_designation_id, isActive: Boolean(current.is_active) },
+            after: { ...input, title, code },
+        });
+    }
+    /** Change history for a designation (from the audit trail). */
+    static async designationHistory(id) {
+        return query(`SELECT a.action, a.before_data, a.after_data, a.created_at, e.full_name AS actor_name
+       FROM audit_logs a LEFT JOIN employees e ON e.id = a.actor_id
+       WHERE a.entity_type = 'designation' AND a.entity_id = ? ORDER BY a.created_at DESC LIMIT 50`, [id]);
+    }
+    // ----------------------------- Locations -----------------------------------
     static async createLocation(actor, input) {
         if (!actor.permissions.includes('org.manage'))
             throw ApiError.forbidden('You cannot manage the organisation structure.');
-        const result = await execute('INSERT INTO locations (name, code, city, timezone, latitude, longitude, geofence_radius_m) VALUES (?, ?, ?, ?, ?, ?, ?)', [
-            input.name,
-            input.code.toUpperCase(),
-            input.city ?? null,
-            input.timezone ?? 'Asia/Kolkata',
-            input.latitude ?? null,
-            input.longitude ?? null,
-            input.geofenceRadiusM ?? null,
-        ]);
-        await recordAudit({ actorId: actor.id, action: 'location.created', entityType: 'location', entityId: result.insertId, after: input });
+        const code = input.code.trim().toUpperCase();
+        if (!/^[A-Z0-9]{2,12}$/.test(code))
+            throw ApiError.badRequest('Location codes use 2–12 letters or digits, e.g. BEL.');
+        if (await queryOne('SELECT id FROM locations WHERE code = ?', [code]))
+            throw ApiError.conflict('That location code is already used.');
+        if (await queryOne('SELECT id FROM locations WHERE name = ?', [input.name.trim()]))
+            throw ApiError.conflict('A location with that name already exists.');
+        if ((input.latitude === undefined) !== (input.longitude === undefined))
+            throw ApiError.badRequest('Provide both latitude and longitude, or neither.');
+        const result = await execute(`INSERT INTO locations (name, code, city, state, address, timezone, latitude, longitude, geofence_radius_m, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [input.name.trim(), code, input.city?.trim() || null, input.state?.trim() || null, input.address?.trim() || null,
+            input.timezone ?? 'Asia/Kolkata', input.latitude ?? null, input.longitude ?? null, input.geofenceRadiusM ?? null, actor.id, actor.id]);
+        await recordAudit({ actorId: actor.id, action: 'location.created', entityType: 'location', entityId: result.insertId, after: { ...input, code } });
         return result.insertId;
+    }
+    static async updateLocation(actor, id, input) {
+        if (!actor.permissions.includes('org.manage'))
+            throw ApiError.forbidden('You cannot manage the organisation structure.');
+        const current = await queryOne('SELECT * FROM locations WHERE id = ?', [id]);
+        if (!current)
+            throw ApiError.notFound('Location not found');
+        const code = input.code === undefined ? String(current.code) : input.code.trim().toUpperCase();
+        if (!/^[A-Z0-9]{2,12}$/.test(code))
+            throw ApiError.badRequest('Location codes use 2–12 letters or digits, e.g. BEL.');
+        if (await queryOne('SELECT id FROM locations WHERE code = ? AND id <> ?', [code, id]))
+            throw ApiError.conflict('That location code is already used.');
+        const name = input.name === undefined ? String(current.name) : input.name.trim();
+        if (await queryOne('SELECT id FROM locations WHERE name = ? AND id <> ?', [name, id]))
+            throw ApiError.conflict('A location with that name already exists.');
+        if (input.isActive === false) {
+            const active = await queryOne("SELECT COUNT(*) AS total FROM employees WHERE location_id = ? AND status = 'active'", [id]);
+            if (Number(active?.total ?? 0) > 0)
+                throw ApiError.conflict(`${active?.total} active employee(s) are assigned to this location. Move them before deactivating it.`);
+        }
+        const pick = (value, fallback) => (value === undefined ? fallback : value);
+        await execute(`UPDATE locations SET name = ?, code = ?, city = ?, state = ?, address = ?, timezone = ?, latitude = ?, longitude = ?,
+              geofence_radius_m = ?, is_active = ?, updated_by = ? WHERE id = ?`, [name, code, pick(input.city, current.city), pick(input.state, current.state), pick(input.address, current.address),
+            pick(input.timezone, current.timezone), pick(input.latitude, current.latitude), pick(input.longitude, current.longitude),
+            pick(input.geofenceRadiusM, current.geofence_radius_m), input.isActive === undefined ? current.is_active : (input.isActive ? 1 : 0), actor.id, id]);
+        await recordAudit({
+            actorId: actor.id,
+            action: input.isActive === false ? 'location.deactivated' : 'location.updated',
+            entityType: 'location',
+            entityId: id,
+            before: { name: current.name, code: current.code, isActive: Boolean(current.is_active) },
+            after: { ...input, name, code },
+        });
+    }
+    /** Additional locations an employee may access beyond their primary location. */
+    static async setEmployeeLocations(actor, employeeId, locationIds) {
+        if (!actor.permissions.includes('org.manage') && !actor.permissions.includes('employees.manage'))
+            throw ApiError.forbidden('You cannot change location access.');
+        const employee = await queryOne('SELECT id FROM employees WHERE id = ?', [employeeId]);
+        if (!employee)
+            throw ApiError.notFound('Employee not found');
+        const locations = await EmployeeService.validateLocations(locationIds);
+        const before = await query('SELECT location_id FROM employee_locations WHERE employee_id = ?', [employeeId]);
+        await transaction(async (conn) => {
+            await conn.query('DELETE FROM employee_locations WHERE employee_id = ?', [employeeId]);
+            for (const locationId of locations) {
+                await conn.query('INSERT INTO employee_locations (employee_id, location_id, granted_by) VALUES (?, ?, ?)', [employeeId, locationId, actor.id]);
+            }
+        });
+        await recordAudit({
+            actorId: actor.id, action: 'employee.location_access_changed', entityType: 'employee', entityId: employeeId,
+            before: { locationIds: before.map((row) => Number(row.location_id)) }, after: { locationIds: locations },
+        });
+        return locations;
+    }
+    static async employeeLocations(employeeId) {
+        const rows = await query('SELECT location_id FROM employee_locations WHERE employee_id = ?', [employeeId]);
+        return rows.map((row) => Number(row.location_id));
     }
     static async updateRoleDetails(actor, roleId, input) {
         if (!actor.permissions.includes('roles.manage'))

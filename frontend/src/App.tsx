@@ -13,6 +13,7 @@ const Attendance = lazy(() => import('./pages/Attendance'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const DailyReports = lazy(() => import('./pages/DailyReports'));
 const Chat = lazy(() => import('./pages/Chat'));
+const Mailbox = lazy(() => import('./pages/Mailbox'));
 const Tickets = lazy(() => import('./pages/Tickets'));
 const Calendar = lazy(() => import('./pages/Calendar'));
 const Meetings = lazy(() => import('./pages/Meetings'));
@@ -99,6 +100,7 @@ export function App() {
           <Route path="tasks" element={<Tasks />} />
           <Route path="reports" element={<DailyReports />} />
           <Route path="chat" element={<Chat />} />
+          <Route path="mailbox" element={<Mailbox />} />
           <Route path="tickets" element={<Tickets />} />
           <Route path="calendar" element={<Calendar />} />
           <Route path="meetings" element={<Meetings />} />

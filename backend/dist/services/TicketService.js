@@ -3,7 +3,7 @@ import { execute, nextSequence, query, queryOne, transaction } from '../db/index
 import { getSettings, recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 export const TICKET_CATEGORIES = [
@@ -88,8 +88,13 @@ function mapTicket(r) {
 }
 export class TicketService {
     static async scope(user) {
-        if (user.permissions.includes('tickets.view.all'))
-            return { clause: '1 = 1', params: [] };
+        if (user.permissions.includes('tickets.view.all')) {
+            const location = await locationEmployeeClause(user, 't.requester_id');
+            if (location.clause === '1 = 1')
+                return location;
+            // Technicians always see tickets assigned to them, whatever the location.
+            return { clause: `(${location.clause} OR t.assignee_id = ?)`, params: [...location.params, user.id] };
+        }
         if (user.permissions.includes('tickets.view.team')) {
             const ids = await subtreeIds(user.id);
             if (ids.length === 0)

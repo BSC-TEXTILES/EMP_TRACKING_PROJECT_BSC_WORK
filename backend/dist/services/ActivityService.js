@@ -1109,6 +1109,62 @@ export class ActivityService {
     static async audit(actorId, action, targetEmployeeId, entityType, entityId, detail, ip) {
         await execute('INSERT INTO activity_audit_logs (actor_id, action, target_employee_id, entity_type, entity_id, detail, ip) VALUES (?, ?, ?, ?, ?, ?, ?)', [actorId, action, targetEmployeeId, entityType, entityId, JSON.stringify(detail), ip ?? null]);
     }
+    static async autoStartTracking(user, context = {}) {
+        try {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            // 1. Ensure attendance is checked in for today
+            const att = await query('SELECT id, check_in FROM employee_attendance WHERE employee_id = ? AND date = ?', [user.id, todayStr]);
+            if (!att || att.length === 0) {
+                await execute('INSERT INTO employee_attendance (employee_id, date, check_in, status) VALUES (?, ?, NOW(3), ?)', [user.id, todayStr, 'present']);
+            }
+            // 2. Ensure policy consent
+            await execute('INSERT INTO employee_monitoring_consent (employee_id, version, acknowledged_at) VALUES (?, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))', [user.id]);
+            // 3. Ensure device registration
+            const fingerprint = context.machineFingerprint || `web-${user.id}-${(context.userAgent || 'client').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
+            let device = await queryOne('SELECT id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
+            let deviceId;
+            if (!device) {
+                const res = await execute(`INSERT INTO employee_devices (employee_id, device_name, os_name, os_version, agent_version, machine_fingerprint, status, last_seen_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'active', NOW(3))`, [
+                    user.id,
+                    `Browser · ${(context.userAgent?.includes('Windows') ? 'Windows' : context.userAgent?.includes('Mac') ? 'macOS' : 'Web')}`,
+                    context.userAgent?.includes('Windows') ? 'Windows' : 'Web',
+                    '1.0',
+                    'web-1.0',
+                    fingerprint,
+                ]);
+                deviceId = res.insertId;
+            }
+            else {
+                deviceId = Number(device.id);
+                await execute('UPDATE employee_devices SET employee_id = ?, status = "active", last_seen_at = NOW(3) WHERE id = ?', [user.id, deviceId]);
+            }
+            // 4. Start session
+            const result = await ActivityService.startSession(user, deviceId, context);
+            return { started: true, sessionId: result.sessionId };
+        }
+        catch (err) {
+            console.warn('[ActivityService] autoStartTracking error:', err);
+            return { started: false };
+        }
+    }
+    static async stopTracking(employeeId) {
+        try {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            // 1. End any active monitoring sessions
+            await ActivityService.endSessionsForEmployee(employeeId, 'attendance_checkout');
+            // 2. Update attendance check_out
+            await execute(`UPDATE employee_attendance
+         SET check_out = NOW(3),
+             total_hours = ROUND(GREATEST(0, TIMESTAMPDIFF(SECOND, check_in, NOW(3))) / 3600, 2)
+         WHERE employee_id = ? AND date = ? AND check_out IS NULL`, [employeeId, todayStr]);
+            return { stopped: true };
+        }
+        catch (err) {
+            console.warn('[ActivityService] stopTracking error:', err);
+            return { stopped: false };
+        }
+    }
 }
 export { parseJson, cleanText, sanitizeDiagnostic };
 //# sourceMappingURL=ActivityService.js.map

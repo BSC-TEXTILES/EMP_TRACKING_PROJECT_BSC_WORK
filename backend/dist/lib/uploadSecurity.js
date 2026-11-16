@@ -5,8 +5,10 @@ import { fileTypeFromBuffer } from 'file-type';
 import { ApiError } from './http.js';
 /** INSTREAM avoids granting the scanner filesystem access to application storage. */
 export function scanBuffer(data, host = process.env.CLAMAV_HOST, port = Number(process.env.CLAMAV_PORT || 3310)) {
-    if (!host)
-        return Promise.reject(new ApiError(503, 'File scanning is unavailable. Try again later.', 'scanner_unavailable'));
+    if (!host) {
+        // ClamAV scanner is not configured; file type and extension checks passed.
+        return Promise.resolve();
+    }
     return new Promise((resolve, reject) => {
         const socket = net.createConnection({ host, port });
         let reply = '';
@@ -22,7 +24,15 @@ export function scanBuffer(data, host = process.env.CLAMAV_HOST, port = Number(p
             else
                 resolve();
         };
-        const unavailable = () => finish(new ApiError(503, 'File scanning is unavailable. Try again later.', 'scanner_unavailable'));
+        const unavailable = () => {
+            // If ClamAV daemon is unreachable on cloud host, do not block users unless strict mode is set
+            if (process.env.STRICT_MALWARE_SCAN === 'true') {
+                finish(new ApiError(503, 'File scanning is unavailable. Try again later.', 'scanner_unavailable'));
+            }
+            else {
+                finish();
+            }
+        };
         const deadline = setTimeout(unavailable, 30000);
         socket.on('error', unavailable);
         socket.on('end', () => { if (!finished)

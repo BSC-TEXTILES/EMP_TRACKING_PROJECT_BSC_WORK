@@ -71,6 +71,33 @@ chatRouter.get(
   }),
 );
 
+chatRouter.patch(
+  '/conversations/:id',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(
+      z.object({
+        name: z.string().min(1).max(160),
+        description: z.string().max(255).optional(),
+      }),
+      req.body,
+    );
+    await ChatService.renameConversation(id, user, body.name, body.description);
+    res.json({ ok: true });
+  }),
+);
+
+chatRouter.delete(
+  '/conversations/:id',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const result = await ChatService.deleteConversation(id, user);
+    res.json(result);
+  }),
+);
+
 chatRouter.get(
   '/conversations/:id/messages',
   asyncHandler(async (req: AuthedRequest, res) => {

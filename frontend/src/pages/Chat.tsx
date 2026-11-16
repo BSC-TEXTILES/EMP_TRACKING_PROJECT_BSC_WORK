@@ -18,7 +18,26 @@ interface ConversationDetail {
   isAnnouncement: boolean;
   createdBy: number | null;
   myRole: string;
-  members: { employeeId: number; name: string; photoUrl: string | null; role: string; designation: string | null; online: boolean; lastSeenAt: string | null }[];
+  otherEmployee?: {
+    id: number;
+    name: string;
+    photoUrl: string | null;
+    phone: string | null;
+    email: string | null;
+    designation: string | null;
+    online: boolean;
+  } | null;
+  members: {
+    employeeId: number;
+    name: string;
+    photoUrl: string | null;
+    phone?: string | null;
+    email?: string | null;
+    role: string;
+    designation: string | null;
+    online: boolean;
+    lastSeenAt: string | null;
+  }[];
 }
 
 const QUICK_EMOJI = ['👍', '✅', '🙏', '🎉', '❤️'];
@@ -42,6 +61,13 @@ export default function Chat() {
   const [filter, setFilter] = useState('');
   const [contactsOpen, setContactsOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameInput, setRenameInput] = useState('');
+  const [renameDescription, setRenameDescription] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [busyAction, setBusyAction] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [search, setSearch] = useState('');
   const [mobileOpen, setMobileOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -119,6 +145,23 @@ export default function Chat() {
   useSocketEvent('message:reaction', () => {
     if (activeId) void loadMessages(activeId);
   });
+  useSocketEvent('conversation:updated', (payload) => {
+    const data = payload as { conversationId: number; name: string; description?: string };
+    setConversations((prev) => prev.map((c) => (c.id === data.conversationId ? { ...c, name: data.name } : c)));
+    if (activeId === data.conversationId) {
+      setDetail((prev) => (prev ? { ...prev, name: data.name, description: data.description ?? prev.description } : null));
+    }
+  });
+  useSocketEvent('conversation:deleted', (payload) => {
+    const data = payload as { conversationId: number };
+    setConversations((prev) => prev.filter((c) => c.id !== data.conversationId));
+    if (activeId === data.conversationId) {
+      setParams({});
+      setDetail(null);
+      setMessages([]);
+      toast.info('Conversation was deleted.');
+    }
+  });
   useSocketEvent('chat:typing', (payload) => {
     const data = payload as { conversationId: number; employeeId: number; name: string; typing: boolean };
     if (data.conversationId !== activeId || data.employeeId === user?.id) return;
@@ -172,13 +215,55 @@ export default function Chat() {
 
   const sendFile = async (file: File) => {
     if (!activeId) return;
+    setUploadingFile(true);
     try {
       const uploaded = await api.upload<{ id: number; mimeType: string }>(file);
       const type = uploaded.mimeType.startsWith('image/') ? 'image' : file.type.startsWith('audio/') ? 'voice' : 'file';
       await api.post(`/chat/conversations/${activeId}/messages`, { fileIds: [uploaded.id], type, body: text.trim() || undefined });
       setText('');
+      toast.success(`${file.name} sent.`);
     } catch (caught) {
       toast.error(errorMessage(caught));
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
+  const handleRename = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!activeId || !renameInput.trim()) return;
+    setBusyAction(true);
+    try {
+      await api.patch(`/chat/conversations/${activeId}`, {
+        name: renameInput.trim(),
+        description: renameDescription.trim() || undefined,
+      });
+      setConversations((prev) => prev.map((c) => (c.id === activeId ? { ...c, name: renameInput.trim() } : c)));
+      setDetail((prev) => (prev ? { ...prev, name: renameInput.trim(), description: renameDescription.trim() || null } : null));
+      setRenameOpen(false);
+      toast.success('Conversation name updated.');
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!activeId) return;
+    setBusyAction(true);
+    try {
+      const result = await api.del<{ deleted?: boolean; left?: boolean }>(`/chat/conversations/${activeId}`);
+      setConversations((prev) => prev.filter((c) => c.id !== activeId));
+      setParams({});
+      setDetail(null);
+      setMessages([]);
+      setDeleteOpen(false);
+      toast.success(result.deleted ? 'Conversation deleted.' : 'You left the conversation.');
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setBusyAction(false);
     }
   };
 
@@ -285,21 +370,85 @@ export default function Chat() {
                 </button>
                 <Avatar name={active?.name ?? detail?.name ?? 'Conversation'} size={34} online={otherOnline || undefined} />
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-ink-900">{active?.name ?? detail?.name ?? 'Conversation'}</p>
-                  <p className="truncate text-xs text-ink-500">
-                    {Object.values(typingUsers).length > 0
-                      ? `${Object.values(typingUsers).join(', ')} typing…`
-                      : otherOnline
-                        ? 'Online'
-                        : detail?.type === 'direct'
-                          ? 'Offline'
-                          : `${detail?.members.length ?? 0} members`}
-                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm font-semibold text-ink-900">{active?.name ?? detail?.name ?? 'Conversation'}</p>
+                    <button
+                      type="button"
+                      className="rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                      title="Change conversation name"
+                      onClick={() => {
+                        setRenameInput(active?.name ?? detail?.name ?? '');
+                        setRenameDescription(detail?.description ?? '');
+                        setRenameOpen(true);
+                      }}
+                    >
+                      <Icon name="edit" size={13} />
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-ink-500">
+                    <span className="truncate">
+                      {Object.values(typingUsers).length > 0
+                        ? `${Object.values(typingUsers).join(', ')} typing…`
+                        : otherOnline
+                          ? 'Online'
+                          : detail?.type === 'direct'
+                            ? (detail?.otherEmployee?.phone || active?.otherMobile ? `Phone: ${detail?.otherEmployee?.phone || active?.otherMobile}` : 'Offline')
+                            : `${detail?.members.length ?? 0} members`}
+                    </span>
+                    {detail?.type !== 'direct' && (
+                      <button
+                        type="button"
+                        className="font-medium text-brand-600 hover:underline"
+                        onClick={() => setMembersOpen(true)}
+                      >
+                        (View Members)
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
+                {(() => {
+                  const phone = detail?.otherEmployee?.phone || active?.otherMobile;
+                  const clean = phone ? phone.replace(/\D/g, '') : null;
+                  const wa = clean ? (clean.length === 10 ? `91${clean}` : clean) : null;
+                  return (
+                    <>
+                      {wa && (
+                        <a
+                          href={`https://wa.me/${wa}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                          title={`WhatsApp (+${wa})`}
+                        >
+                          <Icon name="whatsapp" size={14} className="text-emerald-600" />
+                          <span className="hidden md:inline">WhatsApp</span>
+                        </a>
+                      )}
+                      {phone && (
+                        <a
+                          href={`tel:${phone}`}
+                          className="flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          title={`Call ${phone}`}
+                        >
+                          <Icon name="phone" size={14} className="text-blue-600" />
+                          <span className="hidden md:inline">{phone}</span>
+                        </a>
+                      )}
+                    </>
+                  );
+                })()}
                 <button type="button" className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100" title="Search in conversation" onClick={() => setSearch(search ? '' : ' ')}>
                   <Icon name="search" size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg p-1.5 text-red-500 hover:bg-red-50"
+                  title={detail?.type === 'direct' ? 'Delete chat' : detail?.myRole === 'admin' ? 'Delete group' : 'Leave group'}
+                  onClick={() => setDeleteOpen(true)}
+                >
+                  <Icon name="trash" size={16} />
                 </button>
               </div>
             </header>
@@ -506,7 +655,193 @@ export default function Chat() {
           openConversation(id);
         }}
       />
+      <RenameModal
+        open={renameOpen}
+        onClose={() => setRenameOpen(false)}
+        initialName={renameInput}
+        initialDescription={renameDescription}
+        onSave={async (name, description) => {
+          setRenameInput(name);
+          setRenameDescription(description);
+          await handleRename({ preventDefault: () => undefined } as React.FormEvent);
+        }}
+        busy={busyAction}
+      />
+      <DeleteConfirmModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        onConfirm={handleDelete}
+        title={detail?.type === 'direct' ? 'Delete Conversation' : detail?.myRole === 'admin' ? 'Delete Group' : 'Leave Group'}
+        description={
+          detail?.type === 'direct'
+            ? 'Are you sure you want to delete this chat conversation? All message history will be removed.'
+            : detail?.myRole === 'admin'
+              ? 'Are you sure you want to permanently delete this group? All messages and attachments will be deleted for all members.'
+              : 'Are you sure you want to leave this group?'
+        }
+        busy={busyAction}
+      />
+      <GroupMembersModal
+        open={membersOpen}
+        onClose={() => setMembersOpen(false)}
+        detail={detail}
+        onlineIds={onlineIds}
+      />
     </div>
+  );
+}
+
+function RenameModal({
+  open,
+  onClose,
+  initialName,
+  initialDescription,
+  onSave,
+  busy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialName: string;
+  initialDescription: string;
+  onSave: (name: string, description: string) => Promise<void>;
+  busy: boolean;
+}) {
+  const [name, setName] = useState(initialName);
+  const [description, setDescription] = useState(initialDescription);
+
+  useEffect(() => {
+    setName(initialName);
+    setDescription(initialDescription);
+  }, [initialName, initialDescription, open]);
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Change conversation name"
+      footer={
+        <>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!name.trim() || busy}
+            onClick={() => void onSave(name, description)}
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <Field label="Conversation name" required>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+        </Field>
+        <Field label="Description (optional)">
+          <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteConfirmModal({
+  open,
+  onClose,
+  onConfirm,
+  title,
+  description,
+  busy,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+  title: string;
+  description: string;
+  busy: boolean;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" className="btn-danger" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Confirming…' : 'Delete'}
+          </button>
+        </>
+      }
+    >
+      <p className="text-sm text-ink-600">{description}</p>
+    </Modal>
+  );
+}
+
+function GroupMembersModal({
+  open,
+  onClose,
+  detail,
+  onlineIds,
+}: {
+  open: boolean;
+  onClose: () => void;
+  detail: ConversationDetail | null;
+  onlineIds: number[];
+}) {
+  if (!detail) return null;
+  return (
+    <Modal open={open} onClose={onClose} title={`${detail.name || 'Group'} · Members`}>
+      <div className="max-h-96 space-y-2 overflow-y-auto divide-y divide-ink-100">
+        {detail.members.map((m) => {
+          const isOnline = onlineIds.includes(m.employeeId);
+          const cleanPhone = m.phone ? m.phone.replace(/\D/g, '') : null;
+          const wa = cleanPhone ? (cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone) : null;
+          return (
+            <div key={m.employeeId} className="flex items-center justify-between pt-2">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Avatar name={m.name} src={m.photoUrl} size={32} online={isOnline} />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm font-medium text-ink-900">{m.name}</p>
+                    {m.role === 'admin' && <Badge tone="brand">Admin</Badge>}
+                  </div>
+                  <p className="truncate text-xs text-ink-500">{m.designation || 'Member'}</p>
+                  {m.phone && <p className="truncate text-xs font-mono text-ink-600">Tel: {m.phone}</p>}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0 ml-2">
+                {wa && (
+                  <a
+                    href={`https://wa.me/${wa}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
+                    title={`WhatsApp (+${wa})`}
+                  >
+                    <Icon name="whatsapp" size={16} />
+                  </a>
+                )}
+                {m.phone && (
+                  <a
+                    href={`tel:${m.phone}`}
+                    className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50"
+                    title={`Call ${m.phone}`}
+                  >
+                    <Icon name="phone" size={16} />
+                  </a>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
   );
 }
 
@@ -533,34 +868,65 @@ function ContactsModal({
   }, [open]);
 
   const filtered = (contacts ?? []).filter((contact) =>
-    search ? `${contact.full_name} ${contact.designation_title ?? ''}`.toLowerCase().includes(search.toLowerCase()) : true,
+    search ? `${contact.full_name} ${contact.designation_title ?? ''} ${contact.phone ?? ''}`.toLowerCase().includes(search.toLowerCase()) : true,
   );
 
   return (
     <Modal open={open} onClose={onClose} title="New conversation" description="Start a direct chat with any active employee.">
-      <input className="input mb-3" placeholder="Search employees" value={search} onChange={(event) => setSearch(event.target.value)} />
+      <input className="input mb-3" placeholder="Search employees by name or phone" value={search} onChange={(event) => setSearch(event.target.value)} />
       <div className="max-h-80 space-y-1 overflow-y-auto">
         {!contacts ? (
           <Skeleton lines={5} />
         ) : filtered.length === 0 ? (
           <EmptyState compact title="No employees found" />
         ) : (
-          filtered.map((contact) => (
-            <button
-              key={contact.id}
-              type="button"
-              className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-ink-50"
-              onClick={() => void onSelect(contact.id)}
-            >
-              <Avatar name={contact.full_name} size={32} online={onlineIds.includes(contact.id)} />
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-ink-800">{contact.full_name}</p>
-                <p className="truncate text-xs text-ink-500">
-                  {contact.designation_title ?? '—'} {contact.department_name ? `· ${contact.department_name}` : ''}
-                </p>
+          filtered.map((contact) => {
+            const cleanPhone = contact.phone ? contact.phone.replace(/\D/g, '') : null;
+            const wa = cleanPhone ? (cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone) : null;
+            return (
+              <div
+                key={contact.id}
+                className="flex items-center justify-between rounded-lg px-2 py-1.5 hover:bg-ink-50"
+              >
+                <button
+                  type="button"
+                  className="flex flex-1 items-center gap-2.5 text-left min-w-0"
+                  onClick={() => void onSelect(contact.id)}
+                >
+                  <Avatar name={contact.full_name} size={32} online={onlineIds.includes(contact.id)} />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-ink-800">{contact.full_name}</p>
+                    <p className="truncate text-xs text-ink-500">
+                      {contact.designation_title ?? '—'} {contact.department_name ? `· ${contact.department_name}` : ''}
+                    </p>
+                    {contact.phone && <p className="truncate text-xs font-mono text-ink-600">📞 {contact.phone}</p>}
+                  </div>
+                </button>
+                <div className="flex items-center gap-1 shrink-0 ml-2">
+                  {wa && (
+                    <a
+                      href={`https://wa.me/${wa}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
+                      title={`WhatsApp (+${wa})`}
+                    >
+                      <Icon name="whatsapp" size={15} />
+                    </a>
+                  )}
+                  {contact.phone && (
+                    <a
+                      href={`tel:${contact.phone}`}
+                      className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-50"
+                      title={`Call ${contact.phone}`}
+                    >
+                      <Icon name="phone" size={15} />
+                    </a>
+                  )}
+                </div>
               </div>
-            </button>
-          ))
+            );
+          })
         )}
       </div>
     </Modal>

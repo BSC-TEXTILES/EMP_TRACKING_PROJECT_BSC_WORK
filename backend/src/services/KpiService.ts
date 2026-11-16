@@ -2,7 +2,7 @@ import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { endOfMonth, periodRange, previousPeriod, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, locationEmployeeClause, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
 
@@ -337,10 +337,13 @@ export class KpiService {
     const wantsTeam = filters.scope === 'team' && (actor.permissions.includes('kpi.view.team') || actor.permissions.includes('kpi.view.all'));
 
     if (filters.employeeId) {
+      await assertEmployeeAccess(actor, filters.employeeId, 'kpi');
       clauses.push('k.employee_id = ?');
       params.push(filters.employeeId);
     } else if (wantsAll) {
-      // organisation-wide
+      const location = await locationEmployeeClause(actor, 'k.employee_id');
+      clauses.push(location.clause);
+      params.push(...location.params);
     } else if (wantsTeam) {
       const ids = await subtreeIds(actor.id);
       if (ids.length === 0) return { items: [] };

@@ -48,11 +48,17 @@ export class ChatService {
                  WHERE other.conversation_id = c.id AND other.employee_id <> ? AND c.conv_type = 'direct' LIMIT 1) AS other_name,
               (SELECT other.employee_id FROM conversation_members other
                  WHERE other.conversation_id = c.id AND other.employee_id <> ? AND c.conv_type = 'direct' LIMIT 1) AS other_id,
+              (SELECT e.mobile FROM conversation_members other
+                 JOIN employees e ON e.id = other.employee_id
+                 WHERE other.conversation_id = c.id AND other.employee_id <> ? AND c.conv_type = 'direct' LIMIT 1) AS other_mobile,
+              (SELECT e.photo_url FROM conversation_members other
+                 JOIN employees e ON e.id = other.employee_id
+                 WHERE other.conversation_id = c.id AND other.employee_id <> ? AND c.conv_type = 'direct' LIMIT 1) AS other_photo,
               (SELECT COUNT(*) FROM conversation_members mm WHERE mm.conversation_id = c.id) AS member_count
        FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id
        WHERE cm.employee_id = ?
-       ORDER BY COALESCE(last_message_at, c.created_at) DESC`, [employeeId, employeeId, employeeId, employeeId]);
+       ORDER BY COALESCE(last_message_at, c.created_at) DESC`, [employeeId, employeeId, employeeId, employeeId, employeeId, employeeId]);
         return rows.map((r) => ({
             id: Number(r.id),
             type: r.conv_type,
@@ -65,6 +71,8 @@ export class ChatService {
             unread: Number(r.unread),
             muted: Boolean(r.is_muted),
             otherEmployeeId: r.other_id ? Number(r.other_id) : null,
+            otherMobile: r.other_mobile ?? null,
+            otherPhoto: r.other_photo ?? null,
             memberCount: Number(r.member_count),
         }));
     }
@@ -140,24 +148,36 @@ export class ChatService {
         const conversation = await queryOne('SELECT id, conv_type, name, description, is_announcement, created_by FROM conversations WHERE id = ?', [conversationId]);
         if (!conversation)
             throw ApiError.notFound('Conversation not found');
-        const members = await query(`SELECT cm.employee_id, e.full_name, e.photo_url, cm.member_role, dg.title AS designation_title, e.last_seen_at
+        const members = await query(`SELECT cm.employee_id, e.full_name, e.photo_url, e.mobile, e.email, cm.member_role, dg.title AS designation_title, e.last_seen_at
        FROM conversation_members cm
        JOIN employees e ON e.id = cm.employee_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
        WHERE cm.conversation_id = ? ORDER BY cm.member_role DESC, e.full_name`, [conversationId]);
         const membership = members.find((m) => Number(m.employee_id) === employeeId);
+        const other = members.find((m) => Number(m.employee_id) !== employeeId);
         return {
             id: Number(conversation.id),
             type: conversation.conv_type,
-            name: conversation.name,
+            name: conversation.name ?? other?.full_name ?? 'Conversation',
             description: conversation.description,
             isAnnouncement: Boolean(conversation.is_announcement),
             createdBy: conversation.created_by ? Number(conversation.created_by) : null,
             myRole: membership?.member_role ?? 'member',
+            otherEmployee: other ? {
+                id: Number(other.employee_id),
+                name: other.full_name,
+                photoUrl: other.photo_url,
+                phone: other.mobile,
+                email: other.email,
+                designation: other.designation_title,
+                online: isOnline(Number(other.employee_id)),
+            } : null,
             members: members.map((m) => ({
                 employeeId: Number(m.employee_id),
                 name: m.full_name,
                 photoUrl: m.photo_url,
+                phone: m.mobile,
+                email: m.email,
                 role: m.member_role,
                 designation: m.designation_title,
                 online: isOnline(Number(m.employee_id)),
@@ -394,12 +414,82 @@ export class ChatService {
         await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, memberId]);
     }
     static async contacts(employeeId) {
-        return query(`SELECT e.id, e.full_name, dg.title AS designation_title, d.name AS department_name, e.photo_url
+        return query(`SELECT e.id, e.full_name, e.mobile AS phone, e.email, dg.title AS designation_title, d.name AS department_name, e.photo_url
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
        WHERE e.status = 'active' AND e.id <> ?
        ORDER BY e.full_name LIMIT 500`, [employeeId]);
+    }
+    static async renameConversation(conversationId, actor, name, description) {
+        await ChatService.assertMember(conversationId, actor.id);
+        const conv = await queryOne('SELECT conv_type, created_by FROM conversations WHERE id = ?', [conversationId]);
+        if (!conv)
+            throw ApiError.notFound('Conversation not found');
+        const membership = await queryOne('SELECT member_role FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
+        const canEdit = conv.conv_type === 'direct' ||
+            membership?.member_role === 'admin' ||
+            Number(conv.created_by) === actor.id ||
+            actor.roleLevel >= 50 ||
+            actor.permissions.includes('chat.groups.manage');
+        if (!canEdit)
+            throw ApiError.forbidden('Only group administrators or creators can rename this conversation.');
+        if (!name.trim())
+            throw ApiError.badRequest('Conversation name cannot be empty.');
+        await execute('UPDATE conversations SET name = ?, description = COALESCE(?, description), updated_at = NOW(3) WHERE id = ?', [
+            name.trim(),
+            description !== undefined ? description.trim() : null,
+            conversationId,
+        ]);
+        emitToConversation(conversationId, 'conversation:updated', { conversationId, name: name.trim(), description: description?.trim() });
+        await recordAudit({
+            actorId: actor.id,
+            action: 'chat.conversation_renamed',
+            entityType: 'conversation',
+            entityId: conversationId,
+            after: { name: name.trim(), description },
+        });
+    }
+    static async deleteConversation(conversationId, actor) {
+        await ChatService.assertMember(conversationId, actor.id);
+        const conv = await queryOne('SELECT conv_type, created_by FROM conversations WHERE id = ?', [conversationId]);
+        if (!conv)
+            throw ApiError.notFound('Conversation not found');
+        const membership = await queryOne('SELECT member_role FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
+        const isAdmin = conv.conv_type === 'direct' ||
+            membership?.member_role === 'admin' ||
+            Number(conv.created_by) === actor.id ||
+            actor.roleLevel >= 50 ||
+            actor.permissions.includes('chat.groups.manage');
+        if (isAdmin) {
+            await transaction(async (conn) => {
+                const [messages] = await conn.query('SELECT id FROM messages WHERE conversation_id = ?', [conversationId]);
+                const msgIds = messages.map((m) => m.id);
+                if (msgIds.length > 0) {
+                    const ph = msgIds.map(() => '?').join(',');
+                    await conn.query(`DELETE FROM message_reactions WHERE message_id IN (${ph})`, msgIds);
+                    await conn.query(`DELETE FROM message_attachments WHERE message_id IN (${ph})`, msgIds);
+                    await conn.query(`DELETE FROM message_receipts WHERE message_id IN (${ph})`, msgIds);
+                    await conn.query(`DELETE FROM messages WHERE conversation_id = ?`, [conversationId]);
+                }
+                await conn.query('DELETE FROM conversation_members WHERE conversation_id = ?', [conversationId]);
+                await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
+            });
+            emitToConversation(conversationId, 'conversation:deleted', { conversationId });
+            await recordAudit({
+                actorId: actor.id,
+                action: 'chat.conversation_deleted',
+                entityType: 'conversation',
+                entityId: conversationId,
+            });
+            return { deleted: true, left: false };
+        }
+        else {
+            // Leave group
+            await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
+            emitToConversation(conversationId, 'conversation:members_changed', { conversationId });
+            return { deleted: false, left: true };
+        }
     }
     static async emptyOrEnsureGeneral(employeeId, departmentId) {
         // New employees are automatically added to general and department channels.

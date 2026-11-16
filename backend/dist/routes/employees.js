@@ -6,6 +6,16 @@ import { EmployeeService } from '../services/EmployeeService.js';
 import { recordAudit } from '../lib/audit.js';
 export const employeesRouter = Router();
 employeesRouter.use(authenticate);
+const designationSchema = z.object({
+    title: z.string().trim().min(2).max(120).optional(),
+    code: z.string().trim().min(2).max(32).optional(),
+    departmentId: z.number().int().positive().nullable().optional(),
+    level: z.number().int().min(1).max(20).optional(),
+    reportingDesignationId: z.number().int().positive().nullable().optional(),
+    employmentCategory: z.enum(['leadership', 'management', 'professional', 'staff', 'contract', 'intern']).optional(),
+    description: z.string().max(255).nullable().optional(),
+    locationIds: z.array(z.number().int().positive()).max(50).optional(),
+});
 employeesRouter.get('/picker', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     res.json({ employees: await EmployeeService.picker(user.id) });
@@ -144,15 +154,48 @@ employeesRouter.post('/departments', requireAny('org.manage'), asyncHandler(asyn
 }));
 employeesRouter.post('/designations', requireAny('org.manage'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    const body = parseBody(z.object({ title: z.string().min(2).max(120), departmentId: z.number().int().positive().nullable().optional(), level: z.number().int().min(1).max(20).optional() }), req.body);
+    const body = parseBody(designationSchema.extend({ title: z.string().trim().min(2).max(120) }), req.body);
     res.status(201).json({ id: await EmployeeService.createDesignation(user, body) });
+}));
+employeesRouter.patch('/designations/:id', requireAny('org.manage'), asyncHandler(async (req, res) => {
+    const body = parseBody(designationSchema.extend({ isActive: z.boolean().optional() }), req.body);
+    await EmployeeService.updateDesignation(currentUser(req), intParam(req.params.id), body);
+    res.json({ ok: true });
+}));
+employeesRouter.get('/designations/:id/history', requireAny('org.manage'), asyncHandler(async (req, res) => {
+    res.json({ history: await EmployeeService.designationHistory(intParam(req.params.id)) });
+}));
+employeesRouter.patch('/locations/:id', requireAny('org.manage'), asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({
+        name: z.string().trim().min(2).max(120).optional(),
+        code: z.string().trim().min(2).max(12).optional(),
+        city: z.string().max(80).nullable().optional(),
+        state: z.string().max(80).nullable().optional(),
+        address: z.string().max(255).nullable().optional(),
+        timezone: z.string().max(64).optional(),
+        latitude: z.number().min(-90).max(90).nullable().optional(),
+        longitude: z.number().min(-180).max(180).nullable().optional(),
+        geofenceRadiusM: z.number().int().min(50).max(5000).nullable().optional(),
+        isActive: z.boolean().optional(),
+    }), req.body);
+    await EmployeeService.updateLocation(currentUser(req), intParam(req.params.id), body);
+    res.json({ ok: true });
+}));
+employeesRouter.get('/:id/locations', requireAny('org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+    res.json({ locationIds: await EmployeeService.employeeLocations(intParam(req.params.id)) });
+}));
+employeesRouter.put('/:id/locations', requireAny('org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({ locationIds: z.array(z.number().int().positive()).max(50) }), req.body);
+    res.json({ locationIds: await EmployeeService.setEmployeeLocations(currentUser(req), intParam(req.params.id), body.locationIds) });
 }));
 employeesRouter.post('/locations', requireAny('org.manage'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const body = parseBody(z.object({
-        name: z.string().min(2).max(120),
-        code: z.string().min(2).max(24),
+        name: z.string().trim().min(2).max(120),
+        code: z.string().trim().min(2).max(12),
         city: z.string().max(80).optional(),
+        state: z.string().max(80).optional(),
+        address: z.string().max(255).optional(),
         timezone: z.string().max(64).optional(),
         latitude: z.number().min(-90).max(90).optional(),
         longitude: z.number().min(-180).max(180).optional(),

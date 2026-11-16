@@ -2,7 +2,7 @@ import { execute, nextSequence, query, queryOne, transaction, txQuery, txQueryOn
 import { recordAudit } from '../lib/audit.js';
 import { addDays, today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { assertCanAllocateTo, subtreeIds } from '../lib/scope.js';
+import { assertCanAllocateTo, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { emitToEmployee, emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 export const TASK_STATUSES = [
@@ -31,8 +31,16 @@ export const TASK_ACTIONS = [
     'reopen',
 ];
 async function taskAccessClause(user) {
-    if (user.permissions.includes('tasks.view.all'))
-        return { clause: '', params: [] };
+    if (user.permissions.includes('tasks.view.all')) {
+        const location = await locationEmployeeClause(user, 'ta_loc.employee_id');
+        if (location.clause === '1 = 1')
+            return { clause: '', params: [] };
+        const creator = await locationEmployeeClause(user, 't.created_by');
+        return {
+            clause: ` AND (${creator.clause} OR EXISTS (SELECT 1 FROM task_assignments ta_loc WHERE ta_loc.task_id = t.id AND ${location.clause}))`,
+            params: [...creator.params, ...location.params],
+        };
+    }
     if (user.permissions.includes('tasks.view.team')) {
         const ids = await subtreeIds(user.id);
         if (ids.length === 0)

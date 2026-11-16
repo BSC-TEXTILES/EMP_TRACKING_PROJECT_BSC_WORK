@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { KpiService } from '../services/KpiService.js';
+import { assertEmployeeAccess } from '../lib/scope.js';
 import { today } from '../lib/dates.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
@@ -54,6 +55,7 @@ kpiRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    await assertEmployeeAccess(user, employeeId, 'kpi');
     res.json({ history: await KpiService.history(employeeId), trend: await KpiService.trendFor(employeeId) });
   }),
 );

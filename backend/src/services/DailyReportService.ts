@@ -2,7 +2,7 @@ import { execute, query, queryOne } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeClause, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { emitToEmployee } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
@@ -63,7 +63,7 @@ function mapReport(r: ReportRow) {
 
 export class DailyReportService {
   private static async scopeClause(user: AuthUser): Promise<{ clause: string; params: unknown[] }> {
-    if (user.permissions.includes('reports.view.all')) return { clause: '1 = 1', params: [] };
+    if (user.permissions.includes('reports.view.all')) return locationEmployeeClause(user, 'r.employee_id');
     if (user.permissions.includes('reports.view.team')) {
       const ids = await subtreeIds(user.id);
       if (ids.length === 0) return { clause: '1 = 0', params: [] };

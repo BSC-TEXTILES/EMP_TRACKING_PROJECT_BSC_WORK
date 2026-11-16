@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS internal_emails (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  sender_id BIGINT UNSIGNED NOT NULL,
+  recipient_id BIGINT UNSIGNED NOT NULL,
+  subject VARCHAR(255) NOT NULL,
+  body MEDIUMTEXT NOT NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  read_at DATETIME(3) NULL,
+  is_starred_by_recipient TINYINT(1) NOT NULL DEFAULT 0,
+  is_starred_by_sender TINYINT(1) NOT NULL DEFAULT 0,
+  is_deleted_by_sender TINYINT(1) NOT NULL DEFAULT 0,
+  is_deleted_by_recipient TINYINT(1) NOT NULL DEFAULT 0,
+  attachments JSON NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  KEY idx_internal_emails_sender (sender_id, is_deleted_by_sender, created_at),
+  KEY idx_internal_emails_recipient (recipient_id, is_deleted_by_recipient, is_read, created_at),
+  CONSTRAINT fk_internal_emails_sender FOREIGN KEY (sender_id) REFERENCES employees (id) ON DELETE CASCADE,
+  CONSTRAINT fk_internal_emails_recipient FOREIGN KEY (recipient_id) REFERENCES employees (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

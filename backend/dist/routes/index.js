@@ -1,7 +1,9 @@
 import { emailSettingsRouter } from './emailSettings.js';
+import { internalEmailsRouter } from './internalEmails.js';
 import { Router } from 'express';
 import { queryOne } from '../db/index.js';
 import { authRouter } from './auth.js';
+import { mfaRouter } from './mfa.js';
 import { meRouter } from './me.js';
 import { attendanceRouter } from './attendance.js';
 import { tasksRouter } from './tasks.js';
@@ -33,6 +35,7 @@ apiRouter.get(['/health', '/ready'], asyncHandler(async (_req, res) => {
     }
 }));
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/mfa', mfaRouter);
 apiRouter.use('/me', meRouter);
 apiRouter.use('/attendance', attendanceRouter);
 apiRouter.use('/tasks', tasksRouter);
@@ -51,5 +54,6 @@ apiRouter.use('/analytics', analyticsRouter);
 apiRouter.use('/admin/email/configuration', emailSettingsRouter);
 apiRouter.use('/admin', adminRouter);
 apiRouter.use('/files', filesRouter);
+apiRouter.use('/emails', internalEmailsRouter);
 apiRouter.use('/exports', exportsRouter);
 //# sourceMappingURL=index.js.map

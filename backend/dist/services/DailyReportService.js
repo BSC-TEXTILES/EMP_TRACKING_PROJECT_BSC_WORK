@@ -2,7 +2,7 @@ import { execute, query, queryOne } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { emitToEmployee } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 function mapReport(r) {
@@ -35,7 +35,7 @@ function mapReport(r) {
 export class DailyReportService {
     static async scopeClause(user) {
         if (user.permissions.includes('reports.view.all'))
-            return { clause: '1 = 1', params: [] };
+            return locationEmployeeClause(user, 'r.employee_id');
         if (user.permissions.includes('reports.view.team')) {
             const ids = await subtreeIds(user.id);
             if (ids.length === 0)

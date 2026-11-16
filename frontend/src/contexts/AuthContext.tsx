@@ -54,10 +54,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('wfm_session_known', '1');
     setUser(nextUser);
     void refresh();
+    void api.post('/activity/auto-start', {
+      machineFingerprint: `browser-${navigator.userAgent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`,
+    }).catch(() => undefined);
   }, [refresh]);
 
   const logout = useCallback(async () => {
     try {
+      await api.post('/activity/auto-stop').catch(() => undefined);
       await api.post('/auth/logout');
     } catch {
       /* clearing client state is enough */
@@ -66,6 +70,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('wfm_session_known');
     window.location.href = '/login';
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    void api.post('/activity/auto-start', {
+      machineFingerprint: `browser-${navigator.userAgent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`,
+    }).catch(() => undefined);
+
+    const timer = window.setInterval(() => {
+      void api.post('/activity/auto-start').catch(() => undefined);
+    }, 60000);
+
+    return () => window.clearInterval(timer);
+  }, [user?.id]);
 
   const has = useCallback(
     (...permissions: string[]) => {

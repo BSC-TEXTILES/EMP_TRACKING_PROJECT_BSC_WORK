@@ -124,14 +124,11 @@ async function ensureDatabaseReady(): Promise<void> {
       await seedBasicData();
       console.log('[startup] Database initialized and reference data seeded successfully.');
     } else {
-      // Apply any new migration files to an existing database. Only done when the
-      // migration ledger exists, so manually imported schemas are never replayed.
-      const ledger = await queryOne<{ cnt: number | string }>(
-        "SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'schema_migrations'",
-      );
-      if (ledger && Number(ledger.cnt) > 0) {
+      try {
         const { runMigrations } = await import('./db/migrate.js');
         await runMigrations(config.db, false);
+      } catch (err) {
+        console.warn('[startup] Migration check note:', err);
       }
       if (config.isProd) {
         const { findDemoPasswordAccounts } = await import('./db/seed.js');

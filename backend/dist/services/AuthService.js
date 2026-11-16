@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { execute, nextSequence, query, queryOne, transaction, txQueryOne } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
-import { generateOtp, hashOtp, hashPassword, passwordIssues, randomToken, sha256, verifyPassword, } from '../lib/crypto.js';
+import { generateOtp, hashOtp, hashPassword, passwordIssues, randomToken, safeEqual, sha256, verifyPassword, } from '../lib/crypto.js';
 import { sendOtpEmail } from '../lib/mailer.js';
 import { sendSms } from '../lib/sms.js';
 import { recordAudit } from '../lib/audit.js';
@@ -162,17 +162,27 @@ export class AuthService {
             }
             throw new ApiError(403, 'This account is inactive. Contact your administrator.', 'account_inactive');
         }
-        const requireOtp = Boolean(employee.mfa_enabled) || (await AuthService.settingEnabled('require_otp_on_login'));
+        const { MfaService } = await import('./MfaService.js');
+        const mfa = await MfaService.methodsFor(Number(employee.id));
+        const requireOtp = mfa.email || mfa.totp || mfa.required || Boolean(employee.mfa_enabled) || (await AuthService.settingEnabled('require_otp_on_login'));
         if (requireOtp) {
-            await AuthService.issueOtp({
-                identifier: employee.email,
-                channel: 'email',
-                purpose: 'login',
-                employeeId: Number(employee.id),
-                recipient: employee.email,
-                name: employee.full_name,
-                ip: input.ip,
-            });
+            // Email codes are offered when email MFA is on, or as the verified-mailbox
+            // fallback when no authenticator is enrolled. TOTP-only accounts never get
+            // an email code, so a compromised mailbox cannot bypass the authenticator.
+            const emailAllowed = mfa.email || !mfa.totp;
+            const channels = [...(mfa.totp ? ['totp'] : []), ...(emailAllowed ? ['email'] : []), ...(mfa.recovery ? ['recovery'] : [])];
+            const preferred = mfa.totp && (mfa.preferred === 'totp' || !mfa.email) ? 'totp' : 'email';
+            if (preferred === 'email') {
+                await AuthService.issueOtp({
+                    identifier: employee.email,
+                    channel: 'email',
+                    purpose: 'login',
+                    employeeId: Number(employee.id),
+                    recipient: employee.email,
+                    name: employee.full_name,
+                    ip: input.ip,
+                });
+            }
             await AuthService.logAttempt({
                 employeeId: Number(employee.id),
                 identifier,
@@ -184,7 +194,9 @@ export class AuthService {
             return {
                 requiresOtp: true,
                 challenge: AuthService.signChallenge(Number(employee.id)),
-                channels: ['email'],
+                channels,
+                preferred,
+                enrollmentRequired: mfa.required && !mfa.email && !mfa.totp,
             };
         }
         const token = await AuthService.createSession(Number(employee.id), input.ip, input.userAgent, Boolean(input.remember));
@@ -223,6 +235,10 @@ export class AuthService {
         const employee = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
         if (!employee || employee.status !== 'active')
             throw ApiError.unauthorized();
+        const { MfaService } = await import('./MfaService.js');
+        const mfa = await MfaService.methodsFor(employeeId);
+        if (mfa.totp && !mfa.email)
+            throw ApiError.badRequest('Use your authenticator app or a recovery code for this account.');
         const result = await AuthService.issueOtp({
             identifier: employee.email,
             channel: 'email',
@@ -234,12 +250,37 @@ export class AuthService {
         });
         return result;
     }
-    static async completeOtpLogin(challenge, code, ip, userAgent, remember = false) {
+    static async completeOtpLogin(challenge, code, ip, userAgent, remember = false, method = 'email') {
         const employeeId = AuthService.verifyChallenge(challenge);
         const employee = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
         if (!employee || employee.status !== 'active')
             throw ApiError.unauthorized();
-        await AuthService.consumeOtp(employee.email, 'login', code);
+        const { MfaService } = await import('./MfaService.js');
+        await MfaService.assertNotThrottled(employeeId);
+        const mfa = await MfaService.methodsFor(employeeId);
+        let verified = false;
+        if (method === 'totp') {
+            verified = await MfaService.verifyTotpCode(employeeId, code);
+        }
+        else if (method === 'recovery') {
+            verified = await MfaService.useRecoveryCode(employeeId, code);
+        }
+        else {
+            if (mfa.totp && !mfa.email)
+                throw ApiError.badRequest('Use your authenticator app or a recovery code for this account.');
+            try {
+                await AuthService.consumeOtp(employee.email, 'login', code);
+                verified = true;
+            }
+            catch (error) {
+                await MfaService.recordAttempt(employeeId, method, false, ip);
+                throw error;
+            }
+        }
+        await MfaService.recordAttempt(employeeId, method, verified, ip);
+        if (!verified) {
+            throw ApiError.badRequest(method === 'recovery' ? 'That recovery code is invalid or has already been used.' : 'Incorrect or expired authenticator code.');
+        }
         const token = await AuthService.createSession(employeeId, ip, userAgent, remember);
         await AuthService.logAttempt({
             employeeId,
@@ -374,6 +415,8 @@ export class AuthService {
             throw ApiError.tooMany('Too many verification codes requested. Try again later.');
         }
         const code = generateOtp();
+        // A new code invalidates every earlier unused code for the same purpose.
+        await execute('UPDATE otp_verifications SET consumed_at = NOW(3) WHERE identifier = ? AND purpose = ? AND consumed_at IS NULL', [identifier, params.purpose]);
         await execute(`INSERT INTO otp_verifications (employee_id, identifier, channel, purpose, code_hash, expires_at, ip)
        VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(3), INTERVAL ? MINUTE), ?)`, [
             params.employeeId ?? null,
@@ -415,17 +458,22 @@ export class AuthService {
                 return 'attempts';
             if (!row.valid)
                 return 'expired';
-            if (hashOtp(normalized, code.trim()) !== row.code_hash) {
+            if (!safeEqual(hashOtp(normalized, code.trim()), row.code_hash)) {
                 await conn.query('UPDATE otp_verifications SET attempts = attempts + 1 WHERE id = ?', [row.id]);
-                return 'incorrect';
+                const remaining = Math.max(0, config.otp.maxAttempts - Number(row.attempts) - 1);
+                return remaining === 0 ? 'attempts' : `incorrect:${remaining}`;
             }
             await conn.query('UPDATE otp_verifications SET consumed_at = NOW(3) WHERE id = ?', [row.id]);
             return null;
         });
         if (failure === 'attempts')
             throw ApiError.tooMany('Too many incorrect attempts. Request a new verification code.');
+        if (failure?.startsWith('incorrect:')) {
+            const remaining = Number(failure.split(':')[1]);
+            throw new ApiError(400, `Incorrect verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`, 'otp_incorrect', { attemptsRemaining: remaining });
+        }
         if (failure)
-            throw ApiError.badRequest(failure === 'expired' ? 'Verification code expired. Request a new one.' : failure === 'incorrect' ? 'Incorrect verification code.' : 'No active verification code. Request a new one.');
+            throw ApiError.badRequest(failure === 'expired' ? 'Verification code expired. Request a new one.' : 'No active verification code. Request a new one.');
     }
     // -------------------------- Registration --------------------------------
     static async register(input) {

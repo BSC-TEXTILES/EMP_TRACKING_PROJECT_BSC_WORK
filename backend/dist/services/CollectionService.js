@@ -2,7 +2,7 @@ import { execute, query, queryOne, transaction, nextSequence } from '../db/index
 import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 const STATUSES = ['pending', 'partial', 'collected', 'cancelled'];
 const APPROVALS = ['pending', 'approved', 'rejected'];
@@ -23,7 +23,7 @@ export class CollectionService {
     /** Returns null for organisation-wide visibility, otherwise an explicit employee id list. */
     static async scope(user) {
         if (user.permissions.includes('collections.view.all'))
-            return null;
+            return locationEmployeeIds(user);
         if (user.permissions.includes('collections.view.team'))
             return subtreeIds(user.id);
         return [user.id];

@@ -2,7 +2,7 @@ import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { daysBetween, today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { AttendanceService } from './AttendanceService.js';
 export class LeaveService {
@@ -84,11 +84,14 @@ export class LeaveService {
         const wantsAll = filters.scope === 'all' && user.permissions.includes('leave.view.all');
         const wantsTeam = filters.scope === 'team' && (user.permissions.includes('leave.view.team') || user.permissions.includes('leave.view.all'));
         if (filters.employeeId) {
+            await assertEmployeeAccess(user, filters.employeeId, 'leave');
             clauses.push('l.employee_id = ?');
             params.push(filters.employeeId);
         }
         else if (wantsAll) {
-            // all leave requests, no extra filter
+            const location = await locationEmployeeClause(user, 'l.employee_id');
+            clauses.push(location.clause);
+            params.push(...location.params);
         }
         else if (wantsTeam) {
             const ids = await subtreeIds(user.id);

@@ -67,6 +67,8 @@ export const PERMISSION_DEFINITIONS = [
     { code: 'activity.policy.manage', module: 'activity', action: 'policy.manage', description: 'Configure monitoring policy and retention' },
     { code: 'roles.manage', module: 'roles', action: 'manage', description: 'Manage roles and permission matrix' },
     { code: 'org.manage', module: 'org', action: 'manage', description: 'Manage departments, designations and locations' },
+    { code: 'locations.view.all', module: 'locations', action: 'view.all', description: 'Access organisation-wide data for every location (All Locations)' },
+    { code: 'mfa.manage', module: 'mfa', action: 'manage', description: 'Reset employee MFA and configure MFA enforcement' },
     { code: 'projects.view', module: 'projects', action: 'view', description: 'View projects' },
     { code: 'projects.create', module: 'projects', action: 'create', description: 'Create projects' },
     { code: 'projects.manage', module: 'projects', action: 'manage', description: 'Manage projects and milestones' },

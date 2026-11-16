@@ -113,6 +113,8 @@ export interface ConversationSummary {
   unread: number;
   muted: boolean;
   otherEmployeeId: number | null;
+  otherMobile?: string | null;
+  otherPhoto?: string | null;
   memberCount: number;
 }
 
@@ -275,6 +277,9 @@ export interface LeaveItem {
 export interface PickerEmployee {
   id: number;
   full_name: string;
+  phone?: string | null;
+  email?: string | null;
+  photo_url?: string | null;
   employee_code?: string;
   designation_title: string | null;
   department_name: string | null;
