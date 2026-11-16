@@ -7,6 +7,7 @@ import { KpiService } from '../services/KpiService.js';
 import { MeetingService } from '../services/MeetingService.js';
 import { TaskService } from '../services/TaskService.js';
 import { TicketService } from '../services/TicketService.js';
+import { ActivityService } from '../services/ActivityService.js';
 import { processEmailQueue } from '../lib/mailer.js';
 
 const running = new Set<string>();
@@ -38,6 +39,17 @@ async function runJob(name: string, task: () => Promise<string>): Promise<void> 
  */
 export function startJobs(): void {
   if (config.isTest) return;
+
+  cron.schedule(
+    '20 3 * * *',
+    () => {
+      void runJob('activity_retention', async () => {
+        const result = await ActivityService.purgeExpired(null, false);
+        return `${result.removed} activity record(s) older than ${result.retentionDays} days removed`;
+      });
+    },
+    { timezone: config.timezone },
+  );
 
   cron.schedule('*/5 * * * *', () => {
     void runJob('overdue_and_sla', async () => {

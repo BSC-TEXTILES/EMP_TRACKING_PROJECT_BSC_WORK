@@ -52,7 +52,7 @@ Feedback also supports provider-defined `tags` and a `note` of at most 2,000 cha
 
 ## Verification
 
-50 tests pass. Coverage includes fresh-database installation with no demo activity, administrator login, business read APIs, organization entry, encrypted configuration, SMTP test/save, OTP logging and concurrency, session rotation and refresh-token reuse detection, ticket persistence, file authorization, collection creation/approval with hierarchy scope, development-login gating and environment validation. SMTP setup tests use mocks and malware-scanner tests use a protocol stub. Type checks and production builds pass. The dependency audit reports zero known vulnerabilities at this verification; this is not a security certification.
+56 tests pass. Coverage includes fresh-database installation with no demo activity, administrator login, business read APIs, organization entry, encrypted configuration, SMTP test/save, OTP logging and concurrency, session rotation and refresh-token reuse detection, ticket persistence, file authorization, collection creation/approval with hierarchy scope, activity monitoring (consent, device registration, session gating, batched ingestion, duplicate rejection, sanitized diagnostics, automatic incident tickets, daily summaries, weekly scoring, monthly reports, timestamp validation, retention dry runs, concurrent employees and permission/device ownership checks), profile photo upload, development-login gating and environment validation. SMTP setup tests use mocks and malware-scanner tests use a protocol stub. Type checks and production builds pass. The dependency audit reports zero known vulnerabilities at this verification; this is not a security certification.
 
 The local setup page was inspected in a browser. Actual provider connectivity, email receipt, deployment TLS, ClamAV, mobile workflows and full enterprise acceptance remain to be verified. See [ENTERPRISE_ACCEPTANCE.md](docs/ENTERPRISE_ACCEPTANCE.md). The complete original specification is not declared finished.
 
@@ -61,6 +61,9 @@ The local setup page was inspected in a browser. Actual provider connectivity, e
 - `.env.production.example`: server settings for website-managed setup.
 - `.env.development`: non-secret development defaults, including the runtime-only test-login panel.
 - Profile photos: `POST /api/me/photo` (multipart, ≤5 MB PNG/JPEG/WebP/GIF); the profile page offers click, drag-and-drop and mobile camera capture with client-side square cropping. Uploaded avatars appear across tasks, chat, projects, meetings and the sidebar.
+- `docs/ACTIVITY_MONITORING.md`: consent-based activity monitoring, agent, browser bridge, incidents and weekly performance.
+- `agent/`: Windows desktop monitoring agent (`npx tsx agent/src/index.ts`, see `agent/README.md`).
+- `browser-extension/`: Manifest V3 approved-domain bridge, loaded unpacked on managed browsers.
 - `docs/COLLECTIONS.md`: collection register, approval workflow, permissions and exports.
 - `docs/ENVIRONMENT.md`: environment files, validation and secret management.
 - `deploy/nginx.conf`: HTTPS/API/WebSocket routing template for emptrack.bsctextiles.in.

@@ -34,6 +34,57 @@ export function AppShell() {
     localStorage.setItem('wfm_sidebar_collapsed', collapsed ? '1' : '0');
   }, [collapsed]);
 
+  // Internal module usage is recorded only while an authorised monitoring session
+  // is active; the API ignores it otherwise and never stores page content.
+  useEffect(() => {
+    if (!user) return;
+    const modules: [RegExp, string][] = [
+      [/^\/tasks/, 'Task Management'],
+      [/^\/reports/, 'Daily Work Report'],
+      [/^\/attendance/, 'Attendance'],
+      [/^\/tickets/, 'Ticket Management'],
+      [/^\/chat/, 'Chat'],
+      [/^\/projects/, 'Project Management'],
+      [/^\/calendar/, 'Calendar'],
+      [/^\/meetings/, 'Meetings'],
+      [/^\/kpi/, 'KPI'],
+      [/^\/analytics/, 'Reports'],
+      [/^\/admin/, 'Administration'],
+      [/^\/organization/, 'Administration'],
+      [/^\/activity/, 'Activity Monitoring'],
+      [/^\/$/, 'Dashboard'],
+    ];
+    const module = modules.find(([pattern]) => pattern.test(location.pathname))?.[1] ?? 'Platform';
+    const startedAt = Date.now();
+    let last = startedAt;
+    const flush = () => {
+      const now = Date.now();
+      const seconds = Math.round((now - last) / 1000);
+      if (seconds < 5) return;
+      last = now;
+      void api
+        .post('/activity/module-activity', {
+          module,
+          pagePath: location.pathname,
+          enteredAt: new Date(startedAt).toISOString(),
+          activeSeconds: seconds,
+        })
+        .catch(() => undefined);
+    };
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') flush();
+    }, 60000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+      flush();
+    };
+  }, [location.pathname, user]);
+
   const nav: { label: string; items: NavItem[] }[] = useMemo(
     () => [
       {
@@ -48,6 +99,7 @@ export function AppShell() {
           { to: '/calendar', label: 'Calendar', icon: 'calendar', show: true },
           { to: '/meetings', label: 'Meetings', icon: 'video', show: true },
           { to: '/kpi', label: 'Performance', icon: 'kpi', show: has('kpi.view.own') },
+          { to: '/activity', label: 'Activity', icon: 'activity', show: canAny('activity.view.own', 'activity.view.team', 'activity.view.all') },
           { to: '/leave', label: 'Leave', icon: 'leave', show: has('leave.apply') },
           { to: '/projects', label: 'Projects', icon: 'project', show: has('projects.view') },
           {

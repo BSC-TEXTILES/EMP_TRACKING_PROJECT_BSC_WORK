@@ -18,6 +18,7 @@ const Calendar = lazy(() => import('./pages/Calendar'));
 const Meetings = lazy(() => import('./pages/Meetings'));
 const MeetingRoom = lazy(() => import('./pages/MeetingRoom'));
 const Kpi = lazy(() => import('./pages/Kpi'));
+const Activity = lazy(() => import('./pages/Activity'));
 const Leave = lazy(() => import('./pages/Leave'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Collections = lazy(() => import('./pages/Collections'));
@@ -103,6 +104,7 @@ export function App() {
           <Route path="meetings" element={<Meetings />} />
           <Route path="meetings/:id/room" element={<MeetingRoom />} />
           <Route path="kpi" element={<Kpi />} />
+          <Route path="activity" element={<Activity />} />
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
           <Route path="collections" element={<Collections />} />

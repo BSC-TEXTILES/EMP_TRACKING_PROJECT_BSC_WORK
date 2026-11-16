@@ -55,7 +55,22 @@ The suite boots the Express app in-process (`NODE_ENV=test` skips the listener a
 - records an audit entry for privileged settings changes and lists it
 - queues, processes and reports a transactional email without exposing credentials
 
-Latest run: `Test Files 5 passed (5)` · `Tests 50 passed (50)` · duration ≈ 18 s.
+Latest run: `Test Files 5 passed (5)` · `Tests 56 passed (56)` · duration ≈ 27 s.
+
+Activity monitoring coverage:
+
+- consent acknowledgement and attendance-gated session start;
+- device registration, one-time token issuance and invalid-token rejection;
+- batched ingestion with approved-app/domain enforcement, blocked password-manager rejection and sanitized diagnostics;
+- idempotent retries (second batch contains duplicates, no double counting);
+- automatic high/recurring incident ticket creation, daily summary submit/review and weekly performance generation;
+- monthly activity report with application, task, summary and weekly-score totals;
+- rejected implausible/future timestamps;
+- process-id persistence on application records;
+- retention cleanup dry run;
+- agent health after a session ends (200 with `sessionId: null`);
+- permission violations (employee cannot open team/admin dashboards), cross-employee device-registration conflicts and two employees monitored concurrently without event mixing.
+- Monitoring is refused for an employee without open attendance.
 
 Added with the Collection and authentication update:
 

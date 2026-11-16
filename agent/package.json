@@ -1,0 +1,10 @@
+{
+  "name": "workforce-monitoring-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Transparent Windows desktop monitoring agent for the Workforce platform",
+  "scripts": {
+    "start": "tsx src/index.ts"
+  }
+}

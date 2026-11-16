@@ -27,6 +27,7 @@ Engine: **MySQL 8.0 (InnoDB)**, database `emp_tracking`. Character set `utf8mb4`
 | Leave | `leave_types`, `leave_balances`, `leave_requests` |
 | Projects | `projects`, `project_members`, `project_milestones` |
 | Collections | `collections` |
+| Activity monitoring | `monitoring_policies`, `employee_activity_consents`, `employee_devices`, `device_registrations`, `monitoring_sessions`, `application_catalog`, `application_usage_logs`, `browser_usage_logs`, `browser_extension_devices`, `internal_module_activity`, `work_activity_events`, `activity_keywords`, `daily_activity_summaries`, `weekly_performance_reports`, `screenshot_evidence`, `system_error_events`, `error_incidents`, `automatic_ticket_links`, `device_health_logs`, `activity_audit_logs` |
 | Notifications | `notifications`, `notification_recipients`, `announcements` |
 | Platform | `files`, `system_settings`, `audit_logs`, `job_runs`, `schema_migrations` |
 
@@ -137,6 +138,8 @@ Migrations are plain `.sql` files applied transactionally in filename order:
 5. `005_session_rotation.sql` — refresh-token history for rotation and reuse detection.
 6–8. Upload scanning state, ticket issue details, OTP redaction hardening.
 9. `009_collections.sql` — collection register, seven permissions and role grants.
+10. `010_activity_monitoring.sql` — devices, sessions, application/browser/module usage, activity summaries, weekly performance, error incidents, automatic ticket links and monitoring audit logs.
+11. `011_activity_process_id.sql` — adds `application_usage_logs.process_id` for desktop process attribution.
 
 Rules: never edit an applied migration; add a new one. Always provide a rollback note in the PR description. Test against a restored copy of production data before deploying.
 

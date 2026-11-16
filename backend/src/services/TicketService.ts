@@ -147,14 +147,14 @@ export class TicketService {
   /** Least-loaded active employee holding ticket resolution rights. */
   private static async autoAssignee(): Promise<number | null> {
     const row = await queryOne<{ id: number }>(
-      `SELECT e.id, COUNT(t.id) AS load
+      `SELECT e.id, COUNT(t.id) AS assignment_load
        FROM employees e
        JOIN role_permissions rp ON rp.role_id = e.role_id
        JOIN permissions p ON p.id = rp.permission_id AND p.code = 'tickets.resolve'
        LEFT JOIN tickets t ON t.assignee_id = e.id AND t.status NOT IN ('resolved','closed','cancelled')
        WHERE e.status = 'active'
        GROUP BY e.id
-       ORDER BY load ASC, e.id ASC
+       ORDER BY assignment_load ASC, e.id ASC
        LIMIT 1`,
     );
     return row ? Number(row.id) : null;

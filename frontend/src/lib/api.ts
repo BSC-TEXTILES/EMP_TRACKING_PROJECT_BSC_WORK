@@ -14,6 +14,25 @@ export class ApiError extends Error {
 const BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/+$/, '');
 const REQUEST_TIMEOUT_MS = 20_000;
 
+const clientFailureReports = new Map<string, number>();
+
+/** Reports sanitized failed platform operations while a monitored session is active. */
+function reportClientFailure(path: string, status: number): void {
+  if (status < 500 || path.startsWith('/activity/client-error')) return;
+  const normalized = path.split('?')[0].replace(/\d+/g, ':id');
+  const now = Date.now();
+  if (now - (clientFailureReports.get(normalized) ?? 0) < 5 * 60 * 1000) return;
+  clientFailureReports.set(normalized, now);
+  const module = normalized.split('/').filter(Boolean)[0] ?? 'Platform';
+  void fetch(`${BASE}/activity/client-error`, {
+    method: 'POST',
+    credentials: 'include',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: normalized, status, module }),
+  }).catch(() => undefined);
+}
+
 let refreshFlight: Promise<void> | null = null;
 let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 let sessionExpired = false;
@@ -101,6 +120,7 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   if (response.status === 401 && !publicAuth) window.dispatchEvent(new CustomEvent('auth:expired'));
 
   if (!response.ok) {
+    reportClientFailure(path, response.status);
     let payload: { error?: string; code?: string; details?: unknown } = {};
     try {
       payload = await response.json();

@@ -229,6 +229,35 @@ All socket connections authenticate with the session cookie; room membership is 
 
 Notifications created by any module also queue a transactional email when SMTP is configured. Chat messages are excluded by design. Delivery is asynchronous and tracked in `email_deliveries`; see `EMAIL.md` and the admin endpoints above. A mail failure never changes the HTTP response of the business action.
 
+## 20. Employee activity (`/activity`)
+
+Session-authenticated unless noted; scopes are enforced server-side (`activity.view.own`, `activity.view.team`, `activity.view.all`, `activity.review`, `activity.devices.manage`, `activity.policy.manage`).
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/activity/policy` | authenticated | Active policy and the caller's consent state |
+| POST | `/activity/consent` · `/activity/consent/revoke` | authenticated | Acknowledge or withdraw; revocation ends active sessions |
+| GET/POST | `/activity/devices` | authenticated | Own devices; registration returns a one-time device token |
+| DELETE | `/activity/devices/:id` | owner / `activity.devices.manage` | Revoke device and end its session |
+| POST | `/activity/sessions/start` · `/sessions/stop` | authenticated | Attendance and consent required; moving devices ends the previous session |
+| GET | `/activity/sessions/current` | authenticated | Active monitored session |
+| POST | `/activity/module-activity` | authenticated | Internal module usage while a session is active (rate-limited) |
+| GET | `/activity/dashboard?date=` | authenticated | Employee dashboard |
+| GET | `/activity/team?date=` · `/activity/admin?date=` | `activity.view.team` / `activity.view.all` | Team and organisation dashboards |
+| GET | `/activity/monthly?month=YYYY-MM` | scoped | Monthly activity report for the caller plus visible employees |
+| GET | `/activity/employee/:id?date=` | scoped | Daily and weekly detail |
+| GET/POST | `/activity/daily`, `/activity/daily/submit`, `/activity/daily/:id/review` | authenticated / `activity.review` | Daily summary, employee submission, manager review |
+| GET/POST | `/activity/weekly`, `/weekly/generate`, `/weekly/:id/review`, `/weekly/:id/feedback` | scoped | Weekly performance workflow |
+| GET | `/activity/errors` | scoped | Sanitized technical incidents |
+| POST | `/activity/errors/:incidentId/ticket` | `activity.review` or `tickets.resolve` | Confirm a suggested incident ticket |
+| POST | `/activity/client-error` | authenticated, active session | Sanitized failed platform operation (`path`, `status`, `module`) |
+| POST | `/activity/retention/purge` | `activity.policy.manage` | `{ dryRun?: boolean }` (defaults to dry run); deletes monitoring data older than the policy window |
+| PUT | `/activity/policy` | `activity.policy.manage` | Update retention, screenshots flag and approved domains; audited |
+| GET | `/activity/audit` | `activity.view.all` / policy manager | Monitoring audit trail |
+| GET | `/activity/catalog` | authenticated | Application catalogue |
+
+Agent endpoints use `X-Device-Token` instead of a session: `POST /activity/agent/heartbeat`, `/agent/events` (batch ≤ 200, idempotent), `/agent/health`, `/agent/extension`.
+
 ## 17. Example
 
 ```http

@@ -35,8 +35,9 @@ export default function Login() {
   const [selectedTest, setSelectedTest] = useState<TestAccount | null>(null);
 
   // Test credentials are supplied by the API at runtime and are never bundled.
-  // The endpoint returns 404 in production, so this panel cannot render there.
+  // The endpoint only exists in development, so production builds never request it.
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     api
       .get<{ enabled: boolean; environment: string; accounts: TestAccount[] }>('/auth/test-accounts')
       .then((result) => {

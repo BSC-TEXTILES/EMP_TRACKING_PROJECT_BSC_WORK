@@ -35,6 +35,7 @@ const PATHS: Record<string, string[]> = {
   filter: ['M3 5h18', 'M6 12h12', 'M10 19h4'],
   refresh: ['M21 12a9 9 0 1 1-3-6.7', 'M21 4v5h-5'],
   camera: ['M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z', 'M12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z'],
+  activity: ['M3 12h4l2.5-7 4 14 2.5-7h5'],
 };
 
 export function Icon({

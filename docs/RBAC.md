@@ -52,6 +52,7 @@ Super Admin can create additional roles and designations, and edit the permissio
 | Settings | `settings.manage` |
 | Tasks | `tasks.view.own`, `tasks.view.team`, `tasks.view.all`, `tasks.create`, `tasks.assign`, `tasks.approve`, `tasks.delete` |
 | Collections | `collections.view.own`, `collections.view.team`, `collections.view.all`, `collections.create`, `collections.edit`, `collections.delete`, `collections.approve` |
+| Activity | `activity.view.own`, `activity.view.team`, `activity.view.all`, `activity.review`, `activity.devices.manage`, `activity.policy.manage` |
 | Tickets | `tickets.view.own`, `tickets.view.team`, `tickets.view.all`, `tickets.create`, `tickets.assign`, `tickets.resolve`, `tickets.manage` |
 
 ## 4. Scope resolution (server)
@@ -90,6 +91,9 @@ else → employee_id = me
 | Collections own / create | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Collections team + approve | — | ✅ | ✅ | view all | ✅ | ✅ | ✅ |
 | Collections delete | — | — | — | — | — | ✅ | ✅ |
+| Activity own | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Activity team + review | — | ✅ | ✅ | view all | ✅ | ✅ | ✅ |
+| Activity devices/policy | — | — | — | — | — | ✅ | ✅ |
 | Ticket assign / resolve | — | — | ✅ | — | ✅ | ✅ | ✅ |
 | Meetings schedule | — | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | KPI own | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |

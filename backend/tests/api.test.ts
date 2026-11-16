@@ -117,6 +117,207 @@ describe('role-based access control and hierarchy scope', () => {
   });
 });
 
+describe('employee activity monitoring', () => {
+  it('runs the consented session, ingestion, daily summary and weekly score workflow', async () => {
+    const { agent, response } = await login('admin@workforce.test');
+    expect(response.status).toBe(200);
+
+    await agent.post('/api/attendance/check-in').send({});
+    const consent = await agent.post('/api/activity/consent').send({});
+    expect(consent.status).toBe(200);
+    expect(consent.body.acknowledged).toBe(true);
+
+    const device = await agent.post('/api/activity/devices').send({
+      deviceName: 'Automated test device',
+      osName: 'Windows',
+      machineFingerprint: 'automated-activity-device-0001',
+    });
+    expect([200, 201]).toContain(device.status);
+    const token = String(device.body.token);
+    expect(token.startsWith('wfm_dev_')).toBe(true);
+
+    const start = await agent.post('/api/activity/sessions/start').send({ deviceId: device.body.deviceId });
+    expect(start.status).toBe(201);
+    expect(start.body.sessionId).toBeTruthy();
+
+    const runId = Date.now().toString(36);
+    const events = [
+      { type: 'app', clientEventId: `test-app-1-${runId}`, appName: 'Visual Studio Code', appCategory: 'Development', processName: 'code.exe', processId: 4242, startedAt: new Date(Date.now() - 15 * 60000).toISOString(), endedAt: new Date().toISOString(), activeSeconds: 900 },
+      { type: 'app', clientEventId: `test-app-2-${runId}`, appName: 'Google Chrome', appCategory: 'Browser', activeSeconds: 600 },
+      { type: 'app', clientEventId: `test-app-blocked-${runId}`, appName: 'KeePass', appCategory: 'Other', activeSeconds: 300 },
+      { type: 'browser', clientEventId: `test-web-1-${runId}`, browser: 'Google Chrome', domain: 'github.com', category: 'Development', activeSeconds: 300 },
+      { type: 'browser', clientEventId: `test-web-blocked-${runId}`, browser: 'Google Chrome', domain: 'example.com', activeSeconds: 120 },
+      { type: 'module', clientEventId: `test-module-1-${runId}`, module: 'Task Management', pagePath: '/tasks', activeSeconds: 120 },
+      { type: 'work', clientEventId: `test-work-1-${runId}`, title: 'Automated worker completed API integration testing' },
+      { type: 'error', clientEventId: `test-error-1-${runId}`, errorCategory: 'Application crash', application: 'Visual Studio Code', errorCode: 'TEST_CRASH', severity: 'medium', description: 'Automated test crash while saving a record', diagnostic: { stack: 'at save (test.js:1)', password: 'never-store' } },
+    ];
+    const ingest = await request(app)
+      .post('/api/activity/agent/events')
+      .set('X-Device-Token', token)
+      .send({ events });
+    expect(ingest.status).toBe(200);
+    expect(ingest.body.accepted).toBeGreaterThanOrEqual(5);
+    expect(ingest.body.rejected).toBeGreaterThanOrEqual(2);
+    const processRow = await queryOne<{ process_id: number }>(
+      "SELECT process_id FROM application_usage_logs WHERE client_event_id = ?",
+      [`test-app-1-${runId}`],
+    );
+    expect(Number(processRow?.process_id)).toBe(4242);
+
+    const repeated = await request(app)
+      .post('/api/activity/agent/events')
+      .set('X-Device-Token', token)
+      .send({ events });
+    expect(repeated.body.accepted).toBe(0);
+    expect(repeated.body.duplicates).toBeGreaterThanOrEqual(5);
+
+    const denied = await request(app).post('/api/activity/agent/events').set('X-Device-Token', 'wfm_dev_invalid').send({ events });
+    expect(denied.status).toBe(401);
+
+    const dashboard = await agent.get('/api/activity/dashboard');
+    expect(dashboard.status).toBe(200);
+    expect(dashboard.body.session).toBeTruthy();
+    expect(dashboard.body.daily.activeMinutes).toBeGreaterThanOrEqual(20);
+    expect(dashboard.body.daily.appBreakdown.some((item: { app: string }) => item.app === 'Visual Studio Code')).toBe(true);
+    expect(dashboard.body.daily.keyActivities.length).toBeGreaterThan(0);
+
+    const errors = await agent.get('/api/activity/errors');
+    expect(errors.status).toBe(200);
+    const incident = errors.body.errors.find((row: { errorCode: string }) => row.errorCode === 'TEST_CRASH');
+    expect(incident).toBeTruthy();
+    const ticket = await agent.post(`/api/activity/errors/${incident.incidentId}/ticket`).send({});
+    expect(ticket.status).toBe(201);
+    expect(ticket.body.ticketId).toBeTruthy();
+
+    const weekly = await agent.post('/api/activity/weekly/generate').send({});
+    expect(weekly.status).toBe(200);
+    expect(weekly.body.status).toBe('preliminary');
+    expect(weekly.body.metrics.applicationUsageNote).toContain('contextual');
+
+    const month = new Date().toISOString().slice(0, 7);
+    const monthly = await agent.get(`/api/activity/monthly?month=${month}`);
+    expect(monthly.status).toBe(200);
+    expect(monthly.body.self.totals.activeMinutes).toBeGreaterThanOrEqual(20);
+    expect(monthly.body.self.totals.tasksCompleted).toBeGreaterThanOrEqual(0);
+    expect(monthly.body.self.applications.some((item: { app: string }) => item.app === 'Visual Studio Code')).toBe(true);
+    expect(Array.isArray(monthly.body.team?.employees)).toBe(true);
+
+    const retention = await agent.post('/api/activity/retention/purge').send({ dryRun: true });
+    expect(retention.status).toBe(200);
+    expect(retention.body.dryRun).toBe(true);
+    expect(retention.body.retentionDays).toBeGreaterThanOrEqual(1);
+
+    const future = await request(app)
+      .post('/api/activity/agent/events')
+      .set('X-Device-Token', token)
+      .send({ events: [{ type: 'app', clientEventId: `future-${runId}`, appName: 'Visual Studio Code', activeSeconds: 60, startedAt: '2099-01-01T00:00:00.000Z' }] });
+    expect(future.status).toBe(200);
+    expect(future.body.rejected).toBeGreaterThanOrEqual(1);
+
+    const daily = await agent.post('/api/activity/daily/submit').send({ notes: 'Automated verification notes' });
+    expect(daily.status).toBe(200);
+    expect(daily.body.status).toBe('submitted');
+    const review = await agent.post(`/api/activity/daily/${daily.body.id}/review`).send({ decision: 'approved', note: 'Verified' });
+    expect(review.status).toBe(200);
+    expect(review.body.status).toBe('approved');
+
+    const stop = await agent.post('/api/activity/sessions/stop').send({});
+    expect(stop.status).toBe(200);
+
+    const offlineHealth = await request(app)
+      .post('/api/activity/agent/health')
+      .set('X-Device-Token', token)
+      .send({ cpuPercent: 10, memoryPercent: 40, diskFreeMb: 50000 });
+    expect(offlineHealth.status).toBe(200);
+    expect(offlineHealth.body.sessionId).toBeNull();
+  });
+
+  it('monitors two employees concurrently without mixing their events', async () => {
+    const ananya = await queryOne<{ id: number }>(
+      "SELECT id FROM employees WHERE email = 'ananya.rao@workforce.test'",
+    );
+    expect(ananya?.id).toBeTruthy();
+    const existingAttendance = await queryOne<{ id: number }>(
+      'SELECT id FROM attendance WHERE employee_id = ? AND work_date = CURDATE()',
+      [ananya!.id],
+    );
+    if (!existingAttendance) {
+      await execute(
+        "INSERT INTO attendance (employee_id, work_date, check_in_at, status, source) VALUES (?, CURDATE(), NOW(3), 'present', 'test')",
+        [ananya!.id],
+      );
+    }
+    try {
+      const employee = await login('ananya.rao@workforce.test');
+      await employee.agent.post('/api/activity/consent').send({});
+      const employeeDevice = await employee.agent.post('/api/activity/devices').send({
+        deviceName: 'Concurrent employee device', osName: 'Windows', machineFingerprint: 'concurrent-employee-device-0001',
+      });
+      const employeeStart = await employee.agent.post('/api/activity/sessions/start').send({ deviceId: employeeDevice.body.deviceId });
+      expect([200, 201]).toContain(employeeStart.status);
+
+      const admin = await login('admin@workforce.test');
+      const adminDevice = await admin.agent.post('/api/activity/devices').send({
+        deviceName: 'Concurrent admin device', osName: 'Windows', machineFingerprint: 'concurrent-admin-device-0001',
+      });
+      const adminStart = await admin.agent.post('/api/activity/sessions/start').send({ deviceId: adminDevice.body.deviceId });
+      expect([200, 201]).toContain(adminStart.status);
+
+      const runId = Date.now().toString(36);
+      const [employeeIngest, adminIngest] = await Promise.all([
+        request(app).post('/api/activity/agent/events').set('X-Device-Token', String(employeeDevice.body.token)).send({
+          events: [{ type: 'app', clientEventId: `concurrent-employee-${runId}`, appName: 'Visual Studio Code', appCategory: 'Development', activeSeconds: 300 }],
+        }),
+        request(app).post('/api/activity/agent/events').set('X-Device-Token', String(adminDevice.body.token)).send({
+          events: [{ type: 'app', clientEventId: `concurrent-admin-${runId}`, appName: 'Visual Studio Code', appCategory: 'Development', activeSeconds: 300 }],
+        }),
+      ]);
+      expect(employeeIngest.body.accepted).toBe(1);
+      expect(adminIngest.body.accepted).toBe(1);
+
+      const employeeDashboard = await employee.agent.get('/api/activity/dashboard');
+      const adminDashboard = await admin.agent.get('/api/activity/dashboard');
+      expect(employeeDashboard.body.session.id).not.toBe(adminDashboard.body.session.id);
+      expect(employeeDashboard.body.daily.appBreakdown.some((row: { app: string }) => row.app === 'Visual Studio Code')).toBe(true);
+      expect(adminDashboard.body.daily.appBreakdown.some((row: { app: string }) => row.app === 'Google Chrome')).toBe(true);
+
+      await employee.agent.post('/api/activity/sessions/stop').send({});
+      await admin.agent.post('/api/activity/sessions/stop').send({});
+    } finally {
+      if (!existingAttendance) {
+        await execute('DELETE FROM attendance WHERE employee_id = ? AND work_date = CURDATE()', [ananya!.id]);
+      }
+    }
+  });
+
+  it('enforces activity permissions and device ownership', async () => {
+    const employee = await login('ananya.rao@workforce.test');
+    const team = await employee.agent.get('/api/activity/team');
+    expect(team.status).toBe(403);
+    const organisation = await employee.agent.get('/api/activity/admin');
+    expect(organisation.status).toBe(403);
+    const collision = await employee.agent.post('/api/activity/devices').send({
+      deviceName: 'Conflicting device',
+      osName: 'Windows',
+      machineFingerprint: 'automated-activity-device-0001',
+    });
+    expect(collision.status).toBe(409);
+  });
+
+  it('blocks monitoring when attendance has not started', async () => {
+    const { agent } = await login('ananya.rao@workforce.test');
+    const consent = await agent.post('/api/activity/consent').send({});
+    expect(consent.status).toBe(200);
+    const device = await agent.post('/api/activity/devices').send({
+      deviceName: 'Unattended device',
+      osName: 'Windows',
+      machineFingerprint: 'automated-activity-device-0002',
+    });
+    const start = await agent.post('/api/activity/sessions/start').send({ deviceId: device.body.deviceId });
+    expect([400, 409]).toContain(start.status);
+  });
+});
+
 describe('profile photo upload', () => {
   const png = Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',

@@ -12,6 +12,11 @@ node_modules/
 !frontend/.env.development
 backend/.env
 frontend/.env
+
+# Desktop agent runtime state (encrypted queue and device tokens)
+agent-data/
+monitor-device.json
+
 backend/.env.*
 !backend/.env.example
 storage/
@@ -42,3 +47,6 @@ setup-code
 /t.txt
 /task.json
 /.freebuff/
+
+agent-data*/
+agent-smoke.log

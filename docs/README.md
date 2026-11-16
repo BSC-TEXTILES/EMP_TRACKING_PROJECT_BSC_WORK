@@ -14,6 +14,7 @@
 | [TESTING.md](TESTING.md) | Test strategy, automated suite, manual QA matrix, results |
 | [MOBILE_APP.md](MOBILE_APP.md) | PWA architecture, install, offline behaviour, notifications |
 | [EMAIL.md](EMAIL.md) | SMTP configuration, templates, queue, retries, admin page |
+| [ACTIVITY_MONITORING.md](ACTIVITY_MONITORING.md) | Consent-based activity monitoring, desktop agent, browser bridge, incidents and weekly performance |
 | [COLLECTIONS.md](COLLECTIONS.md) | Collection register, workflow, permissions, API and exports |
 | [ENVIRONMENT.md](ENVIRONMENT.md) | Environment files, variable groups, validation and secret management |
 | [JWT_SESSION_MANAGEMENT.md](JWT_SESSION_MANAGEMENT.md) | Access/refresh tokens, rotation, reuse detection, client renewal |
