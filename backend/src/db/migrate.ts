@@ -1,24 +1,35 @@
 import mysql from 'mysql2/promise';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from '../config.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const migrationsDir = path.resolve(here, '../../../database/migrations');
+const migrationCandidates = [
+  path.resolve(here, '../../../database/migrations'),
+  path.resolve(process.cwd(), 'database/migrations'),
+  path.resolve(here, '../../database/migrations'),
+];
+const migrationsDir = migrationCandidates.find((d) => fsSync.existsSync(d)) || migrationCandidates[0];
 
 async function ensureDatabase(): Promise<void> {
-  const root = await mysql.createConnection({
-    host: config.db.host,
-    port: config.db.port,
-    user: config.db.user,
-    password: config.db.password,
-    multipleStatements: true,
-  });
-  await root.query(
-    `CREATE DATABASE IF NOT EXISTS \`${config.db.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
-  );
-  await root.end();
+  try {
+    const root = await mysql.createConnection({
+      host: config.db.host,
+      port: config.db.port,
+      user: config.db.user,
+      password: config.db.password,
+      multipleStatements: true,
+    });
+    await root.query(
+      `CREATE DATABASE IF NOT EXISTS \`${config.db.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`,
+    );
+    await root.end();
+  } catch {
+    // On shared/cloud hosting, CREATE DATABASE is often restricted; proceed with existing DB.
+    console.warn('[migrate] Note: CREATE DATABASE skipped or not permitted; continuing with existing database.');
+  }
 }
 
 /**
@@ -67,7 +78,10 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
   }
 }
 
-const isDirectRun = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('db/migrate.ts');
+const isDirectRun = process.argv[1] && (
+  process.argv[1].replace(/\\/g, '/').endsWith('db/migrate.ts') ||
+  process.argv[1].replace(/\\/g, '/').endsWith('db/migrate.js')
+);
 if (isDirectRun) {
   runMigrations()
     .then(() => process.exit(0))

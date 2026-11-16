@@ -111,6 +111,32 @@ export function createApp() {
   return app;
 }
 
+async function ensureDatabaseReady(): Promise<void> {
+  try {
+    const table = await queryOne<{ cnt: number | string }>(
+      "SELECT COUNT(*) AS cnt FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'employees'",
+    );
+    if (!table || Number(table.cnt) === 0) {
+      console.log('[startup] Database tables not found. Automatically running migrations and seeding reference data...');
+      const { runMigrations } = await import('./db/migrate.js');
+      await runMigrations(config.db, false);
+      const { seedBasicData } = await import('./db/seed.js');
+      await seedBasicData();
+      console.log('[startup] Database initialized and reference data seeded successfully.');
+    } else {
+      const empCount = await queryOne<{ cnt: number | string }>('SELECT COUNT(*) AS cnt FROM employees');
+      if (!empCount || Number(empCount.cnt) === 0) {
+        console.log('[startup] Employees table empty. Seeding initial accounts...');
+        const { seedBasicData } = await import('./db/seed.js');
+        await seedBasicData();
+        console.log('[startup] Initial accounts seeded successfully.');
+      }
+    }
+  } catch (err) {
+    console.error('[startup] Could not verify/initialize database schema:', err);
+  }
+}
+
 async function main(): Promise<void> {
   process.on('unhandledRejection', (reason) => console.error('[process] unhandled promise rejection', reason));
   try {
@@ -135,6 +161,7 @@ async function main(): Promise<void> {
   } else {
     try {
       await queryOne('SELECT 1 AS ok');
+      void ensureDatabaseReady();
       startJobs();
     } catch (err) {
       console.error('[startup] MySQL is currently unavailable. Server will continue running and retry connection.', err);
@@ -143,6 +170,7 @@ async function main(): Promise<void> {
           await queryOne('SELECT 1 AS ok');
           clearInterval(interval);
           console.log('[startup] MySQL connection established. Background jobs started.');
+          void ensureDatabaseReady();
           startJobs();
         } catch {
           // retry in background
@@ -171,6 +199,10 @@ async function main(): Promise<void> {
   const rawPort = process.env.PORT;
   const isPassenger = rawPort === 'passenger' || (typeof rawPort === 'string' && (rawPort.startsWith('/') || rawPort.startsWith('\\\\.\\pipe\\')));
 
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    console.error('[server] HTTP server listen error:', err);
+  });
+
   if (isPassenger && rawPort) {
     server.listen(rawPort, () => {
       console.log(`\n  ${config.appName} API ready under Passenger socket: ${rawPort}`);
@@ -178,7 +210,7 @@ async function main(): Promise<void> {
     });
   } else {
     const PORT = Number(process.env.PORT) || config.port || 3000;
-    server.listen(PORT, () => {
+    server.listen(PORT, '0.0.0.0', () => {
       console.log(`\n  ${config.appName} API ready on port ${PORT}`);
       console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
       console.log(`  Health: /api/health\n`);

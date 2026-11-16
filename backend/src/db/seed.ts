@@ -890,6 +890,14 @@ async function seedTransactionalData(ids: Map<string, number>): Promise<boolean>
   return true;
 }
 
+export async function seedBasicData(): Promise<void> {
+  console.log('[seed] Seeding reference data (roles, permissions, departments, etc.)...');
+  await seedReferenceData();
+  console.log('[seed] Seeding initial employee accounts (EMP-1001, etc.)...');
+  await seedEmployees();
+  console.log('[seed] Reference data and initial employee accounts seeded successfully.');
+}
+
 async function main(): Promise<void> {
   if (config.isProd || !process.argv.includes('--demo')) throw new Error('Sample data is disabled. Use the website setup for live data. Explicit --demo is required on a disposable development database.');
   const started = Date.now();
@@ -926,8 +934,16 @@ async function main(): Promise<void> {
   await pool.end();
 }
 
-main().catch(async (error) => {
-  console.error('[seed] failed', error);
-  await pool.end().catch(() => undefined);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1] && (
+  process.argv[1].replace(/\\/g, '/').endsWith('db/seed.ts') ||
+  process.argv[1].replace(/\\/g, '/').endsWith('db/seed.js')
+);
+
+if (isDirectRun) {
+  main().catch(async (error) => {
+    console.error('[seed] failed', error);
+    await pool.end().catch(() => undefined);
+    process.exit(1);
+  });
+}
+
