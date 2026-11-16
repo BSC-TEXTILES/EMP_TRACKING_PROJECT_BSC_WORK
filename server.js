@@ -16,13 +16,12 @@ process.on('unhandledRejection', (reason) => {
   console.error('[server] Unhandled rejection:', reason);
 });
 
-try {
-  const entry = new URL('./backend/dist/index.js', import.meta.url);
-  if (!fs.existsSync(entry)) {
-    throw new Error('backend/dist/index.js not found on server disk.');
-  }
-  await import(entry.href);
-} catch (startupError) {
+const entry = new URL('./backend/dist/index.js', import.meta.url);
+if (!fs.existsSync(entry)) {
+  console.error('[server] Fatal: backend/dist/index.js not found on server disk.');
+}
+
+import(entry.href).catch((startupError) => {
   const errMessage = startupError?.stack || String(startupError);
   console.error('[server] Fatal backend startup error:\n', errMessage);
   
@@ -68,4 +67,4 @@ try {
   } catch (listenError) {
     console.error('[server] Could not start diagnostic server:', listenError);
   }
-}
+});
