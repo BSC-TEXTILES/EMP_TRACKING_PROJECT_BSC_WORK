@@ -607,6 +607,9 @@ export class AuthService {
       delivered = await sendSms(params.recipient, `${config.appName} ${params.purpose.replace(/_/g, ' ')} code: ${code}. Valid for ${config.otp.expiryMinutes} minutes.`);
     }
 
+    if (!delivered && !config.isProd) {
+      return { delivered: false, devCode: code };
+    }
     if (!delivered) throw new ApiError(503, 'Verification delivery is unavailable. Contact your administrator.', 'delivery_unavailable');
     return { delivered: true };
   }

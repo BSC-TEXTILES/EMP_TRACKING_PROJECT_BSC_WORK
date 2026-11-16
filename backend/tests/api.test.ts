@@ -5,6 +5,7 @@ import { createApp } from '../src/index.js';
 import { execute, query, queryOne, closePool } from '../src/db/index.js';
 import { enqueueEmail, processEmailQueue } from '../src/lib/mailer.js';
 import { today } from '../src/lib/dates.js';
+import { AuthService } from '../src/services/AuthService.js';
 
 let app: Express;
 
@@ -44,6 +45,12 @@ describe('authentication & session security', () => {
       .send({ identifier: 'admin@workforce.test', password: 'wrong-password' });
     expect(bad.status).toBe(401);
     expect(String(bad.body.error)).not.toMatch(/employee|account|user/i);
+  });
+
+  it('returns a development OTP code when delivery is not configured', async () => {
+    const result = await AuthService.requestPasswordReset('admin@workforce.test', '127.0.0.1');
+    expect(result.delivered).toBe(false);
+    expect(result.devCode).toMatch(/^\d{6}$/);
   });
 
   it('rejects state-changing requests from a foreign origin', async () => {
