@@ -102,6 +102,10 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
     if (payload.code === 'setup_required' && window.location.pathname !== '/setup') window.location.replace('/setup');
   }
   if (response.status === 401 && !publicAuth && !retried) {
+    if (!localStorage.getItem('wfm_session_known')) {
+      window.dispatchEvent(new CustomEvent('auth:expired'));
+      throw new ApiError(401, 'Please sign in.', 'unauthorized');
+    }
     localStorage.removeItem('wfm_access_expiry');
     await renewSession();
     return request<T>(path, options, true);

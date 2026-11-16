@@ -22,12 +22,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [unreadNotifications, setUnreadNotifications] = useState(0);
 
   const refresh = useCallback(async () => {
+    if (!localStorage.getItem('wfm_session_known')) {
+      setUser(null);
+      return;
+    }
     try {
       const result = await api.get<{ user: CurrentUser; unreadNotifications: number }>('/auth/me');
       localStorage.setItem('wfm_session_known', '1');
       setUser(result.user);
       setUnreadNotifications(result.unreadNotifications);
     } catch {
+      localStorage.removeItem('wfm_session_known');
       setUser(null);
     }
   }, []);

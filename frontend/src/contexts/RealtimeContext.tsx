@@ -58,7 +58,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const socketUrl = import.meta.env.VITE_WEBSOCKET_URL || undefined;
     const socket = io(socketUrl, {
       withCredentials: true,
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       reconnection: true,
       reconnectionDelay: 800,
       reconnectionDelayMax: 8000,
