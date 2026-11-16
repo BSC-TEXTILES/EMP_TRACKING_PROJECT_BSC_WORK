@@ -1210,20 +1210,20 @@ export class ActivityService {
     try {
       const todayStr = new Date().toISOString().slice(0, 10);
       // 1. Ensure attendance is checked in for today
-      const att = await query<{ id: number; check_in: string | null }>(
-        'SELECT id, check_in FROM employee_attendance WHERE employee_id = ? AND date = ?',
+      const att = await query<{ id: number; check_in_at: string | null }>(
+        'SELECT id, check_in_at FROM attendance WHERE employee_id = ? AND work_date = ?',
         [user.id, todayStr],
       );
       if (!att || att.length === 0) {
         await execute(
-          'INSERT INTO employee_attendance (employee_id, date, check_in, status) VALUES (?, ?, NOW(3), ?)',
+          'INSERT INTO attendance (employee_id, work_date, check_in_at, status) VALUES (?, ?, NOW(3), ?)',
           [user.id, todayStr, 'present'],
         );
       }
 
       // 2. Ensure policy consent
       await execute(
-        'INSERT INTO employee_monitoring_consent (employee_id, version, acknowledged_at) VALUES (?, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))',
+        'INSERT INTO employee_activity_consents (employee_id, policy_id, policy_version, acknowledged_at) VALUES (?, 1, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))',
         [user.id],
       );
 
@@ -1270,10 +1270,10 @@ export class ActivityService {
 
       // 2. Update attendance check_out
       await execute(
-        `UPDATE employee_attendance
-         SET check_out = NOW(3),
-             total_hours = ROUND(GREATEST(0, TIMESTAMPDIFF(SECOND, check_in, NOW(3))) / 3600, 2)
-         WHERE employee_id = ? AND date = ? AND check_out IS NULL`,
+        `UPDATE attendance
+         SET check_out_at = NOW(3),
+             total_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)))
+         WHERE employee_id = ? AND work_date = ? AND check_out_at IS NULL`,
         [employeeId, todayStr],
       );
       return { stopped: true };
