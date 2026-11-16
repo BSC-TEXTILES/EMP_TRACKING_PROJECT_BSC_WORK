@@ -23,6 +23,10 @@ const isProdEnv = process.env.NODE_ENV === 'production';
 // Primary environment file:
 if (process.env.NODE_ENV === 'production') {
   if (fs.existsSync(productionFile)) dotenv.config({ path: productionFile });
+} else if (process.env.NODE_ENV === 'test') {
+  // Tests read only their own file so they can never inherit live credentials.
+  const testFile = path.resolve(here, '../.env.test');
+  if (fs.existsSync(testFile)) dotenv.config({ path: testFile });
 } else {
   if (fs.existsSync(localFile)) dotenv.config({ path: localFile });
   if (fs.existsSync(path.join(rootDir, '.env.development'))) {
@@ -30,10 +34,10 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
-// Fallback environment files (for values not yet set):
+// Fallback environment files (for values not yet set). The production file is
+// never used as a fallback: a development or test run must not reach live data.
 dotenv.config({ path: path.resolve(here, '../.env') });
 dotenv.config({ path: path.join(rootDir, '.env') });
-if (fs.existsSync(productionFile)) dotenv.config({ path: productionFile });
 
 /** Parses mysql://user:pass@host:port/database when DATABASE_URL is provided. */
 function parseDatabaseUrl(raw: string | undefined): { host: string; port: number; user: string; password: string; database: string } | null {
@@ -104,7 +108,13 @@ const isProd = process.env.NODE_ENV === 'production';
 // Ordinary tests must not pick up website-managed production credentials.
 const websiteSettings = process.env.NODE_ENV === 'test' && !process.env.WORKFORCE_CONFIG_DIR ? {} : configStore.read();
 const webSetupEnabled = process.env.WEB_SETUP_ENABLED === 'true';
-const dbUrl = parseDatabaseUrl(process.env.DATABASE_URL);
+// Tests use a dedicated database only: TEST_DATABASE_URL (backend/.env.test).
+// The database name must contain "test" so the suite can never write to real data.
+const testDbUrl = process.env.NODE_ENV === 'test' ? parseDatabaseUrl(process.env.TEST_DATABASE_URL) : null;
+if (process.env.NODE_ENV === 'test' && (!testDbUrl || !/test/i.test(testDbUrl.database))) {
+  throw new Error('Tests require TEST_DATABASE_URL=mysql://user:pass@host:3306/<name containing "test"> (set it in backend/.env.test). Refusing to run against a non-test database.');
+}
+const dbUrl = testDbUrl ?? parseDatabaseUrl(process.env.DATABASE_URL);
 const appUrl = (process.env.APP_URL ?? process.env.FRONTEND_URL ?? process.env.APP_ORIGIN ?? 'http://localhost:5173').replace(/\/+$/, '');
 const configuredOrigins = (process.env.APP_ORIGIN ?? '')
   .split(',')

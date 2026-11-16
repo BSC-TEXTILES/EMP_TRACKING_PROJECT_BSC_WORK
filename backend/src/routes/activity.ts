@@ -42,6 +42,15 @@ activityRouter.post(
   }),
 );
 
+activityRouter.get(
+  '/agent/config',
+  rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'agent-config' }),
+  requireDevice,
+  asyncHandler(async (req: AgentRequest, res) => {
+    res.json(await ActivityService.agentConfig(req.device!));
+  }),
+);
+
 activityRouter.post(
   '/agent/extension',
   requireDevice,
@@ -254,7 +263,7 @@ activityRouter.post(
   '/daily/submit',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    res.json(await ActivityAnalyticsService.submitDaily(user, dateParam(req.body?.date), String(req.body?.notes ?? '')));
+    res.json(await ActivityAnalyticsService.submitDaily(user, dateParam(req.body?.date), String(req.body?.notes ?? ''), req.body?.keyActivities));
   }),
 );
 
@@ -315,10 +324,25 @@ activityRouter.post(
   '/errors/:incidentId/ticket',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    if (!user.permissions.includes('activity.review') && !user.permissions.includes('tickets.resolve') && !user.permissions.includes('activity.view.all')) {
-      throw ApiError.forbidden('You cannot confirm automatic tickets.');
+    const privileged = user.permissions.includes('activity.review') || user.permissions.includes('tickets.resolve') || user.permissions.includes('activity.view.all');
+    if (!privileged) {
+      // Employees may confirm suggested tickets for incidents they experienced.
+      const { queryOne } = await import('../db/index.js');
+      const own = await queryOne<{ id: number }>('SELECT id FROM system_error_events WHERE incident_id = ? AND employee_id = ? LIMIT 1', [intParam(req.params.incidentId), user.id]);
+      if (!own) throw ApiError.forbidden('You cannot confirm automatic tickets.');
     }
-    res.status(201).json(await ActivityService.createIncidentTicket(intParam(req.params.incidentId)));
+    res.status(201).json(await ActivityService.createIncidentTicket(intParam(req.params.incidentId), 'manual_confirmation'));
+  }),
+);
+
+activityRouter.post(
+  '/errors/:incidentId/dismiss',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    if (!user.permissions.includes('activity.review') && !user.permissions.includes('tickets.resolve') && !user.permissions.includes('activity.view.all')) {
+      throw ApiError.forbidden('You cannot dismiss incidents.');
+    }
+    res.json(await ActivityService.dismissIncident(user, intParam(req.params.incidentId)));
   }),
 );
 
@@ -358,8 +382,73 @@ activityRouter.get(
 activityRouter.get(
   '/catalog',
   asyncHandler(async (_req, res) => {
-    const { query } = await import('../db/index.js');
-    const rows = await query<Record<string, unknown>>('SELECT * FROM application_catalog ORDER BY category, name');
-    res.json({ applications: rows });
+    res.json({ applications: await ActivityService.catalog() });
+  }),
+);
+
+activityRouter.put(
+  '/catalog',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const status = ['approved', 'blocked', 'unapproved'].includes(req.body?.status) ? req.body.status : 'approved';
+    res.json({
+      applications: await ActivityService.upsertCatalogApp(currentUser(req), {
+        name: String(req.body?.name ?? ''),
+        processPattern: String(req.body?.processPattern ?? ''),
+        category: String(req.body?.category ?? 'Other'),
+        status,
+      }),
+    });
+  }),
+);
+
+activityRouter.get(
+  '/timeline',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const employeeId = req.query.employeeId ? Number(req.query.employeeId) : user.id;
+    res.json({ segments: await ActivityAnalyticsService.timeline(user, employeeId, dateParam(req.query.date)) });
+  }),
+);
+
+activityRouter.get(
+  '/corrections',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ corrections: await ActivityService.listCorrections(currentUser(req), typeof req.query.status === 'string' ? req.query.status : undefined) });
+  }),
+);
+
+activityRouter.post(
+  '/corrections',
+  rateLimit({ windowMs: 60000, max: 20, keyPrefix: 'activity-corrections' }),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.status(201).json(await ActivityService.requestCorrection(currentUser(req), {
+      recordType: String(req.body?.recordType ?? ''),
+      recordId: Number(req.body?.recordId),
+      action: String(req.body?.action ?? 'exclude'),
+      category: req.body?.category ? String(req.body.category) : undefined,
+      reason: String(req.body?.reason ?? ''),
+    }));
+  }),
+);
+
+activityRouter.post(
+  '/corrections/:id/review',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const decision = req.body?.decision === 'rejected' ? 'rejected' : 'approved';
+    res.json(await ActivityService.reviewCorrection(currentUser(req), intParam(req.params.id), decision, String(req.body?.note ?? '')));
+  }),
+);
+
+activityRouter.get(
+  '/access-history',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ entries: await ActivityService.accessHistory(currentUser(req)) });
+  }),
+);
+
+activityRouter.get(
+  '/devices/all',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ devices: await ActivityService.allDevices(currentUser(req)) });
   }),
 );

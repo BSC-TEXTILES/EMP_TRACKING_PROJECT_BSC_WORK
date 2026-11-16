@@ -264,7 +264,9 @@ export class ActivityService {
       [fingerprint],
     );
     if (existing && Number(existing.employee_id) !== user.id) {
-      throw ApiError.conflict('This device is already registered to another employee.');
+      // Reassign device to the currently signed-in user on this workstation
+      await execute('UPDATE employee_devices SET employee_id = ? WHERE id = ?', [user.id, existing.id]);
+      await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [existing.id]);
     }
     let deviceId: number;
     if (existing) {

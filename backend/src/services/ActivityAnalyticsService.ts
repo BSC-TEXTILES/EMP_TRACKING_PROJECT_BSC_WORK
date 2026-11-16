@@ -434,11 +434,22 @@ export class ActivityAnalyticsService {
     const row = await queryOne<Record<string, unknown>>('SELECT * FROM daily_activity_summaries WHERE id = ?', [id]);
     if (!row) throw ApiError.notFound('Summary not found');
     await ActivityAnalyticsService.assertAccess(user, Number(row.employee_id));
+    if (Number(row.employee_id) === user.id) throw ApiError.forbidden('You cannot review your own daily summary.');
+    if (row.status !== 'submitted') throw ApiError.badRequest('Only submitted summaries can be reviewed.');
     await execute(
       'UPDATE daily_activity_summaries SET status = ?, reviewed_by = ?, reviewed_at = NOW(3), manager_note = ? WHERE id = ?',
       [decision, user.id, cleanText(note, 500) || null, id],
     );
     await ActivityService.audit(user.id, `activity.daily_${decision}`, Number(row.employee_id), 'daily_activity_summary', id, { note });
+    await NotificationService.notify({
+      employeeIds: [Number(row.employee_id)],
+      type: 'activity_daily',
+      title: decision === 'approved' ? 'Daily activity summary approved' : 'Daily activity summary returned',
+      body: cleanText(note, 300) || `Summary for ${String(row.summary_date)}`,
+      link: '/activity',
+      actorId: user.id,
+      priority: decision === 'returned' ? 'high' : 'normal',
+    });
     const stored = await queryOne<Record<string, unknown>>('SELECT * FROM daily_activity_summaries WHERE id = ?', [id]);
     return ActivityAnalyticsService.mapDaily(stored);
   }
@@ -663,6 +674,7 @@ export class ActivityAnalyticsService {
     const row = await queryOne<Record<string, unknown>>('SELECT * FROM weekly_performance_reports WHERE id = ?', [id]);
     if (!row) throw ApiError.notFound('Weekly report not found');
     await ActivityAnalyticsService.assertAccess(user, Number(row.employee_id));
+    if (Number(row.employee_id) === user.id && !user.permissions.includes('activity.view.all')) throw ApiError.forbidden('You cannot review your own weekly performance.');
     const finalize = Boolean(input.finalize);
     await execute(
       `UPDATE weekly_performance_reports SET manager_remarks = COALESCE(?, manager_remarks),
@@ -670,6 +682,16 @@ export class ActivityAnalyticsService {
       [cleanText(input.managerRemarks, 1000) || null, finalize ? 1 : 0, user.id, id],
     );
     await ActivityService.audit(user.id, finalize ? 'activity.weekly_finalized' : 'activity.weekly_reviewed', Number(row.employee_id), 'weekly_performance_report', id, { finalize });
+    if (Number(row.employee_id) !== user.id) {
+      await NotificationService.notify({
+        employeeIds: [Number(row.employee_id)],
+        type: 'activity_weekly',
+        title: finalize ? 'Weekly performance finalised' : 'Manager remarks on your weekly report',
+        body: cleanText(input.managerRemarks, 300) || `Week of ${String(row.week_start)}`,
+        link: '/activity?tab=weekly',
+        actorId: user.id,
+      });
+    }
     const stored = await queryOne<Record<string, unknown>>('SELECT * FROM weekly_performance_reports WHERE id = ?', [id]);
     return ActivityAnalyticsService.mapWeekly(stored);
   }

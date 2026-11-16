@@ -133,6 +133,13 @@ async function ensureDatabaseReady(): Promise<void> {
         const { runMigrations } = await import('./db/migrate.js');
         await runMigrations(config.db, false);
       }
+      if (config.isProd) {
+        const { findDemoPasswordAccounts } = await import('./db/seed.js');
+        const exposed = await findDemoPasswordAccounts();
+        if (exposed.length) {
+          console.error(`[startup] SECURITY: ${exposed.length} active account(s) still use the published demo password (${exposed.join(', ')}). Change these passwords or deactivate the accounts immediately.`);
+        }
+      }
       const empCount = await queryOne<{ cnt: number | string }>('SELECT COUNT(*) AS cnt FROM employees');
       if (!empCount || Number(empCount.cnt) === 0) {
         console.log('[startup] Employees table empty. Seeding initial accounts...');

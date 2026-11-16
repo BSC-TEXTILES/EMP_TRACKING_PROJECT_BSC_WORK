@@ -19,6 +19,7 @@ monitor-device.json
 
 backend/.env.*
 !backend/.env.example
+!backend/.env.test.example
 storage/
 backend/storage/
 *.log

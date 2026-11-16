@@ -9,6 +9,7 @@ import { TaskService } from '../services/TaskService.js';
 import { TicketService } from '../services/TicketService.js';
 import { ActivityService } from '../services/ActivityService.js';
 import { processEmailQueue } from '../lib/mailer.js';
+import { addDays, today } from '../lib/dates.js';
 
 const running = new Set<string>();
 
@@ -46,6 +47,38 @@ export function startJobs(): void {
       void runJob('activity_retention', async () => {
         const result = await ActivityService.purgeExpired(null, false);
         return `${result.removed} activity record(s) older than ${result.retentionDays} days removed`;
+      });
+    },
+    { timezone: config.timezone },
+  );
+
+  cron.schedule('*/5 * * * *', () => {
+    void runJob('activity_stale_sessions', async () => {
+      const closed = await ActivityService.closeStaleSessions();
+      return `${closed} monitoring session(s) closed (agent disconnected, attendance closed or day ended)`;
+    });
+  });
+
+  cron.schedule(
+    '45 23 * * *',
+    () => {
+      void runJob('activity_daily_summaries', async () => {
+        const { ActivityAnalyticsService } = await import('../services/ActivityAnalyticsService.js');
+        const generated = await ActivityAnalyticsService.generateAllDaily(today());
+        return `${generated} daily activity summary(ies) generated`;
+      });
+    },
+    { timezone: config.timezone },
+  );
+
+  cron.schedule(
+    '30 1 * * 1',
+    () => {
+      void runJob('activity_weekly_performance', async () => {
+        const { ActivityAnalyticsService } = await import('../services/ActivityAnalyticsService.js');
+        const lastWeek = addDays(today(), -7);
+        const generated = await ActivityAnalyticsService.generateAllWeekly(lastWeek);
+        return `${generated} preliminary weekly report(s) for the week of ${lastWeek}`;
       });
     },
     { timezone: config.timezone },

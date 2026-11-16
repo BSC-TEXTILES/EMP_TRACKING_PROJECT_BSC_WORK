@@ -774,12 +774,49 @@ async function seedTransactionalData(ids) {
     }
     return true;
 }
+/**
+ * Boot-time seeding. Reference data is always safe to upsert. Demo employees
+ * (with the published demo password) are created only outside production; a
+ * production installation gets exactly one administrator from
+ * BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD, who must change the password.
+ */
 export async function seedBasicData() {
     console.log('[seed] Seeding reference data (roles, permissions, departments, etc.)...');
     await seedReferenceData();
-    console.log('[seed] Seeding initial employee accounts (EMP-1001, etc.)...');
-    await seedEmployees();
-    console.log('[seed] Reference data and initial employee accounts seeded successfully.');
+    if (!config.isProd) {
+        console.log('[seed] Seeding development employee accounts (EMP-1001, etc.)...');
+        await seedEmployees();
+        return;
+    }
+    await seedBootstrapAdmin();
+}
+async function seedBootstrapAdmin() {
+    const existing = await queryOne('SELECT COUNT(*) AS cnt FROM employees');
+    if (Number(existing?.cnt ?? 0) > 0)
+        return;
+    const email = process.env.BOOTSTRAP_ADMIN_EMAIL?.trim().toLowerCase();
+    const password = process.env.BOOTSTRAP_ADMIN_PASSWORD ?? '';
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || password === DEMO_PASSWORD) {
+        console.warn('[seed] No employees exist. Set BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD (12+ chars) or complete the website setup to create the first administrator. No default accounts were created.');
+        return;
+    }
+    const role = await queryOne("SELECT id FROM roles WHERE slug = 'super_admin'");
+    if (!role)
+        throw new Error('super_admin role missing after reference seeding');
+    await execute(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, employment_type, status, joining_date,
+                            email_verified_at, must_change_password)
+     VALUES ('EMP-1001', ?, ?, ?, ?, ?, 'full_time', 'active', ?, NOW(3), 1)`, [process.env.BOOTSTRAP_ADMIN_NAME?.trim() || 'Administrator', email, process.env.BOOTSTRAP_ADMIN_MOBILE?.trim() || '0000000000', await hashPassword(password), role.id, today()]);
+    console.log(`[seed] Bootstrap administrator created for ${email}. Remove BOOTSTRAP_ADMIN_PASSWORD from the environment now.`);
+}
+/** Production safety check: reports active accounts that still use the published demo password. */
+export async function findDemoPasswordAccounts() {
+    const { verifyPassword } = await import('../lib/crypto.js');
+    const rows = await query("SELECT email, password_hash FROM employees WHERE status = 'active' AND email LIKE '%@workforce.test'");
+    const matches = [];
+    for (const row of rows)
+        if (await verifyPassword(DEMO_PASSWORD, row.password_hash))
+            matches.push(row.email);
+    return matches;
 }
 async function main() {
     if (config.isProd || !process.argv.includes('--demo'))

@@ -4,12 +4,15 @@ import { ApiError } from '../lib/http.js';
 import { subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ActivityService, cleanText, parseJson } from './ActivityService.js';
-const DEFAULT_WEEK_START = `DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)`;
 function number(value) {
     return Number(value ?? 0);
 }
 function percent(part, total) {
     return total > 0 ? Math.round((part / total) * 1000) / 10 : 0;
+}
+/** DATE columns arrive as strings (dateStrings); normalise defensively. */
+function sqlDate(value) {
+    return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 }
 function grade(score) {
     if (score >= 90)
@@ -357,96 +360,170 @@ export class ActivityAnalyticsService {
         if (!row)
             throw ApiError.notFound('Summary not found');
         await ActivityAnalyticsService.assertAccess(user, Number(row.employee_id));
+        if (Number(row.employee_id) === user.id)
+            throw ApiError.forbidden('You cannot review your own daily summary.');
+        if (row.status !== 'submitted')
+            throw ApiError.badRequest('Only submitted summaries can be reviewed.');
         await execute('UPDATE daily_activity_summaries SET status = ?, reviewed_by = ?, reviewed_at = NOW(3), manager_note = ? WHERE id = ?', [decision, user.id, cleanText(note, 500) || null, id]);
         await ActivityService.audit(user.id, `activity.daily_${decision}`, Number(row.employee_id), 'daily_activity_summary', id, { note });
+        await NotificationService.notify({
+            employeeIds: [Number(row.employee_id)],
+            type: 'activity_daily',
+            title: decision === 'approved' ? 'Daily activity summary approved' : 'Daily activity summary returned',
+            body: cleanText(note, 300) || `Summary for ${String(row.summary_date)}`,
+            link: '/activity',
+            actorId: user.id,
+            priority: decision === 'returned' ? 'high' : 'normal',
+        });
         const stored = await queryOne('SELECT * FROM daily_activity_summaries WHERE id = ?', [id]);
         return ActivityAnalyticsService.mapDaily(stored);
     }
-    /** Calculates a transparent weekly performance score from platform records. */
+    /**
+     * Calculates a transparent weekly performance score from platform records.
+     * Parameters without data for the week (e.g. no tasks assigned) are marked
+     * not applicable and their weight is redistributed, so nobody is rewarded or
+     * penalised for missing data. Application usage is reported as context only.
+     */
     static async generateWeekly(employeeId, weekStart) {
         const week = weekStart && /^\d{4}-\d{2}-\d{2}$/.test(weekStart)
-            ? await queryOne('SELECT DATE(?) AS start, DATE_ADD(DATE(?), INTERVAL 6 DAY) AS end', [weekStart, weekStart])
-            : await queryOne(`SELECT ${DEFAULT_WEEK_START} AS start, DATE_ADD(${DEFAULT_WEEK_START}, INTERVAL 6 DAY) AS end`);
+            ? await queryOne('SELECT DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY) AS start, DATE_ADD(DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY), INTERVAL 6 DAY) AS end', [weekStart, weekStart, weekStart, weekStart])
+            : await queryOne('SELECT DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY) AS start, DATE_ADD(DATE_SUB(DATE(?), INTERVAL WEEKDAY(DATE(?)) DAY), INTERVAL 6 DAY) AS end', [today(), today(), today(), today()]);
         if (!week)
             throw ApiError.badRequest('Unable to resolve the week.');
-        const start = String(week.start).slice(0, 10);
-        const end = String(week.end).slice(0, 10);
-        const [tasks, attendance, reports, meetings, messages, apps, existing] = await Promise.all([
-            queryOne(`SELECT COUNT(*) AS assigned,
-                SUM(t.status IN ('completed','approved')) AS completed,
-                SUM(t.status IN ('completed','approved') AND (t.completed_at <= TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')))) AS on_time,
-                SUM(t.approved_at IS NOT NULL) AS approved,
-                SUM(t.project_id IS NOT NULL) AS with_project
-         FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
-         WHERE ta.employee_id = ? AND DATE(ta.assigned_at) BETWEEN ? AND ?`, [employeeId, start, end]),
-            queryOne(`SELECT COUNT(*) AS present_days,
-                COALESCE(SUM(CASE WHEN check_out_at IS NULL AND work_date = CURDATE() THEN TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) ELSE total_minutes END),0) AS minutes
-         FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('present','late','half_day')`, [employeeId, start, end]),
-            query("SELECT report_date, status FROM daily_work_reports WHERE employee_id = ? AND report_date BETWEEN ? AND ?", [employeeId, start, end]),
-            queryOne(`SELECT COUNT(*) AS attended FROM meeting_participants WHERE employee_id = ? AND attended = 1`, [employeeId]),
-            queryOne(`SELECT COUNT(*) AS sent FROM messages WHERE sender_id = ? AND DATE(created_at) BETWEEN ? AND ?`, [employeeId, start, end]),
+        const start = sqlDate(week.start);
+        const end = sqlDate(week.end);
+        const employee = await queryOne('SELECT id FROM employees WHERE id = ?', [employeeId]);
+        if (!employee)
+            throw ApiError.notFound('Employee not found');
+        const [tasks, completedRows, overdue, pendingRows, attendance, reports, meetings, messages, apps, ticketsResolved, existing, previousWeek, kpiFeedback] = await Promise.all([
+            // Tasks due in the week, or assigned in the week without a due date.
+            queryOne(`SELECT COUNT(*) AS assigned FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('cancelled')
+           AND (t.due_date BETWEEN ? AND ? OR (t.due_date IS NULL AND DATE(ta.assigned_at) BETWEEN ? AND ?))`, [employeeId, start, end, start, end]),
+            query(`SELECT t.id, t.title, t.project_id, t.approved_at, t.rejection_reason, p.name AS project_name,
+                COALESCE(t.completed_at, ta.completed_at) AS completed_at,
+                (COALESCE(t.completed_at, ta.completed_at) <= TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')) OR t.due_date IS NULL) AS on_time,
+                TIMESTAMPDIFF(MINUTE, COALESCE(ta.started_at, ta.assigned_at), COALESCE(t.completed_at, ta.completed_at)) AS cycle_minutes
+         FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id LEFT JOIN projects p ON p.id = t.project_id
+         WHERE ta.employee_id = ? AND DATE(COALESCE(t.completed_at, ta.completed_at)) BETWEEN ? AND ?
+           AND t.status IN ('completed','approved','submitted')`, [employeeId, start, end]),
+            queryOne(`SELECT COUNT(*) AS total FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('completed','approved','cancelled','rejected') AND t.due_date < LEAST(?, ?)`, [employeeId, end, today()]),
+            query(`SELECT t.id, t.task_no, t.title, t.due_date, t.priority FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE ta.employee_id = ? AND t.status NOT IN ('completed','approved','cancelled','rejected') ORDER BY t.due_date IS NULL, t.due_date LIMIT 10`, [employeeId]),
+            queryOne(`SELECT COUNT(*) AS present_days, SUM(is_late = 1) AS late_days,
+                COALESCE(SUM(CASE WHEN check_out_at IS NULL AND work_date = ? THEN TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) ELSE total_minutes END),0) AS minutes,
+                COALESCE(SUM(break_minutes),0) AS break_minutes
+         FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('present','late','half_day')`, [today(), employeeId, start, end]),
+            query('SELECT report_date, status FROM daily_work_reports WHERE employee_id = ? AND report_date BETWEEN ? AND ?', [employeeId, start, end]),
+            queryOne(`SELECT COUNT(*) AS invited, SUM(mp.attended = 1) AS attended,
+                COALESCE(SUM(IF(mp.attended = 1, TIMESTAMPDIFF(MINUTE, m.start_at, m.end_at), 0)),0) AS minutes
+         FROM meeting_participants mp JOIN meetings m ON m.id = mp.meeting_id
+         WHERE mp.employee_id = ? AND DATE(m.start_at) BETWEEN ? AND ? AND m.status <> 'cancelled'`, [employeeId, start, end]),
+            queryOne('SELECT COUNT(*) AS sent FROM messages WHERE sender_id = ? AND DATE(created_at) BETWEEN ? AND ?', [employeeId, start, end]),
             query(`SELECT app_category, SUM(active_seconds) AS seconds FROM application_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) BETWEEN ? AND ? GROUP BY app_category`, [employeeId, start, end]),
+         WHERE employee_id = ? AND DATE(started_at) BETWEEN ? AND ? GROUP BY app_category ORDER BY seconds DESC`, [employeeId, start, end]),
+            queryOne('SELECT COUNT(*) AS total FROM tickets WHERE assignee_id = ? AND DATE(resolved_at) BETWEEN ? AND ?', [employeeId, start, end]),
             queryOne('SELECT score, status FROM weekly_performance_reports WHERE employee_id = ? AND week_start = ?', [employeeId, start]),
+            queryOne('SELECT score, metrics FROM weekly_performance_reports WHERE employee_id = ? AND week_start = DATE_SUB(?, INTERVAL 7 DAY)', [employeeId, start]),
+            queryOne('SELECT manager_remarks FROM weekly_performance_reports WHERE employee_id = ? AND week_start < ? AND manager_remarks IS NOT NULL ORDER BY week_start DESC LIMIT 1', [employeeId, start]),
         ]);
-        const assigned = number(tasks?.assigned);
-        const completed = number(tasks?.completed);
-        const onTime = number(tasks?.on_time);
-        const approved = number(tasks?.approved);
-        const withProject = number(tasks?.with_project);
+        const completed = completedRows.length;
+        const assigned = Math.max(number(tasks?.assigned), completed);
+        const onTime = completedRows.filter((row) => Number(row.on_time) === 1).length;
+        const reviewed = completedRows.filter((row) => row.approved_at || row.rejection_reason);
+        const approved = completedRows.filter((row) => row.approved_at).length;
+        const withProject = completedRows.filter((row) => row.project_id).length;
+        const cycleMinutes = completedRows.map((row) => number(row.cycle_minutes)).filter((value) => value > 0);
+        const averageCompletionHours = cycleMinutes.length ? Math.round(cycleMinutes.reduce((sum, value) => sum + value, 0) / cycleMinutes.length / 6) / 10 : null;
         const presentDays = number(attendance?.present_days);
+        const lateDays = number(attendance?.late_days);
         const workDaysSetting = await queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'work_days'");
         const workDays = new Set(String(workDaysSetting?.setting_value ?? '1,2,3,4,5,6').split(',').map((value) => Number(value.trim())));
-        const dayRows = await query(`SELECT DATE_FORMAT(day, '%Y-%m-%d') AS d FROM (
-         SELECT DATE(?) + INTERVAL seq DAY AS day FROM (
-           SELECT 0 AS seq UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3
-           UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6
-         ) days
-       ) calendar WHERE day BETWEEN ? AND ? AND day <= CURDATE()`, [start, start, end]);
-        const elapsedWorkDays = dayRows.filter((row) => workDays.has(new Date(`${row.d}T00:00:00`).getDay())).length || 1;
+        const [leaveRows, holidayRows] = await Promise.all([
+            query("SELECT work_date FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? AND status IN ('leave','on_leave','holiday')", [employeeId, start, end]).catch(() => []),
+            query('SELECT holiday_date FROM holidays WHERE holiday_date BETWEEN ? AND ?', [start, end]).catch(() => []),
+        ]);
+        const excluded = new Set([...leaveRows.map((row) => sqlDate(row.work_date)), ...holidayRows.map((row) => sqlDate(row.holiday_date))]);
+        const lastDay = end < today() ? end : today();
+        let elapsedWorkDays = 0;
+        for (let cursor = new Date(`${start}T00:00:00Z`); cursor.toISOString().slice(0, 10) <= lastDay; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+            const iso = cursor.toISOString().slice(0, 10);
+            if (workDays.has(cursor.getUTCDay()) && !excluded.has(iso))
+                elapsedWorkDays += 1;
+        }
         const submittedReports = reports.filter((row) => row.status !== 'draft').length;
-        const taskCompletion = assigned > 0 ? percent(completed, assigned) : 70;
-        const onTimeDelivery = completed > 0 ? percent(onTime, completed) : 70;
-        const workQuality = completed > 0 ? percent(approved, completed) : 70;
-        const attendanceScore = percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays);
-        const dailyReporting = percent(Math.min(submittedReports, elapsedWorkDays), elapsedWorkDays);
-        const projectContribution = completed > 0 ? percent(withProject, completed) : 0;
-        const collaboration = Math.min(100, 60 + Math.min(25, number(messages?.sent)) + Math.min(15, number(meetings?.attended) * 5));
+        // null = not applicable this week; its weight is redistributed.
+        const raw = {
+            taskCompletion: assigned > 0 ? percent(completed, assigned) : null,
+            onTimeDelivery: completed > 0 ? percent(onTime, completed) : null,
+            workQuality: reviewed.length > 0 ? percent(approved, reviewed.length) : null,
+            attendance: elapsedWorkDays > 0 ? Math.max(0, percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays) - Math.min(20, lateDays * 2)) : null,
+            dailyReporting: elapsedWorkDays > 0 ? percent(Math.min(submittedReports, elapsedWorkDays), elapsedWorkDays) : null,
+            projectContribution: completed > 0 ? percent(withProject, completed) : null,
+            collaboration: number(meetings?.invited) + number(messages?.sent) + number(ticketsResolved?.total) > 0
+                ? Math.min(100, (number(meetings?.invited) > 0 ? percent(number(meetings?.attended), number(meetings?.invited)) * 0.6 : 60)
+                    + Math.min(25, number(messages?.sent)) + Math.min(15, number(ticketsResolved?.total) * 5))
+                : null,
+        };
+        const applicableWeight = Object.keys(KPI_WEIGHTS)
+            .filter((key) => raw[key] !== null).reduce((sum, key) => sum + KPI_WEIGHTS[key], 0);
+        const score = applicableWeight > 0
+            ? Math.round(Object.keys(KPI_WEIGHTS)
+                .reduce((sum, key) => sum + (raw[key] ?? 0) * KPI_WEIGHTS[key], 0) / applicableWeight * 10) / 10
+            : 0;
+        const labels = {
+            taskCompletion: 'Task completion', onTimeDelivery: 'On-time delivery', workQuality: 'Work quality',
+            attendance: 'Attendance and punctuality', dailyReporting: 'Daily reporting', projectContribution: 'Project contribution', collaboration: 'Collaboration',
+        };
+        const improvementAreas = Object.keys(raw)
+            .filter((key) => raw[key] !== null && raw[key] < 60)
+            .map((key) => `${labels[key]} is ${raw[key]}%`);
+        if (number(overdue?.total) > 0)
+            improvementAreas.push(`${number(overdue?.total)} overdue task(s) need attention`);
+        const previousScore = previousWeek?.score === undefined || previousWeek?.score === null ? null : number(previousWeek.score);
         const metrics = {
             weights: KPI_WEIGHTS,
-            taskCompletion,
-            onTimeDelivery,
-            workQuality,
-            attendance: attendanceScore,
-            dailyReporting,
-            projectContribution,
-            collaboration,
+            effectiveWeightTotal: applicableWeight,
+            notApplicable: Object.keys(raw).filter((key) => raw[key] === null),
+            taskCompletion: raw.taskCompletion ?? 0,
+            onTimeDelivery: raw.onTimeDelivery ?? 0,
+            workQuality: raw.workQuality ?? 0,
+            attendance: raw.attendance ?? 0,
+            dailyReporting: raw.dailyReporting ?? 0,
+            projectContribution: raw.projectContribution ?? 0,
+            collaboration: raw.collaboration ?? 0,
             assigned,
             completed,
             onTime,
             approved,
+            reviewed: reviewed.length,
+            overdueTasks: number(overdue?.total),
+            averageCompletionHours,
             presentDays,
+            lateDays,
             elapsedWorkDays,
+            attendancePercentage: elapsedWorkDays > 0 ? percent(Math.min(presentDays, elapsedWorkDays), elapsedWorkDays) : null,
             reportsSubmitted: submittedReports,
             meetingsAttended: number(meetings?.attended),
+            meetingMinutes: number(meetings?.minutes),
             messagesSent: number(messages?.sent),
+            ticketsResolved: number(ticketsResolved?.total),
             attendanceMinutes: number(attendance?.minutes),
+            breakMinutes: number(attendance?.break_minutes),
+            accomplishments: completedRows.slice(0, 10).map((row) => `${row.title}${row.project_name ? ` (${row.project_name})` : ''}`),
+            pendingAssignments: pendingRows.map((row) => ({ id: Number(row.id), taskNo: row.task_no, title: row.title, dueDate: row.due_date, priority: row.priority })),
+            improvementAreas,
+            previousManagerFeedback: kpiFeedback?.manager_remarks ?? null,
+            weekOverWeekChange: previousScore === null ? null : Math.round((score - previousScore) * 10) / 10,
             applicationUsage: apps.map((row) => ({ category: row.app_category, minutes: Math.round(number(row.seconds) / 60) })),
-            applicationUsageNote: 'Application duration is contextual only and is not scored as productivity.',
+            applicationUsageNote: 'Application duration is contextual only and is not scored. Meetings, documentation, research, troubleshooting, approved breaks and offline work are never penalised.',
         };
-        const score = Math.round((taskCompletion * KPI_WEIGHTS.taskCompletion +
-            onTimeDelivery * KPI_WEIGHTS.onTimeDelivery +
-            workQuality * KPI_WEIGHTS.workQuality +
-            attendanceScore * KPI_WEIGHTS.attendance +
-            dailyReporting * KPI_WEIGHTS.dailyReporting +
-            projectContribution * KPI_WEIGHTS.projectContribution +
-            collaboration * KPI_WEIGHTS.collaboration) / 100 * 10) / 10;
-        const previous = existing?.score === undefined ? null : number(existing.score);
         if (!existing || String(existing.status) !== 'final') {
             await execute(`INSERT INTO weekly_performance_reports (employee_id, week_start, week_end, metrics, score, grade, status, previous_score, generated_at)
          VALUES (?, ?, ?, ?, ?, ?, 'preliminary', ?, NOW(3))
          ON DUPLICATE KEY UPDATE week_end = VALUES(week_end), metrics = VALUES(metrics), score = VALUES(score),
-           grade = VALUES(grade), previous_score = VALUES(previous_score), generated_at = NOW(3)`, [employeeId, start, end, JSON.stringify(metrics), score, grade(score), previous]);
+           grade = VALUES(grade), previous_score = VALUES(previous_score), generated_at = NOW(3)`, [employeeId, start, end, JSON.stringify(metrics), score, grade(score), previousScore]);
         }
         const stored = await queryOne('SELECT * FROM weekly_performance_reports WHERE employee_id = ? AND week_start = ?', [employeeId, start]);
         return ActivityAnalyticsService.mapWeekly(stored, metrics);
@@ -476,10 +553,22 @@ export class ActivityAnalyticsService {
         if (!row)
             throw ApiError.notFound('Weekly report not found');
         await ActivityAnalyticsService.assertAccess(user, Number(row.employee_id));
+        if (Number(row.employee_id) === user.id && !user.permissions.includes('activity.view.all'))
+            throw ApiError.forbidden('You cannot review your own weekly performance.');
         const finalize = Boolean(input.finalize);
         await execute(`UPDATE weekly_performance_reports SET manager_remarks = COALESCE(?, manager_remarks),
               status = IF(?, 'final', status), reviewed_by = ?, reviewed_at = NOW(3) WHERE id = ?`, [cleanText(input.managerRemarks, 1000) || null, finalize ? 1 : 0, user.id, id]);
         await ActivityService.audit(user.id, finalize ? 'activity.weekly_finalized' : 'activity.weekly_reviewed', Number(row.employee_id), 'weekly_performance_report', id, { finalize });
+        if (Number(row.employee_id) !== user.id) {
+            await NotificationService.notify({
+                employeeIds: [Number(row.employee_id)],
+                type: 'activity_weekly',
+                title: finalize ? 'Weekly performance finalised' : 'Manager remarks on your weekly report',
+                body: cleanText(input.managerRemarks, 300) || `Week of ${String(row.week_start)}`,
+                link: '/activity?tab=weekly',
+                actorId: user.id,
+            });
+        }
         const stored = await queryOne('SELECT * FROM weekly_performance_reports WHERE id = ?', [id]);
         return ActivityAnalyticsService.mapWeekly(stored);
     }
@@ -495,6 +584,7 @@ export class ActivityAnalyticsService {
     }
     static async weeklyList(user, employeeId, limit = 8) {
         await ActivityAnalyticsService.assertAccess(user, employeeId);
+        await ActivityService.logAccess(user, employeeId, 'weekly');
         const rows = await query('SELECT * FROM weekly_performance_reports WHERE employee_id = ? ORDER BY week_start DESC LIMIT ?', [employeeId, Math.min(26, Math.max(1, limit))]);
         return rows.map((row) => ActivityAnalyticsService.mapWeekly(row));
     }
@@ -503,7 +593,7 @@ export class ActivityAnalyticsService {
         const session = await ActivityService.currentSession(user);
         const [daily, errors, tickets, weekly, devices, browser, recentSessions] = await Promise.all([
             ActivityAnalyticsService.daily(user, user.id, date),
-            ActivityService.listErrors(user),
+            ActivityService.listErrors(user, { ownOnly: true }),
             query(`SELECT t.id, t.ticket_no, t.subject, t.status, t.priority, t.created_at,
                 (SELECT COUNT(*) FROM automatic_ticket_links l WHERE l.ticket_id = t.id) AS automatic
          FROM tickets t WHERE t.requester_id = ? ORDER BY t.created_at DESC LIMIT 8`, [user.id]),
@@ -521,7 +611,10 @@ export class ActivityAnalyticsService {
             session,
             devices,
             daily,
-            errors: errors.filter((error) => error.employeeName === user.fullName).slice(0, 8),
+            errors: errors.slice(0, 10),
+            timeline: await ActivityAnalyticsService.timeline(user, user.id, date),
+            corrections: await ActivityService.listCorrections(user).then((rows) => rows.filter((row) => row.employeeId === user.id).slice(0, 20)),
+            accessHistory: (await ActivityService.accessHistory(user)).slice(0, 20),
             tickets,
             browser: browser.map((row) => ({ domain: row.domain, category: row.category, minutes: Math.round(number(row.seconds) / 60) })),
             weekly: weekly.map((row) => ActivityAnalyticsService.mapWeekly(row)),
@@ -550,6 +643,14 @@ export class ActivityAnalyticsService {
          WHERE w.week_start = (SELECT MAX(week_start) FROM weekly_performance_reports x WHERE x.employee_id = w.employee_id)
            AND w.employee_id IN (${placeholders})`, ids),
         ]);
+        const [overdueRows, issueRows] = await Promise.all([
+            query(`SELECT ta.employee_id, COUNT(*) AS total FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
+         WHERE t.status NOT IN ('completed','approved','cancelled','rejected') AND t.due_date < ? AND ta.employee_id IN (${placeholders}) GROUP BY ta.employee_id`, [date, ...ids]),
+            query(`SELECT e.employee_id, COUNT(DISTINCT e.incident_id) AS total FROM system_error_events e JOIN error_incidents i ON i.id = e.incident_id
+         WHERE i.status IN ('open','suggested','ticket_created') AND e.employee_id IN (${placeholders}) GROUP BY e.employee_id`, ids),
+        ]);
+        const overdueMap = new Map(overdueRows.map((row) => [Number(row.employee_id), number(row.total)]));
+        const issueMap = new Map(issueRows.map((row) => [Number(row.employee_id), number(row.total)]));
         const appMap = new Map(appTotals.map((row) => [Number(row.employee_id), Math.round(number(row.seconds) / 60)]));
         const taskMap = new Map(taskTotals.map((row) => [Number(row.employee_id), number(row.completed)]));
         const summaryMap = new Map(summaries.map((row) => [Number(row.employee_id), row]));
@@ -573,7 +674,9 @@ export class ActivityAnalyticsService {
                 keyActivities: parseJson(summary?.key_activities, []),
                 weeklyScore: week ? number(week.score) : null,
                 weeklyGrade: week?.grade ?? null,
-                needsAssistance: Boolean(summary && summary.status === 'submitted' && (week ? number(week.score) < 60 : false)),
+                overdueTasks: overdueMap.get(Number(employee.id)) ?? 0,
+                openIssues: issueMap.get(Number(employee.id)) ?? 0,
+                needsAssistance: (week ? number(week.score) < 60 : false) || (overdueMap.get(Number(employee.id)) ?? 0) >= 3 || (issueMap.get(Number(employee.id)) ?? 0) > 0 || summary?.status === 'returned',
             };
         });
         return {
@@ -586,6 +689,7 @@ export class ActivityAnalyticsService {
                 activeMinutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0),
                 tasksCompleted: rows.reduce((sum, row) => sum + row.tasksCompleted, 0),
                 pendingReviews: rows.filter((row) => row.dailyStatus === 'submitted').length,
+                needsAssistance: rows.filter((row) => row.needsAssistance).length,
             },
         };
     }
@@ -760,9 +864,11 @@ export class ActivityAnalyticsService {
     }
     static async employeeProfile(user, employeeId, date) {
         await ActivityAnalyticsService.assertAccess(user, employeeId);
+        await ActivityService.logAccess(user, employeeId, 'profile');
         const daily = await ActivityAnalyticsService.generateDaily(employeeId, date);
         const weekly = await ActivityAnalyticsService.weeklyList(user, employeeId, 6);
-        return { daily, weekly };
+        const timeline = await ActivityAnalyticsService.timeline(user, employeeId, date);
+        return { daily, weekly, timeline };
     }
 }
 //# sourceMappingURL=ActivityAnalyticsService.js.map

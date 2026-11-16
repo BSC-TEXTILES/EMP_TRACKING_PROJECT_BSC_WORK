@@ -200,7 +200,9 @@ export class ActivityService {
             throw ApiError.badRequest('A stable machine fingerprint is required.');
         const existing = await queryOne('SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
         if (existing && Number(existing.employee_id) !== user.id) {
-            throw ApiError.conflict('This device is already registered to another employee.');
+            // Reassign device to the currently signed-in user on this workstation
+            await execute('UPDATE employee_devices SET employee_id = ? WHERE id = ?', [user.id, existing.id]);
+            await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [existing.id]);
         }
         let deviceId;
         if (existing) {
