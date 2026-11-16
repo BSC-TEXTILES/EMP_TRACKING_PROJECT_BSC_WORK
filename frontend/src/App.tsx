@@ -31,6 +31,8 @@ const RolesAdmin = lazy(() => import('./pages/RolesAdmin'));
 const SettingsAdmin = lazy(() => import('./pages/SettingsAdmin'));
 const EmailConfiguration = lazy(() => import('./pages/EmailConfiguration'));
 const Notifications = lazy(() => import('./pages/Notifications'));
+const Calls = lazy(() => import('./pages/Calls'));
+const Settings = lazy(() => import('./pages/Settings'));
 const Profile = lazy(() => import('./pages/Profile'));
 
 function FullPageLoader() {
@@ -118,6 +120,8 @@ export function App() {
           <Route path="admin/settings" element={<SettingsAdmin />} />
           <Route path="admin/email" element={<EmailConfiguration />} />
           <Route path="notifications" element={<Notifications />} />
+          <Route path="calls" element={<Calls />} />
+          <Route path="settings" element={<Settings />} />
           <Route path="profile" element={<Profile />} />
         </Route>
 

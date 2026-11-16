@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import { cx } from '../lib/format';
 
-type ToastTone = 'success' | 'error' | 'info';
+type ToastTone = 'success' | 'error' | 'info' | 'warning';
 
 interface Toast {
   id: number;
@@ -14,6 +14,7 @@ interface ToastContextValue {
   success: (message: string) => void;
   error: (message: string) => void;
   info: (message: string) => void;
+  warning: (message: string) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -38,6 +39,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       success: (message: string) => toast(message, 'success'),
       error: (message: string) => toast(message, 'error'),
       info: (message: string) => toast(message, 'info'),
+      warning: (message: string) => toast(message, 'warning'),
     }),
     [toast],
   );
@@ -55,6 +57,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               item.tone === 'success' && 'border-emerald-200 bg-emerald-50 text-emerald-800',
               item.tone === 'error' && 'border-red-200 bg-red-50 text-red-800',
               item.tone === 'info' && 'border-brand-200 bg-white text-ink-800',
+              item.tone === 'warning' && 'border-amber-200 bg-amber-50 text-amber-800',
             )}
           >
             <span
@@ -63,9 +66,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 item.tone === 'success' && 'bg-emerald-600',
                 item.tone === 'error' && 'bg-red-600',
                 item.tone === 'info' && 'bg-brand-600',
+                item.tone === 'warning' && 'bg-amber-600',
               )}
             >
-              {item.tone === 'success' ? '✓' : item.tone === 'error' ? '!' : 'i'}
+              {item.tone === 'success' ? '✓' : item.tone === 'error' ? '!' : item.tone === 'warning' ? '⚠' : 'i'}
             </span>
             <p className="leading-snug">{item.message}</p>
           </div>

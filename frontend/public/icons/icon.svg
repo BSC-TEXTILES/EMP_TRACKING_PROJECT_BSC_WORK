@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#1d4ed8"/>
+  
+  <!-- Main "W" letter -->
+  <path d="M108 404L156 108h8L212 304h16l56-196h8l48 296h-8l-16-64h-16l-56 196h-8l-48-296h8l16 64h16l56-196h-8z" fill="white"/>
+  
+  <!-- Accent line -->
+  <path d="M156 108h200" stroke="white" stroke-width="16" stroke-linecap="round" opacity="0.3"/>
+  
+  <!-- Subtle dots for textile feel -->
+  <circle cx="380" cy="140" r="8" fill="white" opacity="0.2"/>
+  <circle cx="420" cy="180" r="6" fill="white" opacity="0.15"/>
+  <circle cx="360" cy="200" r="4" fill="white" opacity="0.1"/>
+</svg>

@@ -394,3 +394,43 @@ export function IconTextButton({
     </button>
   );
 }
+
+export function Switch({
+  checked,
+  onChange,
+  disabled,
+  className,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  return (
+    <label className={cx('inline-flex items-center cursor-pointer', className)}>
+      <input
+        type="checkbox"
+        className="sr-only"
+        checked={checked}
+        onChange={(e) => !disabled && onChange(e.target.checked)}
+        disabled={disabled}
+      />
+      <span
+        className={cx(
+          'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full border-2 transition-colors',
+          checked ? 'bg-brand-600 border-brand-600' : 'bg-ink-200 border-ink-300',
+          disabled && 'opacity-50 cursor-not-allowed',
+        )}
+        role="switch"
+        aria-checked={checked}
+      >
+        <span
+          className={cx(
+            'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+            checked ? 'translate-x-5' : 'translate-x-1',
+          )}
+        />
+      </span>
+    </label>
+  );
+}

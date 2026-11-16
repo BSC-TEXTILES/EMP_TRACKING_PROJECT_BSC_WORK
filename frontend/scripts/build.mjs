@@ -3,5 +3,9 @@
 // build (jsxDEV, import.meta.env.DEV === true) and dev-only API calls ship.
 process.env.NODE_ENV = 'production';
 
+// Generate PWA icons before build
+import { generateIcons } from './generate-icons.mjs';
+await generateIcons();
+
 const { build } = await import('vite');
 await build({ mode: 'production' });

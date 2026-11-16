@@ -1,24 +1,114 @@
 {
-  "name": "Workforce — Enterprise Workforce Management",
-  "short_name": "Workforce",
-  "description": "Attendance, tasks, reporting, communication and KPI management for the whole organisation.",
+  "name": "BSC Textiles Workforce",
+  "short_name": "BSC Workforce",
+  "description": "BSC Textiles Workforce Management — Employee activities, calls, meetings, notifications, tasks and collaboration.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#f1f5f9",
+  "background_color": "#ffffff",
   "theme_color": "#1d4ed8",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/icons/icon-72.png",
+      "sizes": "72x72",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-96.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-128.png",
+      "sizes": "128x128",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-144.png",
+      "sizes": "144x144",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-152.png",
+      "sizes": "152x152",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-384.png",
+      "sizes": "384x384",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
   "shortcuts": [
-    { "name": "Attendance", "url": "/attendance" },
-    { "name": "Tasks", "url": "/tasks" },
-    { "name": "Messages", "url": "/chat" }
-  ]
+    {
+      "name": "Dashboard",
+      "short_name": "Dashboard",
+      "description": "View your daily summary",
+      "url": "/",
+      "icons": [{ "src": "/icons/dashboard.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Attendance",
+      "short_name": "Attendance",
+      "description": "Check in and view attendance",
+      "url": "/attendance",
+      "icons": [{ "src": "/icons/attendance.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Tasks",
+      "short_name": "Tasks",
+      "description": "Manage your tasks",
+      "url": "/tasks",
+      "icons": [{ "src": "/icons/tasks.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Messages",
+      "short_name": "Messages",
+      "description": "Chat with colleagues",
+      "url": "/chat",
+      "icons": [{ "src": "/icons/chat.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Calls",
+      "short_name": "Calls",
+      "description": "Make and receive calls",
+      "url": "/calls",
+      "icons": [{ "src": "/icons/calls.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Notifications",
+      "short_name": "Notifications",
+      "description": "View all notifications",
+      "url": "/notifications",
+      "icons": [{ "src": "/icons/notifications.png", "sizes": "192x192" }]
+    }
+  ],
+  "categories": ["business", "productivity"],
+  "screenshots": [],
+  "prefer_related_applications": false
 }
