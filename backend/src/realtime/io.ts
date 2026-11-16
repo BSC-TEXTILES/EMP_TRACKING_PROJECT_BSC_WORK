@@ -3,6 +3,7 @@ import { Server, type Socket } from 'socket.io';
 import { config } from '../config.js';
 import { query } from '../db/index.js';
 import { AuthService, type AuthUser } from '../services/AuthService.js';
+import { PresenceService } from '../services/PresenceService.js';
 
 interface SocketData {
   user: AuthUser;
@@ -29,6 +30,63 @@ export function getIO(): Server | null {
 
 export function isOnline(employeeId: number): boolean {
   return (online.get(employeeId)?.size ?? 0) > 0;
+}
+
+/** Employees with at least one socket inside a meeting room or a 1:1 call. */
+export function employeesInCallsOrMeetings(): Set<number> {
+  const busy = new Set<number>();
+  if (!io) return busy;
+  for (const socket of io.of('/').sockets.values()) {
+    for (const room of socket.rooms) {
+      if (room.startsWith('meeting:') || room.startsWith('call:')) {
+        busy.add((socket.data as SocketData).user.id);
+        break;
+      }
+    }
+  }
+  return busy;
+}
+
+function refreshPresence(employeeId: number): void {
+  PresenceService.refresh(employeeId).catch((error) => console.error('[presence] refresh failed', error));
+}
+
+/** Disconnects every socket that belongs to the given login session (sign-out, revocation). */
+export function disconnectSession(sessionId: number): void {
+  if (!io) return;
+  for (const socket of io.of('/').sockets.values()) {
+    if ((socket.data as SocketData).user?.sessionId === sessionId) {
+      socket.emit('session:ended', { reason: 'signed_out' });
+      socket.disconnect(true);
+    }
+  }
+}
+
+/**
+ * Sockets are authenticated once, at connect. This sweep closes any socket
+ * whose session has since expired or been revoked, so nobody stays "online"
+ * after their session ended.
+ */
+export async function revalidateSockets(): Promise<number> {
+  if (!io) return 0;
+  const sockets = [...io.of('/').sockets.values()];
+  const sessionIds = [...new Set(sockets.map((s) => (s.data as SocketData).user?.sessionId).filter((id): id is number => Boolean(id)))];
+  if (sessionIds.length === 0) return 0;
+  const valid = await query<{ id: number }>(
+    `SELECT id FROM employee_sessions WHERE id IN (${sessionIds.map(() => '?').join(',')}) AND revoked_at IS NULL AND expires_at > NOW(3)`,
+    sessionIds,
+  );
+  const alive = new Set(valid.map((r) => Number(r.id)));
+  let closed = 0;
+  for (const socket of sockets) {
+    const sid = (socket.data as SocketData).user?.sessionId;
+    if (sid && !alive.has(sid)) {
+      socket.emit('session:ended', { reason: 'expired' });
+      socket.disconnect(true);
+      closed += 1;
+    }
+  }
+  return closed;
 }
 
 export function onlineEmployeeIds(): number[] {
@@ -105,6 +163,7 @@ export function initRealtime(server: HttpServer): Server {
 
     io?.emit('presence:update', { employeeId: user.id, online: true });
     socket.emit('presence:list', onlineEmployeeIds());
+    refreshPresence(user.id);
 
     socket.on('conversation:join', (conversationId: number) => {
       socket.join(`conv:${conversationId}`);
@@ -142,6 +201,7 @@ export function initRealtime(server: HttpServer): Server {
           return { socketId: s.id, employeeId: u.id, name: u.fullName };
         });
         io!.to(`meeting:${code}`).emit('meeting:participants', participants);
+        refreshPresence(user.id);
         ack?.({ ok: true, participants });
       } catch (error) {
         ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
@@ -162,6 +222,7 @@ export function initRealtime(server: HttpServer): Server {
       const code = String(payload?.code ?? '');
       if (!code) return;
       socket.leave(`meeting:${code}`);
+      refreshPresence(user.id);
       const sockets = await io!.in(`meeting:${code}`).fetchSockets();
       io!.to(`meeting:${code}`).emit(
         'meeting:participants',
@@ -170,6 +231,13 @@ export function initRealtime(server: HttpServer): Server {
           return { socketId: s.id, employeeId: u.id, name: u.fullName };
         }),
       );
+    });
+
+    // socket.rooms is already empty inside 'disconnect', so capture the meeting
+    // and call rooms while they are still known.
+    let roomsAtDisconnect: string[] = [];
+    socket.on('disconnecting', () => {
+      roomsAtDisconnect = [...socket.rooms].filter((room) => room.startsWith('meeting:') || room.startsWith('call:'));
     });
 
     socket.on('disconnect', () => {
@@ -183,23 +251,26 @@ export function initRealtime(server: HttpServer): Server {
           query('UPDATE employees SET last_seen_at = NOW(3) WHERE id = ?', [user.id]).catch(() => undefined);
         }
       }
-      for (const [code] of socket.rooms) {
-        if (code.startsWith('meeting:')) {
-          const room = code.slice('meeting:'.length);
-          io!.in(code)
-            .fetchSockets()
-            .then((sockets) => {
-              io!.to(code).emit(
-                'meeting:participants',
-                sockets.map((s) => {
-                  const u = (s.data as SocketData).user;
-                  return { socketId: s.id, employeeId: u.id, name: u.fullName };
-                }),
-              );
-              void room;
-            })
-            .catch(() => undefined);
+      // Socket rooms are already left here, so this also ends "In a Meeting".
+      refreshPresence(user.id);
+      for (const code of roomsAtDisconnect) {
+        if (code.startsWith('call:')) {
+          // The other party must not keep waiting on a peer that is gone.
+          io!.to(code).emit('call:ended', { callId: code.slice('call:'.length), reason: 'disconnected', byEmployeeId: user.id });
+          continue;
         }
+        io!.in(code)
+          .fetchSockets()
+          .then((sockets) => {
+            io!.to(code).emit(
+              'meeting:participants',
+              sockets.map((s) => {
+                const u = (s.data as SocketData).user;
+                return { socketId: s.id, employeeId: u.id, name: u.fullName };
+              }),
+            );
+          })
+          .catch((error) => console.error('[realtime] participant refresh failed', error));
       }
     });
   });
