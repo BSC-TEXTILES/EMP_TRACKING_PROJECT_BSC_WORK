@@ -198,12 +198,26 @@ async function main() {
         });
     }
     else {
-        const PORT = Number(process.env.PORT) || config.port || 3000;
-        server.listen(PORT, '0.0.0.0', () => {
-            console.log(`\n  ${config.appName} API ready on port ${PORT}`);
+        const primaryPort = Number(process.env.PORT) || 3000;
+        server.listen(primaryPort, '0.0.0.0', () => {
+            console.log(`\n  ${config.appName} API ready on port ${primaryPort}`);
             console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
             console.log(`  Health: /api/health\n`);
         });
+        // Also bind fallback port (3000 or 4000) so both ports answer reverse proxies
+        const secondaryPort = primaryPort === 3000 ? 4000 : 3000;
+        try {
+            const secondaryServer = http.createServer(app);
+            secondaryServer.on('error', () => {
+                // Silently ignore if port is already in use
+            });
+            secondaryServer.listen(secondaryPort, '0.0.0.0', () => {
+                console.log(`  ${config.appName} dual-listen active on secondary port ${secondaryPort}`);
+            });
+        }
+        catch {
+            // Ignore secondary bind errors
+        }
     }
     const shutdown = (signal) => {
         console.log(`\n[shutdown] ${signal} received, closing server`);
@@ -218,7 +232,25 @@ async function main() {
 if (process.env.NODE_ENV !== 'test') {
     main().catch((err) => {
         console.error('[startup] Fatal error while starting the server', err);
-        throw err;
+        // Never crash or leave reverse proxy with a dead socket (which causes 503)
+        try {
+            const PORT = Number(process.env.PORT) || 3000;
+            const emergencyApp = http.createServer((_req, res) => {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    error: 'Application failed to start',
+                    code: 'startup_error',
+                    message: err?.message || String(err),
+                    hint: 'Check database connectivity and hosting panel configuration',
+                }));
+            });
+            emergencyApp.listen(PORT, '0.0.0.0', () => {
+                console.error(`[startup] Emergency diagnostic server running on port ${PORT}`);
+            });
+        }
+        catch (listenErr) {
+            console.error('[startup] Could not bind emergency server:', listenErr);
+        }
     });
 }
 //# sourceMappingURL=index.js.map

@@ -6,7 +6,15 @@ import http from 'node:http';
 import fs from 'node:fs';
 
 const rawPort = process.env.PORT;
-const port = rawPort && !isNaN(Number(rawPort)) ? Number(rawPort) : (rawPort || 4000);
+const port = rawPort && !isNaN(Number(rawPort)) ? Number(rawPort) : (rawPort || 3000);
+
+// Global unhandled error guards so hosting runners never crash silently
+process.on('uncaughtException', (err) => {
+  console.error('[server] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[server] Unhandled rejection:', reason);
+});
 
 try {
   const entry = new URL('./backend/dist/index.js', import.meta.url);
@@ -54,7 +62,7 @@ try {
     if (typeof port === 'string' && (port === 'passenger' || port.startsWith('/') || port.startsWith('\\\\.\\pipe\\'))) {
       diagnosticServer.listen(port);
     } else {
-      diagnosticServer.listen(Number(port));
+      diagnosticServer.listen(Number(port), '0.0.0.0');
     }
     console.log(`[server] Emergency diagnostic server running on port/socket: ${port}`);
   } catch (listenError) {

@@ -116,7 +116,7 @@ export const config = {
   env: process.env.NODE_ENV ?? 'development',
   isProd,
   isTest: process.env.NODE_ENV === 'test',
-  port: int('PORT', 4000),
+  port: int('PORT', 3000),
   appOrigin: configuredOrigins.join(',') || appUrl,
   appUrl,
   backendUrl: (process.env.BACKEND_URL ?? `http://localhost:${int('PORT', 4000)}`).replace(/\/+$/, ''),
