@@ -59,6 +59,12 @@ export const PERMISSION_DEFINITIONS = [
     { code: 'collections.edit', module: 'collections', action: 'edit', description: 'Edit collection records' },
     { code: 'collections.delete', module: 'collections', action: 'delete', description: 'Delete collection records' },
     { code: 'collections.approve', module: 'collections', action: 'approve', description: 'Approve or reject collection records' },
+    { code: 'activity.view.own', module: 'activity', action: 'view.own', description: 'View own monitored activity' },
+    { code: 'activity.view.team', module: 'activity', action: 'view.team', description: 'View team activity and daily summaries' },
+    { code: 'activity.view.all', module: 'activity', action: 'view.all', description: 'View organisation-wide activity analytics' },
+    { code: 'activity.review', module: 'activity', action: 'review', description: 'Review daily activity and weekly performance' },
+    { code: 'activity.devices.manage', module: 'activity', action: 'devices.manage', description: 'Register and revoke monitoring devices' },
+    { code: 'activity.policy.manage', module: 'activity', action: 'policy.manage', description: 'Configure monitoring policy and retention' },
     { code: 'roles.manage', module: 'roles', action: 'manage', description: 'Manage roles and permission matrix' },
     { code: 'org.manage', module: 'org', action: 'manage', description: 'Manage departments, designations and locations' },
     { code: 'projects.view', module: 'projects', action: 'view', description: 'View projects' },
@@ -89,6 +95,7 @@ export const EMPLOYEE_BASE_PERMISSIONS = [
     'notifications.send',
     'collections.view.own',
     'collections.create',
+    'activity.view.own',
 ].filter((code) => code !== 'notifications.send');
 export const MANAGER_PERMISSIONS = [
     ...EMPLOYEE_BASE_PERMISSIONS,
@@ -115,6 +122,8 @@ export const MANAGER_PERMISSIONS = [
     'collections.view.team',
     'collections.edit',
     'collections.approve',
+    'activity.view.team',
+    'activity.review',
 ];
 export const HR_PERMISSIONS = [
     ...MANAGER_PERMISSIONS,
@@ -127,6 +136,8 @@ export const HR_PERMISSIONS = [
     'audit.view',
     'org.manage',
     'collections.view.all',
+    'activity.view.all',
+    'activity.policy.manage',
 ];
 export const IT_ADMIN_PERMISSIONS = [
     ...MANAGER_PERMISSIONS,
@@ -136,6 +147,9 @@ export const IT_ADMIN_PERMISSIONS = [
     'settings.manage',
     'audit.view',
     'notifications.send',
+    'activity.view.all',
+    'activity.devices.manage',
+    'activity.policy.manage',
 ];
 export const ROLE_DEFINITIONS = [
     {

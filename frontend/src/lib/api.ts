@@ -120,6 +120,15 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   if (response.status === 401 && !publicAuth) window.dispatchEvent(new CustomEvent('auth:expired'));
 
   if (!response.ok) {
+    // The API always answers with JSON. An HTML error page means the request
+    // never reached the Node backend (e.g. the host serves only static files).
+    if (!(response.headers.get('content-type') ?? '').includes('application/json')) {
+      throw new ApiError(
+        response.status,
+        'The application server is not running. Please contact your administrator.',
+        'backend_unreachable',
+      );
+    }
     reportClientFailure(path, response.status);
     let payload: { error?: string; code?: string; details?: unknown } = {};
     try {
