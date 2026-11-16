@@ -197,38 +197,28 @@ async function main(): Promise<void> {
   }
 
   const rawPort = process.env.PORT;
-  const isPassenger = rawPort === 'passenger' || (typeof rawPort === 'string' && (rawPort.startsWith('/') || rawPort.startsWith('\\\\.\\pipe\\')));
+  const isPassenger = (typeof (global as any).PhusionPassenger !== 'undefined') ||
+    rawPort === 'passenger' ||
+    (typeof rawPort === 'string' && (rawPort.startsWith('/') || rawPort.startsWith('\\\\.\\pipe\\')));
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     console.error('[server] HTTP server listen error:', err);
   });
 
-  if (isPassenger && rawPort) {
-    server.listen(rawPort, () => {
-      console.log(`\n  ${config.appName} API ready under Passenger socket: ${rawPort}`);
-      console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
-    });
-  } else {
-    const primaryPort = Number(process.env.PORT) || 3000;
-    server.listen(primaryPort, '0.0.0.0', () => {
-      console.log(`\n  ${config.appName} API ready on port ${primaryPort}`);
+  if (isPassenger) {
+    const target = (rawPort && rawPort !== 'passenger') ? rawPort : 'passenger';
+    server.listen(target, () => {
+      console.log(`\n  ${config.appName} API ready under Passenger / LiteSpeed socket: ${target}`);
       console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
       console.log(`  Health: /api/health\n`);
     });
-
-    // Also bind fallback port (3000 or 4000) so both ports answer reverse proxies
-    const secondaryPort = primaryPort === 3000 ? 4000 : 3000;
-    try {
-      const secondaryServer = http.createServer(app);
-      secondaryServer.on('error', () => {
-        // Silently ignore if port is already in use
-      });
-      secondaryServer.listen(secondaryPort, '0.0.0.0', () => {
-        console.log(`  ${config.appName} dual-listen active on secondary port ${secondaryPort}`);
-      });
-    } catch {
-      // Ignore secondary bind errors
-    }
+  } else {
+    const PORT = Number(process.env.PORT) || config.port || 3000;
+    server.listen(PORT, () => {
+      console.log(`\n  ${config.appName} API ready on port ${PORT}`);
+      console.log(`  Environment: ${config.env} · Timezone: ${config.timezone}`);
+      console.log(`  Health: /api/health\n`);
+    });
   }
 
   const shutdown = (signal: string) => {

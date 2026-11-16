@@ -5,6 +5,11 @@
 import http from 'node:http';
 import fs from 'node:fs';
 
+// Ensure production environment on hosting servers by default
+if (!process.env.NODE_ENV) {
+  process.env.NODE_ENV = 'production';
+}
+
 const rawPort = process.env.PORT;
 const port = rawPort && !isNaN(Number(rawPort)) ? Number(rawPort) : (rawPort || 3000);
 
@@ -24,7 +29,7 @@ if (!fs.existsSync(entry)) {
 import(entry.href).catch((startupError) => {
   const errMessage = startupError?.stack || String(startupError);
   console.error('[server] Fatal backend startup error:\n', errMessage);
-  
+
   try {
     fs.writeFileSync('server-error.log', `[${new Date().toISOString()}]\n${errMessage}\n`);
   } catch {

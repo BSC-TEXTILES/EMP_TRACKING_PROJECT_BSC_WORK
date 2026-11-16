@@ -4,15 +4,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
-const isProdEnv = process.env.NODE_ENV === 'production';
-// Load order matters: dotenv never overrides an existing value, so the most
-// specific file wins. Environment-specific files sit at the workspace root and
-// are git-ignored; backend/.env remains supported for existing installations.
-// A production host has no .env.local, so .env.production is selected even when
-// NODE_ENV is only defined inside that file.
 const rootDir = path.resolve(here, '../..');
 const productionFile = path.join(rootDir, '.env.production');
 const localFile = path.join(rootDir, '.env.local');
+// Default to production when deployed with .env.production on hosting servers
+if (!process.env.NODE_ENV) {
+    if (fs.existsSync(productionFile) && !fs.existsSync(localFile)) {
+        process.env.NODE_ENV = 'production';
+    }
+    else {
+        process.env.NODE_ENV = 'development';
+    }
+}
+const isProdEnv = process.env.NODE_ENV === 'production';
 // Primary environment file:
 if (process.env.NODE_ENV === 'production') {
     if (fs.existsSync(productionFile))
