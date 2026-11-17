@@ -129,9 +129,14 @@ export interface ChatMessage {
   replyToId: number | null;
   replyToBody: string | null;
   replyToSender: string | null;
+  clientId?: string | null;
   editedAt: string | null;
   deleted: boolean;
   createdAt: string;
+  recipientCount?: number;
+  readCount?: number;
+  pending?: boolean;
+  failed?: boolean;
   attachments: { fileId: number; original_name: string; mime_type: string; size_bytes: number; duration_seconds?: number | null }[];
   reactions: { employeeId: number; name: string; emoji: string }[];
 }

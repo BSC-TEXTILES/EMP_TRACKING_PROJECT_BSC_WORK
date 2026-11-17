@@ -126,7 +126,7 @@ export default function Login() {
             {[
               'Live working-hour timer that survives refreshes and reconnects',
               'Managers allocate work only inside their reporting structure',
-              'WhatsApp-style internal chat with read receipts and presence',
+              'Real-time internal chat with read receipts and presence',
               'Automatic KPI computation with configurable weights',
             ].map((item) => (
               <li key={item} className="flex items-start gap-2.5">

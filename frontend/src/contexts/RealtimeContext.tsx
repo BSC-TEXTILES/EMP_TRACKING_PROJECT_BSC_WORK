@@ -4,11 +4,16 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 
 type Handler = (payload: unknown) => void;
+type ConnectionStatus = 'connecting' | 'online' | 'offline';
 
 interface RealtimeContextValue {
   socket: Socket | null;
   connected: boolean;
+  status: ConnectionStatus;
   onlineIds: number[];
+  /** Increments whenever the connection is re-established; consumers reload data. */
+  syncVersion: number;
+  retry: () => void;
   subscribe: (event: string, handler: Handler) => () => void;
 }
 
@@ -36,54 +41,101 @@ const CONNECTION_EVENTS = [
   'meeting:signal',
   'meeting:message',
   'meeting:attendance',
+  'conversation:updated',
+  'conversation:deleted',
+  'conversation:hidden',
   'conversation:members_changed',
+  'call:incoming',
+  'call:accepted',
+  'call:rejected',
+  'call:ringing',
+  'call:ended',
+  'call:missed',
+  'call:peer_joined',
+  'call:peer_left',
+  'call:signal',
+  'nudge:received',
 ];
+
+/** Maximum automatic reconnect attempts before the indicator asks for a retry. */
+const MAX_RECONNECT_ATTEMPTS = 20;
+const HEARTBEAT_INTERVAL_MS = 25_000;
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const toast = useToast();
-  const [connected, setConnected] = useState(false);
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
+  const [status, setStatus] = useState<ConnectionStatus>('connecting');
   const [onlineIds, setOnlineIds] = useState<number[]>([]);
+  const [syncVersion, setSyncVersion] = useState(0);
+  const [retryToken, setRetryToken] = useState(0);
   const socketRef = useRef<Socket | null>(null);
   const handlers = useRef(new Map<string, Set<Handler>>());
+  const lastSync = useRef(0);
 
   useEffect(() => {
     if (!user) {
+      socketRef.current?.removeAllListeners();
       socketRef.current?.disconnect();
       socketRef.current = null;
-      setConnected(false);
+      setStatus('offline');
+      setOnlineIds([]);
       return;
     }
 
     const socketUrl = import.meta.env.VITE_WEBSOCKET_URL || undefined;
     const socket = io(socketUrl, {
       withCredentials: true,
-      transports: ['polling'],
-      upgrade: false,
+      // WebSocket first, polling as an automatic fallback behind proxies.
+      transports: ['websocket', 'polling'],
+      tryAllTransports: true,
+      upgrade: true,
       reconnection: true,
-      reconnectionDelay: 800,
-      reconnectionDelayMax: 8000,
-      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 30_000,
+      randomizationFactor: 0.25,
+      reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+      timeout: 15_000,
+      autoConnect: true,
     });
     socketRef.current = socket;
+    setStatus('connecting');
+
+    const sync = (reason: string) => {
+      // Debounce so a transport upgrade cannot trigger duplicate reloads.
+      if (Date.now() - lastSync.current < 400) return;
+      lastSync.current = Date.now();
+      setSyncVersion((value) => value + 1);
+      window.dispatchEvent(new CustomEvent('realtime:resync', { detail: { reason } }));
+    };
 
     socket.on('connect', () => {
-      setConnected(true);
-      // Catch up on anything missed while offline.
-      window.dispatchEvent(new CustomEvent('realtime:resync'));
+      setStatus('online');
+      sync('connected');
     });
-    socket.on('disconnect', () => setConnected(false));
-    socket.on('connect_error', () => setConnected(false));
+    socket.on('disconnect', (reason) => {
+      setStatus(reason === 'io client disconnect' ? 'offline' : 'connecting');
+    });
+    socket.on('connect_error', () => setStatus('connecting'));
+    socket.on('reconnect_attempt', () => setStatus('connecting'));
+    socket.on('reconnect_failed', () => setStatus('offline'));
+    socket.on('session:ended', () => {
+      window.dispatchEvent(new CustomEvent('auth:expired'));
+    });
 
-    socket.on('presence:list', (ids: number[]) => setOnlineIds(ids));
+    socket.on('presence:list', (ids: number[]) => {
+      if (Array.isArray(ids)) setOnlineIds(ids.map(Number).filter((id) => Number.isFinite(id)));
+    });
     socket.on('presence:update', (payload: { employeeId: number; online: boolean }) => {
+      if (!payload || !Number.isFinite(Number(payload.employeeId))) return;
       setOnlineIds((prev) => {
         if (payload.online) return prev.includes(payload.employeeId) ? prev : [...prev, payload.employeeId];
         return prev.filter((id) => id !== payload.employeeId);
       });
     });
     socket.on('notification:new', (payload: { title?: string; body?: string | null }) => {
-      if (payload?.title) toast.toast(payload.title, 'info');
+      if (payload?.title) toastRef.current.toast(payload.title, 'info');
       window.dispatchEvent(new CustomEvent('notifications:changed'));
     });
 
@@ -91,23 +143,76 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       socket.on(event, (payload: unknown) => {
         const set = handlers.current.get(event);
         if (!set) return;
-        for (const handler of set) handler(payload);
+        for (const handler of set) {
+          try {
+            handler(payload);
+          } catch (error) {
+            console.error(`[realtime] handler for ${event} failed`, error);
+          }
+        }
       });
     }
 
+    // Application heartbeat: detects a half-open socket earlier than the
+    // browser's own timeout and confirms the session is still valid. Two
+    // consecutive failures close the engine so Socket.IO reconnects with its
+    // bounded exponential backoff (no custom retry loop).
+    let heartbeatFailures = 0;
+    const heartbeat = window.setInterval(() => {
+      if (!socket.connected) return;
+      socket.timeout(8_000).emit('client:heartbeat', {}, (error: unknown) => {
+        if (!error) {
+          heartbeatFailures = 0;
+          return;
+        }
+        heartbeatFailures += 1;
+        if (heartbeatFailures >= 2) {
+          heartbeatFailures = 0;
+          setStatus('connecting');
+          socket.io.engine.close();
+        }
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+
+    // Reconnect immediately when the device comes back online or the tab becomes
+    // visible after being suspended.
+    const onOnline = () => {
+      if (!socket.connected) {
+        setStatus('connecting');
+        socket.connect();
+      }
+    };
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!socket.connected) {
+        setStatus('connecting');
+        socket.connect();
+      } else {
+        sync('visible');
+      }
+    };
+    window.addEventListener('online', onOnline);
+    document.addEventListener('visibilitychange', onVisible);
+
     return () => {
+      window.clearInterval(heartbeat);
+      window.removeEventListener('online', onOnline);
+      document.removeEventListener('visibilitychange', onVisible);
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
-      setConnected(false);
+      setStatus('offline');
     };
-  }, [user, toast]);
+  }, [user?.id, retryToken]);
 
   const value = useMemo<RealtimeContextValue>(
     () => ({
       socket: socketRef.current,
-      connected,
+      connected: status === 'online',
+      status,
       onlineIds,
+      syncVersion,
+      retry: () => setRetryToken((value) => value + 1),
       subscribe: (event: string, handler: Handler) => {
         if (!handlers.current.has(event)) handlers.current.set(event, new Set());
         handlers.current.get(event)!.add(handler);
@@ -116,7 +221,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         };
       },
     }),
-    [connected, onlineIds],
+    [status, onlineIds, syncVersion],
   );
 
   return <RealtimeContext.Provider value={value}>{children}</RealtimeContext.Provider>;

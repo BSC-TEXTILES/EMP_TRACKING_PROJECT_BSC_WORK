@@ -19,7 +19,7 @@ interface NavItem {
 
 export function AppShell() {
   const { user, logout, has, canAny, unreadNotifications, setUnreadNotifications } = useAuth();
-  const { connected, onlineIds } = useRealtime();
+  const { connected, onlineIds, status, retry } = useRealtime();
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -317,13 +317,19 @@ export function AppShell() {
             </form>
 
             <div className="ml-auto flex items-center gap-1.5 md:ml-0">
-              <span
-                className={cx('hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium sm:flex', connected ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700')}
-                title={connected ? 'Realtime connected' : 'Reconnecting…'}
+              <button
+                type="button"
+                onClick={connected || status === 'connecting' ? undefined : retry}
+                disabled={connected || status === 'connecting'}
+                className={cx(
+                  'hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium sm:flex',
+                  connected ? 'bg-emerald-50 text-emerald-700' : status === 'offline' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700',
+                )}
+                title={connected ? 'Realtime connected' : status === 'offline' ? 'Realtime unavailable — click to retry' : 'Connecting to realtime…'}
               >
-                <span className={cx('h-1.5 w-1.5 rounded-full', connected ? 'bg-emerald-500' : 'bg-amber-500')} />
-                {connected ? 'Live' : 'Reconnecting'}
-              </span>
+                <span className={cx('h-1.5 w-1.5 rounded-full', connected ? 'bg-emerald-500' : status === 'offline' ? 'bg-red-500' : 'bg-amber-500')} />
+                {connected ? 'Live' : status === 'offline' ? 'Offline · Retry' : 'Connecting'}
+              </button>
 
               <div className="relative" ref={panelRef}>
                 <button

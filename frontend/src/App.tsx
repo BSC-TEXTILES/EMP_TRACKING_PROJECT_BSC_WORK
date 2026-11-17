@@ -2,6 +2,7 @@ import { Suspense, lazy, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { AppShell } from './components/AppShell';
+import { CallProvider } from './components/CallInterface';
 import { Skeleton } from './components/ui';
 
 const Setup = lazy(() => import('./pages/Setup'));
@@ -93,7 +94,9 @@ export function App() {
         <Route
           element={
             <Protected>
-              <AppShell />
+              <CallProvider>
+                <AppShell />
+              </CallProvider>
             </Protected>
           }
         >

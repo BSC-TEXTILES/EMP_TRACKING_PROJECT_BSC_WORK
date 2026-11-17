@@ -8,6 +8,7 @@ import { MeetingService } from '../services/MeetingService.js';
 import { TaskService } from '../services/TaskService.js';
 import { TicketService } from '../services/TicketService.js';
 import { ActivityService } from '../services/ActivityService.js';
+import { FileService } from '../services/FileService.js';
 import { processEmailQueue } from '../lib/mailer.js';
 import { addDays, today } from '../lib/dates.js';
 
@@ -145,8 +146,9 @@ export function startJobs(): void {
     void runJob('housekeeping', async () => {
       const sessions = await execute('DELETE FROM employee_sessions WHERE expires_at < DATE_SUB(NOW(3), INTERVAL 30 DAY)');
       const otps = await execute('DELETE FROM otp_verifications WHERE created_at < DATE_SUB(NOW(3), INTERVAL 7 DAY)');
+      const uploads = await FileService.cleanupExpiredSessions();
       await KpiService.monthlyReminder();
-      return `${sessions.affectedRows} expired session(s), ${otps.affectedRows} stale OTP row(s) removed`;
+      return `${sessions.affectedRows} expired session(s), ${otps.affectedRows} stale OTP row(s), ${uploads} abandoned upload(s) removed`;
     });
   });
 

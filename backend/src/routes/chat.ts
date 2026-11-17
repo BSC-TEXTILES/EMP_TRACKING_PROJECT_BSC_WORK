@@ -103,12 +103,14 @@ chatRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
-    const messages = await ChatService.messages(id, user.id, {
-      before: req.query.before ? Number(req.query.before) : undefined,
-      limit: req.query.limit ? Number(req.query.limit) : 40,
+    const before = req.query.before ? Number(req.query.before) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 40;
+    const result = await ChatService.messages(id, user.id, {
+      before: Number.isFinite(before) ? before : undefined,
+      limit: Number.isFinite(limit) ? limit : 40,
       search: req.query.search ? String(req.query.search) : undefined,
     });
-    res.json({ messages });
+    res.json(result);
   }),
 );
 
@@ -124,6 +126,7 @@ chatRouter.post(
         replyToId: z.number().int().positive().optional(),
         fileIds: z.array(z.number().int().positive()).max(10).optional(),
         durationSeconds: z.number().int().min(0).max(600).optional(),
+        clientId: z.string().min(8).max(64).optional(),
       }),
       req.body,
     );

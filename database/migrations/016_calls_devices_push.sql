@@ -69,9 +69,9 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
   CONSTRAINT fk_push_subscriptions_device FOREIGN KEY (device_id) REFERENCES devices (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Index for notification_recipients dedupe_key (if not exists)
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(160) NULL;
-CREATE INDEX IF NOT EXISTS idx_notifications_dedupe ON notifications (dedupe_key);
+-- notifications.dedupe_key and its unique key are already created by
+-- 001_initial_schema.sql. Re-adding them here would make a fresh MySQL install
+-- fail, so this migration intentionally does not touch that table.
 
 -- Add webhook settings for push notifications
 INSERT INTO system_settings (setting_key, setting_value) VALUES 

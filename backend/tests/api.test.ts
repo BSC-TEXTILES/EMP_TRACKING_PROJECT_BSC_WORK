@@ -125,6 +125,7 @@ describe('role-based access control and hierarchy scope', () => {
 });
 
 describe('employee activity monitoring', () => {
+  const activityDeviceFingerprint = `automated-activity-device-${Date.now()}`;
   it('runs the consented session, ingestion, daily summary and weekly score workflow', async () => {
     const { agent, response } = await login('admin@workforce.test');
     expect(response.status).toBe(200);
@@ -137,7 +138,7 @@ describe('employee activity monitoring', () => {
     const device = await agent.post('/api/activity/devices').send({
       deviceName: 'Automated test device',
       osName: 'Windows',
-      machineFingerprint: 'automated-activity-device-0001',
+      machineFingerprint: activityDeviceFingerprint,
     });
     expect([200, 201]).toContain(device.status);
     const token = String(device.body.token);
@@ -224,9 +225,8 @@ describe('employee activity monitoring', () => {
     const daily = await agent.post('/api/activity/daily/submit').send({ notes: 'Automated verification notes' });
     expect(daily.status).toBe(200);
     expect(daily.body.status).toBe('submitted');
-    const review = await agent.post(`/api/activity/daily/${daily.body.id}/review`).send({ decision: 'approved', note: 'Verified' });
-    expect(review.status).toBe(200);
-    expect(review.body.status).toBe('approved');
+    const selfReview = await agent.post(`/api/activity/daily/${daily.body.id}/review`).send({ decision: 'approved', note: 'Verified' });
+    expect(selfReview.status).toBe(403);
 
     const stop = await agent.post('/api/activity/sessions/stop').send({});
     expect(stop.status).toBe(200);
@@ -306,12 +306,14 @@ describe('employee activity monitoring', () => {
     const collision = await employee.agent.post('/api/activity/devices').send({
       deviceName: 'Conflicting device',
       osName: 'Windows',
-      machineFingerprint: 'automated-activity-device-0001',
+      machineFingerprint: activityDeviceFingerprint,
     });
     expect(collision.status).toBe(409);
   });
 
   it('blocks monitoring when attendance has not started', async () => {
+    const ananya = await queryOne<{ id: number }>("SELECT id FROM employees WHERE email = 'ananya.rao@workforce.test'");
+    await execute('DELETE FROM attendance WHERE employee_id = ? AND work_date = CURDATE()', [Number(ananya?.id ?? 0)]);
     const { agent } = await login('ananya.rao@workforce.test');
     const consent = await agent.post('/api/activity/consent').send({});
     expect(consent.status).toBe(200);
@@ -528,15 +530,86 @@ describe('daily reports, tickets and chat', () => {
     }
   });
 
+  it('persists ordered messages, serves attachments and hides a deleted chat only for the caller', async () => {
+    const admin = await login('admin@workforce.test');
+    const employee = await login('ananya.rao@workforce.test');
+    const employeeId = employee.response.body.user.id as number;
+    const runId = Date.now().toString(36);
+
+    const conversation = await admin.agent.post('/api/chat/conversations/direct').send({ employeeId });
+    expect(conversation.status).toBe(201);
+    const conversationId = Number(conversation.body.id);
+
+    const first = await admin.agent.post(`/api/chat/conversations/${conversationId}/messages`).send({
+      body: `first message ${runId}`, clientId: `chat-first-${runId}`,
+    });
+    expect(first.status).toBe(201);
+    const second = await admin.agent.post(`/api/chat/conversations/${conversationId}/messages`).send({
+      body: `second message\nwith a new line ${runId} 🙂`, clientId: `chat-second-${runId}`,
+    });
+    expect(second.status).toBe(201);
+    expect(Number(second.body.id)).toBeGreaterThan(Number(first.body.id));
+
+    const duplicate = await admin.agent.post(`/api/chat/conversations/${conversationId}/messages`).send({
+      body: `first message ${runId}`, clientId: `chat-first-${runId}`,
+    });
+    expect(duplicate.status).toBe(201);
+    expect(Number(duplicate.body.id)).toBe(Number(first.body.id));
+
+    const reply = await employee.agent.post(`/api/chat/conversations/${conversationId}/messages`).send({
+      body: `reply ${runId}`, clientId: `chat-reply-${runId}`, replyToId: Number(first.body.id),
+    });
+    expect(reply.status).toBe(201);
+
+    const listed = await employee.agent.get(`/api/chat/conversations/${conversationId}/messages?limit=100`);
+    expect(listed.status).toBe(200);
+    const sent = (listed.body.messages as { id: number; body: string; senderId: number }[])
+      .filter((message) => message.body?.includes(runId));
+    expect(sent.map((message) => message.body)).toEqual([
+      `first message ${runId}`,
+      `second message\nwith a new line ${runId} 🙂`,
+      `reply ${runId}`,
+    ]);
+    expect(sent[2].senderId).toBe(employeeId);
+
+    const upload = await admin.agent
+      .post('/api/files/upload')
+      .attach('file', Buffer.from('persistent chat attachment', 'utf8'), { filename: 'chat-note.txt', contentType: 'text/plain' });
+    expect(upload.status).toBe(201);
+    const fileId = Number(upload.body.id);
+    const withFile = await admin.agent.post(`/api/chat/conversations/${conversationId}/messages`).send({
+      body: `attachment ${runId}`, type: 'file', fileIds: [fileId], clientId: `chat-file-${runId}`,
+    });
+    expect(withFile.status).toBe(201);
+    expect(withFile.body.attachments).toHaveLength(1);
+    expect(withFile.body.attachments[0].fileId).toBe(fileId);
+
+    const download = await employee.agent.get(`/api/files/${fileId}?download=1`);
+    expect(download.status).toBe(200);
+    expect(download.text).toBe('persistent chat attachment');
+    expect(String(download.headers['content-disposition'])).toContain('attachment');
+
+    const deleted = await employee.agent.delete(`/api/chat/conversations/${conversationId}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.hidden).toBe(true);
+
+    const employeeList = await employee.agent.get('/api/chat/conversations');
+    expect((employeeList.body.conversations as { id: number }[]).some((row) => row.id === conversationId)).toBe(false);
+    const adminList = await admin.agent.get('/api/chat/conversations');
+    expect((adminList.body.conversations as { id: number }[]).some((row) => row.id === conversationId)).toBe(true);
+    const stillReadable = await admin.agent.get(`/api/chat/conversations/${conversationId}/messages?limit=100`);
+    expect(stillReadable.status).toBe(200);
+  });
+
   it('rejects a non-member from reading a conversation', async () => {
     const admin = await login('admin@workforce.test');
-    const conversations = await admin.agent.get('/api/chat/conversations');
-    const outsider = await login('ananya.rao@workforce.test');
-    const mine = await outsider.agent.get('/api/chat/conversations');
-    const myIds = new Set((mine.body.conversations as { id: number }[]).map((item) => item.id));
-    const foreign = (conversations.body.conversations as { id: number }[]).find((item) => !myIds.has(item.id));
-    expect(foreign).toBeDefined();
-    const response = await outsider.agent.get(`/api/chat/conversations/${foreign!.id}/messages`);
+    const member = await login('ananya.rao@workforce.test');
+    const outsider = await login('karthik.iyer@workforce.test');
+    const conversation = await admin.agent.post('/api/chat/conversations/direct').send({
+      employeeId: member.response.body.user.id,
+    });
+    expect(conversation.status).toBe(201);
+    const response = await outsider.agent.get(`/api/chat/conversations/${conversation.body.id}/messages`);
     expect(response.status).toBe(403);
   });
 });

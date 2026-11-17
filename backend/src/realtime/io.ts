@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from 'node:http';
 import { Server, type Socket } from 'socket.io';
 import { config } from '../config.js';
-import { query } from '../db/index.js';
+import { query, queryOne } from '../db/index.js';
 import { AuthService, type AuthUser } from '../services/AuthService.js';
 import { PresenceService } from '../services/PresenceService.js';
 
@@ -165,22 +165,113 @@ export function initRealtime(server: HttpServer): Server {
     socket.emit('presence:list', onlineEmployeeIds());
     refreshPresence(user.id);
 
-    socket.on('conversation:join', (conversationId: number) => {
-      socket.join(`conv:${conversationId}`);
+    socket.on('client:heartbeat', (_payload: unknown, ack?: (res: unknown) => void) => {
+      // Confirms the authenticated socket is alive and refreshes last-activity.
+      void PresenceService.ping(user.id).catch(() => undefined);
+      ack?.({ ok: true, at: Date.now() });
+    });
+
+    socket.on('conversation:join', async (conversationId: number, ack?: (res: unknown) => void) => {
+      try {
+        const id = Number(conversationId);
+        if (!Number.isFinite(id)) throw new Error('invalid conversation');
+        const member = await queryOne<{ id: number }>(
+          'SELECT id FROM conversation_members WHERE conversation_id = ? AND employee_id = ?',
+          [id, user.id],
+        );
+        if (!member) throw new Error('not a member');
+        await socket.join(`conv:${id}`);
+        ack?.({ ok: true });
+      } catch (error) {
+        ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+      }
     });
 
     socket.on('conversation:leave', (conversationId: number) => {
       socket.leave(`conv:${conversationId}`);
     });
 
-    socket.on('chat:typing', (payload: { conversationId: number; typing: boolean }) => {
+    socket.on('chat:typing', async (payload: { conversationId: number; typing: boolean }) => {
       if (!payload || typeof payload.conversationId !== 'number') return;
+      const member = await queryOne<{ id: number }>(
+        'SELECT id FROM conversation_members WHERE conversation_id = ? AND employee_id = ?',
+        [payload.conversationId, user.id],
+      ).catch(() => null);
+      if (!member) return;
       socket.to(`conv:${payload.conversationId}`).emit('chat:typing', {
         conversationId: payload.conversationId,
         employeeId: user.id,
         employeeName: user.fullName,
+        name: user.fullName,
         typing: Boolean(payload.typing),
       });
+    });
+
+    // ----------------------------- 1:1 calls --------------------------------
+    // All call signalling is relayed through the private call room. A client
+    // can never address an arbitrary socket, and every action re-checks that
+    // the authenticated employee is a participant of the call.
+    socket.on('call:join', async (payload: { callId: string }, ack?: (res: unknown) => void) => {
+      try {
+        const callId = String(payload?.callId ?? '');
+        if (!callId) throw new Error('invalid call');
+        const call = await queryOne<{ caller_id: number; callee_id: number; status: string }>(
+          'SELECT caller_id, callee_id, status FROM calls WHERE call_id = ?',
+          [callId],
+        );
+        if (!call || (Number(call.caller_id) !== user.id && Number(call.callee_id) !== user.id)) {
+          throw new Error('not a participant');
+        }
+        if (!['ringing', 'active'].includes(call.status)) throw new Error('call ended');
+        await socket.join(`call:${callId}`);
+        const sockets = await io!.in(`call:${callId}`).fetchSockets();
+        const participants = sockets.map((s) => {
+          const u = (s.data as SocketData).user;
+          return { socketId: s.id, employeeId: u.id, name: u.fullName };
+        });
+        socket.to(`call:${callId}`).emit('call:peer_joined', {
+          callId,
+          employeeId: user.id,
+          name: user.fullName,
+          participant: { socketId: socket.id, employeeId: user.id, name: user.fullName },
+        });
+        refreshPresence(user.id);
+        ack?.({ ok: true, participants });
+      } catch (error) {
+        ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+      }
+    });
+
+    socket.on('call:leave', async (payload: { callId: string }) => {
+      const callId = String(payload?.callId ?? '');
+      if (!callId) return;
+      socket.leave(`call:${callId}`);
+      socket.to(`call:${callId}`).emit('call:peer_left', { callId, employeeId: user.id });
+      refreshPresence(user.id);
+    });
+
+    socket.on('call:signal', async (payload: { callId: string; signal: unknown }, ack?: (res: unknown) => void) => {
+      try {
+        const callId = String(payload?.callId ?? '');
+        if (!callId || !payload?.signal) throw new Error('invalid signal');
+        const call = await queryOne<{ caller_id: number; callee_id: number; status: string }>(
+          'SELECT caller_id, callee_id, status FROM calls WHERE call_id = ?',
+          [callId],
+        );
+        if (!call || (Number(call.caller_id) !== user.id && Number(call.callee_id) !== user.id)) {
+          throw new Error('not a participant');
+        }
+        if (!['ringing', 'active'].includes(call.status)) throw new Error('call ended');
+        socket.to(`call:${callId}`).emit('call:signal', {
+          callId,
+          from: socket.id,
+          employeeId: user.id,
+          signal: payload.signal,
+        });
+        ack?.({ ok: true });
+      } catch (error) {
+        ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+      }
     });
 
     socket.on('meeting:join', async (payload: { code: string }, ack?: (res: unknown) => void) => {
@@ -240,7 +331,7 @@ export function initRealtime(server: HttpServer): Server {
       roomsAtDisconnect = [...socket.rooms].filter((room) => room.startsWith('meeting:') || room.startsWith('call:'));
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       socketUsers.delete(socket.id);
       const set = online.get(user.id);
       if (set) {
@@ -255,8 +346,19 @@ export function initRealtime(server: HttpServer): Server {
       refreshPresence(user.id);
       for (const code of roomsAtDisconnect) {
         if (code.startsWith('call:')) {
-          // The other party must not keep waiting on a peer that is gone.
-          io!.to(code).emit('call:ended', { callId: code.slice('call:'.length), reason: 'disconnected', byEmployeeId: user.id });
+          const callId = code.slice('call:'.length);
+          try {
+            const remaining = await io!.in(code).fetchSockets();
+            const peers = remaining.filter((s) => (s.data as SocketData).user.id !== user.id);
+            const ownSockets = remaining.filter((s) => (s.data as SocketData).user.id === user.id);
+            // A second tab of the same employee must not end the call.
+            if (peers.length > 0 && ownSockets.length === 0) {
+              io!.to(code).emit('call:peer_left', { callId, employeeId: user.id, reason: 'disconnected' });
+              io!.to(code).emit('call:ended', { callId, reason: 'disconnected', byEmployeeId: user.id });
+            }
+          } catch (error) {
+            console.error('[realtime] call cleanup failed', error);
+          }
           continue;
         }
         io!.in(code)

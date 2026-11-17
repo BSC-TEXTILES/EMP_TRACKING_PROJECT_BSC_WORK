@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api } from '../lib/api';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ApiError, api } from '../lib/api';
 import type { CurrentUser } from '../lib/types';
 
 interface AuthContextValue {
@@ -16,47 +16,91 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+const SESSION_KEY = 'wfm_session_known';
+const fingerprint = `browser-${navigator.userAgent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
+
+function isSessionInvalid(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  return error.code === 'session_expired' || error.status === 401 || error.status === 403;
+}
+
+/** Network and server-side failures must never look like a signed-out session. */
+function isTransient(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 0 || error.status >= 500 || error.code === 'timeout');
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const userRef = useRef<CurrentUser | null>(null);
+  userRef.current = user;
 
   const refresh = useCallback(async () => {
-    if (!localStorage.getItem('wfm_session_known')) {
+    if (!localStorage.getItem(SESSION_KEY)) {
       setUser(null);
       return;
     }
     try {
       const result = await api.get<{ user: CurrentUser; unreadNotifications: number }>('/auth/me');
-      localStorage.setItem('wfm_session_known', '1');
+      localStorage.setItem(SESSION_KEY, '1');
       setUser(result.user);
       setUnreadNotifications(result.unreadNotifications);
-    } catch {
-      localStorage.removeItem('wfm_session_known');
+    } catch (error) {
+      if (isSessionInvalid(error)) {
+        localStorage.removeItem(SESSION_KEY);
+        setUser(null);
+        return;
+      }
+      // Transient outage: keep the signed-in state and retry later.
+      if (isTransient(error)) throw error;
+      localStorage.removeItem(SESSION_KEY);
       setUser(null);
     }
   }, []);
 
   useEffect(() => {
-    void refresh().finally(() => setLoading(false));
+    let cancelled = false;
+    const boot = async () => {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await refresh();
+          return;
+        } catch {
+          if (cancelled) return;
+          await new Promise((resolve) => window.setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+      }
+    };
+    void boot().finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
     const onExpired = () => {
-      if (localStorage.getItem('wfm_session_known')) sessionStorage.setItem('wfm_session_expired', '1');
-      localStorage.removeItem('wfm_session_known');
+      if (localStorage.getItem(SESSION_KEY)) sessionStorage.setItem('wfm_session_expired', '1');
+      localStorage.removeItem(SESSION_KEY);
       setUser(null);
       setLoading(false);
     };
+    const onOnline = () => {
+      if (!userRef.current && localStorage.getItem(SESSION_KEY)) {
+        void refresh().catch(() => undefined);
+      }
+    };
     window.addEventListener('auth:expired', onExpired);
-    return () => window.removeEventListener('auth:expired', onExpired);
+    window.addEventListener('online', onOnline);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('auth:expired', onExpired);
+      window.removeEventListener('online', onOnline);
+    };
   }, [refresh]);
 
   const login = useCallback((nextUser: CurrentUser) => {
     sessionStorage.removeItem('wfm_session_expired');
-    localStorage.setItem('wfm_session_known', '1');
+    localStorage.setItem(SESSION_KEY, '1');
     setUser(nextUser);
-    void refresh();
-    void api.post('/activity/auto-start', {
-      machineFingerprint: `browser-${navigator.userAgent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`,
-    }).catch(() => undefined);
+    void refresh().catch(() => undefined);
   }, [refresh]);
 
   const logout = useCallback(async () => {
@@ -66,22 +110,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* clearing client state is enough */
     }
+    localStorage.removeItem(SESSION_KEY);
     setUser(null);
-    localStorage.removeItem('wfm_session_known');
     window.location.href = '/login';
   }, []);
 
+  // Activity monitoring starts automatically at login and keeps a heartbeat
+  // while the employee is signed in. A network interruption only delays the
+  // next heartbeat; it does not end the session.
   useEffect(() => {
-    if (!user) return;
-    void api.post('/activity/auto-start', {
-      machineFingerprint: `browser-${navigator.userAgent.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`,
-    }).catch(() => undefined);
+    if (!user?.id) return;
+    let cancelled = false;
+    const start = () => {
+      if (cancelled) return;
+      if (document.visibilityState === 'hidden') return;
+      void api.post('/activity/auto-start', { machineFingerprint: fingerprint }).catch(() => undefined);
+    };
+    start();
+    const timer = window.setInterval(start, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') start();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [user?.id]);
 
-    const timer = window.setInterval(() => {
-      void api.post('/activity/auto-start').catch(() => undefined);
-    }, 60000);
-
-    return () => window.clearInterval(timer);
+  // Idle/active presence for administrators. The ping carries no content and is
+  // sent at most once a minute, only while the employee is actually active.
+  useEffect(() => {
+    if (!user?.id) return;
+    let lastPing = 0;
+    let lastActivity = Date.now();
+    const send = () => {
+      const now = Date.now();
+      if (now - lastPing < 60_000) return;
+      if (document.visibilityState !== 'visible') return;
+      if (now - lastActivity > 5 * 60_000) return; // idle users are reported as away by the server
+      lastPing = now;
+      void api.post('/presence/ping').catch(() => undefined);
+    };
+    const onActivity = () => {
+      lastActivity = Date.now();
+      send();
+    };
+    const events: (keyof WindowEventMap)[] = ['pointerdown', 'keydown', 'touchstart', 'focus'];
+    for (const event of events) window.addEventListener(event, onActivity, { passive: true } as AddEventListenerOptions);
+    const timer = window.setInterval(send, 90_000);
+    return () => {
+      window.clearInterval(timer);
+      for (const event of events) window.removeEventListener(event, onActivity);
+    };
   }, [user?.id]);
 
   const has = useCallback(
