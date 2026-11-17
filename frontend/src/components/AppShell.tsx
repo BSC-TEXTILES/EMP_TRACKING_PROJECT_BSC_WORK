@@ -56,32 +56,64 @@ export function AppShell() {
       [/^\/$/, 'Dashboard'],
     ];
     const module = modules.find(([pattern]) => pattern.test(location.pathname))?.[1] ?? 'Platform';
+    // Only time while the page is visible AND the user interacted recently is
+    // active work. Hidden tabs and idle periods are never counted. Interaction
+    // is just a timestamp: no keys, clicks targets or content are recorded.
+    const IDLE_MS = 5 * 60 * 1000;
     const startedAt = Date.now();
-    let last = startedAt;
+    let segmentStart: number | null = document.visibilityState === 'visible' ? startedAt : null;
+    let accumulatedMs = 0;
+    let lastInteraction = startedAt;
+
+    const closeSegment = (now: number) => {
+      if (segmentStart === null) return;
+      // Never count beyond the idle cut-off after the last interaction.
+      const end = Math.min(now, lastInteraction + IDLE_MS);
+      if (end > segmentStart) accumulatedMs += end - segmentStart;
+      segmentStart = null;
+    };
     const flush = () => {
       const now = Date.now();
-      const seconds = Math.round((now - last) / 1000);
+      const visible = document.visibilityState === 'visible';
+      closeSegment(now);
+      const seconds = Math.round(accumulatedMs / 1000);
+      if (visible && now - lastInteraction < IDLE_MS) segmentStart = now;
       if (seconds < 5) return;
-      last = now;
+      accumulatedMs = 0;
       void api
         .post('/activity/module-activity', {
           module,
           pagePath: location.pathname,
           enteredAt: new Date(startedAt).toISOString(),
+          exitedAt: new Date(now).toISOString(),
           activeSeconds: seconds,
         })
         .catch(() => undefined);
     };
-    const interval = window.setInterval(() => {
-      if (document.visibilityState === 'visible') flush();
-    }, 60000);
+    const onInteraction = () => {
+      const now = Date.now();
+      const wasIdle = now - lastInteraction >= IDLE_MS;
+      lastInteraction = now;
+      if (document.visibilityState === 'visible' && (segmentStart === null || wasIdle)) {
+        if (wasIdle) closeSegment(now);
+        segmentStart = now;
+      }
+    };
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') flush();
+      else {
+        lastInteraction = Date.now();
+        segmentStart = Date.now();
+      }
     };
+    const interactionEvents = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
+    for (const name of interactionEvents) window.addEventListener(name, onInteraction, { passive: true });
+    const interval = window.setInterval(flush, 60000);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisibility);
+      for (const name of interactionEvents) window.removeEventListener(name, onInteraction);
       flush();
     };
   }, [location.pathname, user]);

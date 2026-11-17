@@ -418,11 +418,27 @@ function ComposeEmailModal({
   initialReply?: { recipientId?: number; subject?: string };
 }) {
   const toast = useToast();
+  const [minimized, setMinimized] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+
   const [contacts, setContacts] = useState<PickerEmployee[]>([]);
   const [recipientIds, setRecipientIds] = useState<number[]>([]);
+  const [ccIds, setCcIds] = useState<number[]>([]);
+  const [bccIds, setBccIds] = useState<number[]>([]);
+  const [showCc, setShowCc] = useState(false);
+  const [showBcc, setShowBcc] = useState(false);
+
+  const [toSearch, setToSearch] = useState('');
+  const [toOpen, setToOpen] = useState(false);
+  const [ccSearch, setCcSearch] = useState('');
+  const [ccOpen, setCcOpen] = useState(false);
+  const [bccSearch, setBccSearch] = useState('');
+  const [bccOpen, setBccOpen] = useState(false);
+
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [attachments, setAttachments] = useState<{ fileId: number; name: string; size: number; mimeType: string }[]>([]);
+  const [showFormatting, setShowFormatting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -438,22 +454,47 @@ function ComposeEmailModal({
     } else {
       setRecipientIds([]);
     }
+    setCcIds([]);
+    setBccIds([]);
+    setShowCc(false);
+    setShowBcc(false);
     setSubject(initialReply?.subject ?? '');
     setBody('');
     setAttachments([]);
+    setMinimized(false);
+    setMaximized(false);
+    setToSearch('');
+    setToOpen(false);
   }, [open, initialReply]);
 
+  const filterEmployees = (queryText: string, excludedIds: number[]) => {
+    const q = queryText.trim().toLowerCase();
+    const available = contacts.filter((c) => !excludedIds.includes(c.id));
+    if (!q) return available.slice(0, 8);
+    return available
+      .filter((c) => {
+        const name = (c.full_name ?? '').toLowerCase();
+        const email = (c.email ?? '').toLowerCase();
+        const dept = (c.department_name ?? '').toLowerCase();
+        const desig = (c.designation_title ?? '').toLowerCase();
+        return name.includes(q) || email.includes(q) || dept.includes(q) || desig.includes(q);
+      })
+      .slice(0, 8);
+  };
+
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      const res = await api.upload<{ id: number; name: string; mimeType: string; size: number }>(file);
-      setAttachments((prev) => [
-        ...prev,
-        { fileId: res.id, name: file.name, size: file.size, mimeType: file.type || res.mimeType },
-      ]);
-      toast.success(`${file.name} attached.`);
+      for (const file of Array.from(files)) {
+        const res = await api.upload<{ id: number; name: string; mimeType: string; size: number }>(file);
+        setAttachments((prev) => [
+          ...prev,
+          { fileId: res.id, name: file.name, size: file.size, mimeType: file.type || res.mimeType },
+        ]);
+      }
+      toast.success(`${files.length} file(s) attached.`);
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -466,10 +507,15 @@ function ComposeEmailModal({
     setAttachments((prev) => prev.filter((a) => a.fileId !== fileId));
   };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (recipientIds.length === 0) {
-      toast.error('Select at least one recipient.');
+  const applyFormat = (syntax: string) => {
+    setBody((prev) => `${prev} ${syntax}`);
+  };
+
+  const submit = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const allRecipients = Array.from(new Set([...recipientIds, ...ccIds, ...bccIds]));
+    if (allRecipients.length === 0) {
+      toast.error('Please specify at least one recipient.');
       return;
     }
     if (!subject.trim()) {
@@ -484,7 +530,7 @@ function ComposeEmailModal({
     setBusy(true);
     try {
       const result = await api.post<SendResult>('/emails/send', {
-        recipientIds,
+        recipientIds: allRecipients,
         subject: subject.trim(),
         body: body.trim(),
         attachments: attachments.length > 0 ? attachments : undefined,
@@ -497,95 +543,543 @@ function ComposeEmailModal({
     }
   };
 
+  if (!open) return null;
+
+  // Minimized dock at bottom right
+  if (minimized) {
+    return (
+      <div
+        className="fixed bottom-0 right-4 sm:right-8 z-50 h-10 w-72 rounded-t-xl bg-[#f2f6fc] border border-slate-300 shadow-2xl flex items-center justify-between px-3.5 cursor-pointer hover:bg-slate-200 transition-colors"
+        onClick={() => setMinimized(false)}
+      >
+        <span className="text-xs font-semibold text-slate-800 truncate">
+          {subject.trim() || initialReply?.subject || 'New Message'}
+        </span>
+        <div className="flex items-center gap-1.5 text-slate-600" onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            title="Restore window"
+            className="p-1 hover:bg-slate-300 rounded text-slate-600"
+            onClick={() => setMinimized(false)}
+          >
+            <Icon name="maximize" size={12} />
+          </button>
+          <button
+            type="button"
+            title="Close"
+            className="p-1 hover:bg-slate-300 rounded text-slate-600"
+            onClick={onClose}
+          >
+            <Icon name="close" size={13} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const selectedRecipients = contacts.filter((c) => recipientIds.includes(c.id));
+  const selectedCcs = contacts.filter((c) => ccIds.includes(c.id));
+  const selectedBccs = contacts.filter((c) => bccIds.includes(c.id));
+
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Compose Email"
-      footer={
-        <>
-          <button type="button" className="btn-secondary" onClick={onClose} disabled={busy || uploading}>
-            Cancel
-          </button>
-          <button type="submit" form="compose-form" className="btn-primary" disabled={busy || uploading}>
-            <Icon name="send" size={15} />
-            <span>{busy ? 'Sending…' : 'Send Email'}</span>
-          </button>
-        </>
-      }
-    >
-      <form id="compose-form" onSubmit={submit} className="space-y-4">
-        <div>
-          <span className="label">Recipients *</span>
-          <div className="max-h-40 overflow-y-auto rounded-lg border border-ink-300 p-2 space-y-1">
-            {contacts.map((c) => (
-              <label key={c.id} className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-ink-50 cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded text-brand-600"
-                  checked={recipientIds.includes(c.id)}
-                  onChange={(e) =>
-                    setRecipientIds((prev) => (e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)))
-                  }
-                />
-                <span className="font-medium text-ink-800">{c.full_name}</span>
-                <span className="text-xs text-ink-400">({c.email ?? 'Workforce'}) · {c.designation_title ?? 'Employee'}</span>
-              </label>
-            ))}
+    <>
+      {maximized && <div className="fixed inset-0 bg-black/40 z-40 transition-opacity" onClick={() => setMaximized(false)} />}
+      <div
+        className={cx(
+          'fixed z-50 flex flex-col bg-white border border-slate-300 shadow-2xl overflow-hidden transition-all',
+          maximized
+            ? 'inset-3 sm:inset-6 rounded-2xl'
+            : 'bottom-0 right-2 sm:right-8 w-[calc(100vw-1rem)] sm:w-[580px] md:w-[620px] h-[600px] rounded-t-2xl',
+        )}
+      >
+        {/* Title Bar matching Image 2 */}
+        <div className="flex items-center justify-between px-4 py-2.5 bg-[#f2f6fc] border-b border-slate-200 select-none">
+          <span className="text-sm font-semibold text-slate-800">
+            {initialReply?.subject ? initialReply.subject : 'New Message'}
+          </span>
+          <div className="flex items-center gap-1 text-slate-600">
+            <button
+              type="button"
+              title="Minimize"
+              className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors"
+              onClick={() => setMinimized(true)}
+            >
+              <Icon name="minus" size={13} />
+            </button>
+            <button
+              type="button"
+              title={maximized ? 'Exit full screen' : 'Full screen'}
+              className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors"
+              onClick={() => setMaximized((v) => !v)}
+            >
+              <Icon name={maximized ? 'minimize' : 'maximize'} size={13} />
+            </button>
+            <button
+              type="button"
+              title="Close"
+              className="p-1.5 hover:bg-slate-200 rounded text-slate-600 transition-colors"
+              onClick={onClose}
+            >
+              <Icon name="close" size={14} />
+            </button>
           </div>
         </div>
 
-        <Field label="Subject" required>
-          <input
-            className="input"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="What is this email about?"
-            required
-          />
-        </Field>
-
-        <Field label="Message" required>
-          <textarea
-            className="input min-h-[140px] resize-y"
-            rows={5}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Write your email here..."
-            required
-          />
-        </Field>
-
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold text-ink-700">Attachments</span>
-            <label className="cursor-pointer inline-flex items-center gap-1 text-xs text-brand-600 hover:text-brand-700 font-medium">
-              <Icon name="paperclip" size={13} />
-              <span>{uploading ? 'Uploading…' : 'Attach File'}</span>
-              <input type="file" className="hidden" onChange={handleFileUpload} disabled={uploading} />
-            </label>
-          </div>
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {attachments.map((a) => (
-                <span
-                  key={a.fileId}
-                  className="inline-flex items-center gap-1 rounded-md bg-ink-100 px-2 py-1 text-xs text-ink-700"
+        {/* Recipients (To) Section with instant search */}
+        <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[42px]">
+          <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Recipients</span>
+          <div className="flex-1 flex flex-wrap items-center gap-1.5">
+            {selectedRecipients.map((emp) => (
+              <span
+                key={emp.id}
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-[10px] font-bold text-white uppercase">
+                  {emp.full_name[0]}
+                </span>
+                <span className="font-medium">{emp.full_name}</span>
+                <button
+                  type="button"
+                  title={`Remove ${emp.full_name}`}
+                  className="text-slate-400 hover:text-red-600 ml-0.5"
+                  onClick={() => setRecipientIds((prev) => prev.filter((id) => id !== emp.id))}
                 >
-                  <span className="max-w-[140px] truncate">{a.name}</span>
+                  ✕
+                </button>
+              </span>
+            ))}
+            <input
+              type="text"
+              value={toSearch}
+              onChange={(e) => {
+                setToSearch(e.target.value);
+                setToOpen(true);
+              }}
+              onFocus={() => setToOpen(true)}
+              placeholder={recipientIds.length === 0 ? 'Search name or email...' : 'Add recipient...'}
+              className="flex-1 min-w-[140px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
+            />
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-500 shrink-0">
+            {!showCc && (
+              <button
+                type="button"
+                className="hover:text-slate-900 font-medium"
+                onClick={() => setShowCc(true)}
+              >
+                Cc
+              </button>
+            )}
+            {!showBcc && (
+              <button
+                type="button"
+                className="hover:text-slate-900 font-medium"
+                onClick={() => setShowBcc(true)}
+              >
+                Bcc
+              </button>
+            )}
+          </div>
+
+          {/* Autocomplete Dropdown for "To" */}
+          {toOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setToOpen(false)} />
+              <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+                {filterEmployees(toSearch, recipientIds).length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-slate-500">No matching employees found</div>
+                ) : (
+                  filterEmployees(toSearch, recipientIds).map((emp) => (
+                    <button
+                      key={emp.id}
+                      type="button"
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50 transition-colors"
+                      onClick={() => {
+                        setRecipientIds((prev) => [...prev, emp.id]);
+                        setToSearch('');
+                        setToOpen(false);
+                      }}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
+                          {emp.full_name[0]}
+                        </span>
+                        <div>
+                          <p className="font-semibold text-slate-800">{emp.full_name}</p>
+                          <p className="text-[11px] text-slate-500">{emp.email ?? `${emp.full_name.toLowerCase().replace(/ /g, '.')}@bsctextiles.in`}</p>
+                        </div>
+                      </div>
+                      {emp.designation_title && (
+                        <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5">
+                          {emp.designation_title}
+                        </span>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Optional Cc Line */}
+        {showCc && (
+          <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[38px]">
+            <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Cc</span>
+            <div className="flex-1 flex flex-wrap items-center gap-1.5">
+              {selectedCcs.map((emp) => (
+                <span
+                  key={emp.id}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
+                >
+                  <span className="font-medium">{emp.full_name}</span>
                   <button
                     type="button"
-                    className="text-ink-400 hover:text-red-500"
-                    onClick={() => removeAttachment(a.fileId)}
+                    className="text-slate-400 hover:text-red-600 ml-0.5"
+                    onClick={() => setCcIds((prev) => prev.filter((id) => id !== emp.id))}
                   >
                     ✕
                   </button>
                 </span>
               ))}
+              <input
+                type="text"
+                value={ccSearch}
+                onChange={(e) => {
+                  setCcSearch(e.target.value);
+                  setCcOpen(true);
+                }}
+                onFocus={() => setCcOpen(true)}
+                placeholder="Add Cc..."
+                className="flex-1 min-w-[120px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
+              />
+            </div>
+            {ccOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setCcOpen(false)} />
+                <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+                  {filterEmployees(ccSearch, [...recipientIds, ...ccIds]).map((emp) => (
+                    <button
+                      key={emp.id}
+                      type="button"
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50"
+                      onClick={() => {
+                        setCcIds((prev) => [...prev, emp.id]);
+                        setCcSearch('');
+                        setCcOpen(false);
+                      }}
+                    >
+                      <span className="font-medium text-slate-800">{emp.full_name}</span>
+                      <span className="text-[11px] text-slate-500">{emp.email}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Optional Bcc Line */}
+        {showBcc && (
+          <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[38px]">
+            <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Bcc</span>
+            <div className="flex-1 flex flex-wrap items-center gap-1.5">
+              {selectedBccs.map((emp) => (
+                <span
+                  key={emp.id}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
+                >
+                  <span className="font-medium">{emp.full_name}</span>
+                  <button
+                    type="button"
+                    className="text-slate-400 hover:text-red-600 ml-0.5"
+                    onClick={() => setBccIds((prev) => prev.filter((id) => id !== emp.id))}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              <input
+                type="text"
+                value={bccSearch}
+                onChange={(e) => {
+                  setBccSearch(e.target.value);
+                  setBccOpen(true);
+                }}
+                onFocus={() => setBccOpen(true)}
+                placeholder="Add Bcc..."
+                className="flex-1 min-w-[120px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
+              />
+            </div>
+            {bccOpen && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setBccOpen(false)} />
+                <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
+                  {filterEmployees(bccSearch, [...recipientIds, ...ccIds, ...bccIds]).map((emp) => (
+                    <button
+                      key={emp.id}
+                      type="button"
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50"
+                      onClick={() => {
+                        setBccIds((prev) => [...prev, emp.id]);
+                        setBccSearch('');
+                        setBccOpen(false);
+                      }}
+                    >
+                      <span className="font-medium text-slate-800">{emp.full_name}</span>
+                      <span className="text-[11px] text-slate-500">{emp.email}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Subject Line matching Image 2 */}
+        <div className="border-b border-slate-200 px-4 py-2">
+          <input
+            type="text"
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Subject"
+            className="w-full text-sm font-normal text-slate-900 placeholder-slate-400 focus:outline-none bg-transparent"
+          />
+        </div>
+
+        {/* Message Body matching Image 2 */}
+        <div className="flex-1 px-4 py-3 flex flex-col overflow-y-auto bg-white">
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Write your email here..."
+            className="w-full flex-1 min-h-[220px] text-sm text-slate-800 placeholder-slate-400 focus:outline-none resize-none font-sans leading-relaxed bg-transparent"
+          />
+
+          {/* Attachments Chips */}
+          {attachments.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-slate-100 flex flex-wrap gap-2">
+              {attachments.map((a) => (
+                <div
+                  key={a.fileId}
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700 shadow-sm"
+                >
+                  <Icon name="paperclip" size={13} className="text-slate-400 shrink-0" />
+                  <span className="font-medium max-w-[180px] truncate">{a.name}</span>
+                  <span className="text-[10px] text-slate-400">
+                    ({(a.size / 1024).toFixed(0)} KB)
+                  </span>
+                  <button
+                    type="button"
+                    title="Remove attachment"
+                    className="text-slate-400 hover:text-red-500 font-bold ml-1"
+                    onClick={() => removeAttachment(a.fileId)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
-      </form>
-    </Modal>
+
+        {/* Formatting Toolbar matching Image 2 */}
+        {showFormatting && (
+          <div className="border-t border-slate-200 bg-slate-50 px-3 py-1.5 flex items-center gap-1 text-slate-600 text-xs overflow-x-auto select-none">
+            <button
+              type="button"
+              title="Undo"
+              onClick={() => toast.info('Undo')}
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="undo" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Redo"
+              onClick={() => toast.info('Redo')}
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="redo" size={13} />
+            </button>
+            <div className="h-4 w-px bg-slate-300 mx-1" />
+
+            <span className="px-1 text-slate-700 font-sans cursor-pointer hover:bg-slate-200 rounded">Sans Serif ▾</span>
+            <span className="px-1 text-slate-700 font-sans cursor-pointer hover:bg-slate-200 rounded">TT ▾</span>
+            <div className="h-4 w-px bg-slate-300 mx-1" />
+
+            <button
+              type="button"
+              title="Bold"
+              onClick={() => applyFormat('**bold text**')}
+              className="p-1 hover:bg-slate-200 rounded font-bold text-slate-700 px-1.5"
+            >
+              <Icon name="bold" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Italic"
+              onClick={() => applyFormat('*italic text*')}
+              className="p-1 hover:bg-slate-200 rounded italic text-slate-700 px-1.5"
+            >
+              <Icon name="italic" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Underline"
+              onClick={() => applyFormat('__underlined text__')}
+              className="p-1 hover:bg-slate-200 rounded underline text-slate-700 px-1.5"
+            >
+              <Icon name="underline" size={13} />
+            </button>
+            <div className="h-4 w-px bg-slate-300 mx-1" />
+
+            <button
+              type="button"
+              title="Align left"
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="alignLeft" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Numbered list"
+              onClick={() => applyFormat('\n1. Item 1\n2. Item 2')}
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="listOrdered" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Bulleted list"
+              onClick={() => applyFormat('\n• Point 1\n• Point 2')}
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="list" size={13} />
+            </button>
+            <button
+              type="button"
+              title="Quote"
+              onClick={() => applyFormat('\n> Quote text')}
+              className="p-1 hover:bg-slate-200 rounded text-slate-600"
+            >
+              <Icon name="quote" size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Bottom Action Bar with Send Split Button & Tool Icons matching Image 2 */}
+        <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3 bg-white">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Blue Send Split Button */}
+            <div className="inline-flex items-stretch rounded-full bg-blue-600 shadow-sm hover:bg-blue-700 transition-colors">
+              <button
+                type="button"
+                onClick={() => void submit()}
+                disabled={busy || uploading}
+                className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium text-white focus:outline-none"
+              >
+                <span>{busy ? 'Sending…' : 'Send'}</span>
+              </button>
+              <button
+                type="button"
+                title="Send options"
+                className="border-l border-blue-500 pr-3 pl-2 py-2 hover:bg-blue-800 rounded-r-full text-white focus:outline-none"
+                onClick={() => toast.info('Send options: direct workforce inbox delivery active')}
+              >
+                <Icon name="chevronDown" size={14} />
+              </button>
+            </div>
+
+            {/* Action Tool Icons */}
+            <button
+              type="button"
+              title="Formatting options"
+              onClick={() => setShowFormatting((v) => !v)}
+              className={cx(
+                'p-2 rounded hover:bg-slate-100 transition-colors',
+                showFormatting ? 'text-blue-600 bg-blue-50' : 'text-slate-600',
+              )}
+            >
+              <span className="font-serif font-bold text-xs">Aa</span>
+            </button>
+
+            <label
+              className="cursor-pointer p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+              title="Attach files"
+            >
+              <Icon name="paperclip" size={16} />
+              <input type="file" multiple className="hidden" onChange={handleFileUpload} disabled={uploading} />
+            </label>
+
+            <button
+              type="button"
+              title="Insert link"
+              onClick={() => {
+                const url = window.prompt('Enter link URL:');
+                if (url) applyFormat(`[link](${url})`);
+              }}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Icon name="link" size={15} />
+            </button>
+
+            <button
+              type="button"
+              title="Insert emoji"
+              onClick={() => applyFormat('😊')}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <span className="text-sm leading-none">😊</span>
+            </button>
+
+            <button
+              type="button"
+              title="Insert files using Drive"
+              onClick={() => toast.info('BSC Workforce Cloud Storage connected')}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Icon name="folder" size={15} />
+            </button>
+
+            <label
+              className="cursor-pointer p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+              title="Insert photo"
+            >
+              <Icon name="image" size={15} />
+              <input type="file" accept="image/*" className="hidden" onChange={handleFileUpload} disabled={uploading} />
+            </label>
+
+            <button
+              type="button"
+              title="Toggle confidential mode"
+              onClick={() => toast.info('Confidential mode: workforce internal encryption is active')}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Icon name="lock" size={15} />
+            </button>
+
+            <button
+              type="button"
+              title="Insert signature"
+              onClick={() => applyFormat('\n\n--\nBest regards,\nBSC Textiles Workforce Team')}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Icon name="edit" size={15} />
+            </button>
+          </div>
+
+          {/* Right Discard Draft Trash Button */}
+          <button
+            type="button"
+            title="Discard draft"
+            onClick={onClose}
+            className="p-2 rounded hover:bg-slate-100 text-slate-500 hover:text-red-600 transition-colors"
+          >
+            <Icon name="trash" size={16} />
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
