@@ -9,7 +9,7 @@ interface Options {
   departments: { id: number; name: string }[];
   designations: { id: number; title: string; department_id: number | null }[];
   locations: { id: number; name: string; city: string | null }[];
-  managers: { id: number; full_name: string; designation_title: string | null; department_name: string | null }[];
+  managers: { id: number; full_name: string; location_name: string | null }[];
 }
 
 export default function Register() {
@@ -182,7 +182,7 @@ export default function Register() {
                     <option value="">Select manager</option>
                     {options?.managers.map((manager) => (
                       <option key={manager.id} value={manager.id}>
-                        {manager.full_name} · {manager.designation_title ?? manager.department_name ?? ''}
+                        {manager.full_name}{manager.location_name ? ` · ${manager.location_name}` : ''}
                       </option>
                     ))}
                   </select>

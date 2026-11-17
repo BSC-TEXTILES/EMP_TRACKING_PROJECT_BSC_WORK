@@ -197,6 +197,10 @@ export const config = {
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
     uploadDir: process.env.UPLOAD_DIR ?? 'storage/uploads',
     maxUploadMb: int('MAX_UPLOAD_MB', 15),
+    /** Chunked/resumable uploads support large archives up to 1 GB by default. */
+    maxChunkedUploadMb: int('MAX_CHUNKED_UPLOAD_MB', 1024),
+    chunkSizeMb: Math.min(32, Math.max(1, int('UPLOAD_CHUNK_SIZE_MB', 8))),
+    chunkSessionTtlHours: int('UPLOAD_SESSION_TTL_HOURS', 24),
     redisUrl: process.env.REDIS_URL ?? '',
     websocketUrl: process.env.WEBSOCKET_URL ?? '',
     cookieName: 'wfm_session',

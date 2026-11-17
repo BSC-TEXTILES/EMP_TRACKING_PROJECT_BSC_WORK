@@ -13,6 +13,28 @@ const migrationCandidates = [
 ];
 const migrationsDir = migrationCandidates.find((d) => fsSync.existsSync(d)) || migrationCandidates[0];
 
+/**
+ * Migrations run automatically on boot, so a migration that wipes data would
+ * destroy production on the next restart. TRUNCATE, DROP TABLE/DATABASE and
+ * unconditional DELETE (no WHERE) are refused unless an operator explicitly
+ * allows that one file with ALLOW_DESTRUCTIVE_MIGRATION=<filename>.
+ */
+export function assertNonDestructive(file: string, sql: string): void {
+  const code = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const statements = code.split(';').map((statement) => statement.trim()).filter(Boolean);
+  const offending = statements.filter((statement) =>
+    /^TRUNCATE\b/i.test(statement)
+    || /^DROP\s+(TABLE|DATABASE|SCHEMA)\b/i.test(statement)
+    || (/^DELETE\s+FROM\b/i.test(statement) && !/\bWHERE\b/i.test(statement)));
+  if (offending.length === 0) return;
+  if (process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
+    console.warn(`[migrate] ${file}: running ${offending.length} destructive statement(s) because ALLOW_DESTRUCTIVE_MIGRATION is set`);
+    return;
+  }
+  throw new Error(`[migrate] ${file} contains ${offending.length} destructive statement(s) (e.g. "${offending[0].slice(0, 60)}"). `
+    + 'Migrations must not delete existing data. If this is truly intended, back up the database and set ALLOW_DESTRUCTIVE_MIGRATION to the file name for one run.');
+}
+
 async function ensureDatabase(): Promise<void> {
   try {
     const root = await mysql.createConnection({
@@ -68,6 +90,7 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
         continue;
       }
       const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
+      assertNonDestructive(file, sql);
       console.log(`[migrate] applying ${file}`);
       await connection.query(sql);
       await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);

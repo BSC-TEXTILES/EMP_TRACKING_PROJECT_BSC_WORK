@@ -2,9 +2,9 @@ import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { emitToConversation, isOnline, joinConversationRoom } from '../realtime/io.js';
+import { emitToConversation, emitToEmployee, emitToEmployees, isOnline, joinConversationRoom } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
-function mapMessage(r, attachments = [], reactions = []) {
+function mapMessage(r, attachments = [], reactions = [], receipts = { recipientCount: 0, readCount: 0 }) {
     return {
         id: Number(r.id),
         conversationId: Number(r.conversation_id),
@@ -16,11 +16,30 @@ function mapMessage(r, attachments = [], reactions = []) {
         replyToId: r.reply_to_id ? Number(r.reply_to_id) : null,
         replyToBody: r.reply_body ?? null,
         replyToSender: r.reply_sender ?? null,
+        clientId: r.client_id ?? null,
         editedAt: toIso(r.edited_at),
         deleted: Boolean(r.deleted_at),
         createdAt: toIso(r.created_at),
+        recipientCount: receipts.recipientCount,
+        readCount: receipts.readCount,
         attachments,
         reactions,
+    };
+}
+function mapAttachment(a) {
+    return {
+        fileId: Number(a.file_id),
+        original_name: a.original_name,
+        mime_type: a.mime_type,
+        size_bytes: Number(a.size_bytes),
+        duration_seconds: a.duration_seconds,
+    };
+}
+function mapReaction(r) {
+    return {
+        employeeId: Number(r.employee_id),
+        name: r.full_name,
+        emoji: r.emoji,
     };
 }
 export class ChatService {
@@ -33,16 +52,31 @@ export class ChatService {
             throw ApiError.forbidden('You are not a member of this conversation');
         }
     }
+    static async userState(conversationId, employeeId) {
+        return queryOne('SELECT deleted_at, cleared_at FROM conversation_user_state WHERE conversation_id = ? AND employee_id = ?', [conversationId, employeeId]);
+    }
     static async listConversations(employeeId) {
         const rows = await query(`SELECT c.id, c.conv_type, c.name, c.description, c.is_announcement,
               cm.last_read_at, cm.is_muted,
-              (SELECT MAX(m.created_at) FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL) AS last_message_at,
-              (SELECT m.body FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) AS last_body,
-              (SELECT e.full_name FROM messages m JOIN employees e ON e.id = m.sender_id WHERE m.conversation_id = c.id ORDER BY m.id DESC LIMIT 1) AS last_sender,
-              (SELECT m.message_type FROM messages m WHERE m.conversation_id = c.id AND m.deleted_at IS NULL ORDER BY m.id DESC LIMIT 1) AS last_type,
+              (SELECT MAX(m.created_at) FROM messages m
+                 WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                   AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)) AS last_message_at,
+              (SELECT m.body FROM messages m
+                 WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                   AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)
+                 ORDER BY m.id DESC LIMIT 1) AS last_body,
+              (SELECT e.full_name FROM messages m JOIN employees e ON e.id = m.sender_id
+                 WHERE m.conversation_id = c.id
+                   AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)
+                 ORDER BY m.id DESC LIMIT 1) AS last_sender,
+              (SELECT m.message_type FROM messages m
+                 WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+                   AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)
+                 ORDER BY m.id DESC LIMIT 1) AS last_type,
               (SELECT COUNT(*) FROM messages m
                  WHERE m.conversation_id = c.id AND m.deleted_at IS NULL AND m.sender_id <> ?
-                   AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)) AS unread,
+                   AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)
+                   AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)) AS unread,
               (SELECT e.full_name FROM conversation_members other
                  JOIN employees e ON e.id = other.employee_id
                  WHERE other.conversation_id = c.id AND other.employee_id <> ? AND c.conv_type = 'direct' LIMIT 1) AS other_name,
@@ -57,7 +91,14 @@ export class ChatService {
               (SELECT COUNT(*) FROM conversation_members mm WHERE mm.conversation_id = c.id) AS member_count
        FROM conversation_members cm
        JOIN conversations c ON c.id = cm.conversation_id
+       LEFT JOIN conversation_user_state cus
+         ON cus.conversation_id = c.id AND cus.employee_id = cm.employee_id
        WHERE cm.employee_id = ?
+         AND (
+           cus.deleted_at IS NULL
+           OR COALESCE((SELECT MAX(m9.created_at) FROM messages m9
+                        WHERE m9.conversation_id = c.id AND m9.deleted_at IS NULL), c.created_at) > cus.deleted_at
+         )
        ORDER BY COALESCE(last_message_at, c.created_at) DESC`, [employeeId, employeeId, employeeId, employeeId, employeeId, employeeId]);
         return rows.map((r) => ({
             id: Number(r.id),
@@ -88,8 +129,14 @@ export class ChatService {
          AND EXISTS (SELECT 1 FROM conversation_members m2 WHERE m2.conversation_id = c.id AND m2.employee_id = ?)
          AND (SELECT COUNT(*) FROM conversation_members m3 WHERE m3.conversation_id = c.id) = 2
        LIMIT 1`, [employeeId, otherEmployeeId]);
-        if (existing)
+        if (existing) {
+            // Opening a chat the employee previously deleted makes it visible again;
+            // history cleared by that deletion is intentionally not restored.
+            await execute(`INSERT INTO conversation_user_state (conversation_id, employee_id, deleted_at)
+         VALUES (?, ?, NULL)
+         ON DUPLICATE KEY UPDATE deleted_at = NULL`, [existing.id, employeeId]);
             return Number(existing.id);
+        }
         const id = await transaction(async (conn) => {
             const [result] = await conn.query("INSERT INTO conversations (conv_type, created_by) VALUES ('direct', ?)", [employeeId]);
             const convId = Number(result.insertId);
@@ -190,6 +237,11 @@ export class ChatService {
         const limit = Math.min(100, Math.max(5, options.limit ?? 40));
         const clauses = ['m.conversation_id = ?'];
         const params = [conversationId];
+        const state = await ChatService.userState(conversationId, employeeId);
+        if (state?.cleared_at) {
+            clauses.push('m.created_at > ?');
+            params.push(state.cleared_at);
+        }
         if (options.before) {
             clauses.push('m.id < ?');
             params.push(options.before);
@@ -198,6 +250,7 @@ export class ChatService {
             clauses.push('m.body LIKE ?');
             params.push(`%${options.search}%`);
         }
+        // Query one extra row so the caller knows whether older messages exist.
         const rows = await query(`SELECT m.*, e.full_name AS sender_name, e.photo_url AS sender_photo,
               rm.body AS reply_body, re.full_name AS reply_sender
        FROM messages m
@@ -206,24 +259,55 @@ export class ChatService {
        LEFT JOIN employees re ON re.id = rm.sender_id
        WHERE ${clauses.join(' AND ')}
        ORDER BY m.id DESC
-       LIMIT ${limit}`, params);
-        const ids = rows.map((r) => Number(r.id));
+       LIMIT ${limit + 1}`, params);
+        const hasMore = rows.length > limit;
+        const page = hasMore ? rows.slice(0, limit) : rows;
+        const ids = page.map((r) => Number(r.id));
         let attachments = [];
         let reactions = [];
+        let receipts = [];
         if (ids.length > 0) {
             const ph = ids.map(() => '?').join(',');
-            attachments = await query(`SELECT ma.message_id, f.id AS file_id, f.original_name, f.mime_type, f.size_bytes, ma.duration_seconds
-         FROM message_attachments ma JOIN files f ON f.id = ma.file_id WHERE ma.message_id IN (${ph})`, ids);
-            reactions = await query(`SELECT mr.message_id, mr.employee_id, e.full_name, mr.emoji
-         FROM message_reactions mr JOIN employees e ON e.id = mr.employee_id WHERE mr.message_id IN (${ph})`, ids);
+            [attachments, reactions, receipts] = await Promise.all([
+                query(`SELECT ma.message_id, f.id AS file_id, f.original_name, f.mime_type, f.size_bytes, ma.duration_seconds
+           FROM message_attachments ma JOIN files f ON f.id = ma.file_id WHERE ma.message_id IN (${ph})`, ids),
+                query(`SELECT mr.message_id, mr.employee_id, e.full_name, mr.emoji
+           FROM message_reactions mr JOIN employees e ON e.id = mr.employee_id WHERE mr.message_id IN (${ph})`, ids),
+                query(`SELECT message_id, COUNT(*) AS total, COALESCE(SUM(read_at IS NOT NULL), 0) AS read_count
+           FROM message_receipts WHERE message_id IN (${ph}) GROUP BY message_id`, ids),
+            ]);
         }
-        return rows
-            .map((r) => mapMessage(r, attachments.filter((a) => Number(a.message_id) === Number(r.id)).map((a) => ({ ...a, fileId: Number(a.file_id) })), reactions.filter((x) => Number(x.message_id) === Number(r.id)).map((x) => ({
-            employeeId: Number(x.employee_id),
-            name: x.full_name,
-            emoji: x.emoji,
-        }))))
+        const messages = page
+            .map((r) => {
+            const receipt = receipts.find((x) => Number(x.message_id) === Number(r.id));
+            return mapMessage(r, attachments.filter((a) => Number(a.message_id) === Number(r.id)).map(mapAttachment), reactions.filter((x) => Number(x.message_id) === Number(r.id)).map(mapReaction), { recipientCount: Number(receipt?.total ?? 0), readCount: Number(receipt?.read_count ?? 0) });
+        })
             .reverse();
+        return {
+            messages,
+            hasMore,
+            nextBefore: messages.length > 0 ? messages[0].id : null,
+        };
+    }
+    static async hydrate(messageId) {
+        const message = await queryOne(`SELECT m.*, e.full_name AS sender_name, e.photo_url AS sender_photo, rm.body AS reply_body, re.full_name AS reply_sender
+       FROM messages m JOIN employees e ON e.id = m.sender_id
+       LEFT JOIN messages rm ON rm.id = m.reply_to_id LEFT JOIN employees re ON re.id = rm.sender_id
+       WHERE m.id = ?`, [messageId]);
+        if (!message)
+            throw ApiError.notFound('Message not found');
+        const [attachments, reactions, receipts] = await Promise.all([
+            query(`SELECT 0 AS message_id, f.id AS file_id, f.original_name, f.mime_type, f.size_bytes, ma.duration_seconds
+         FROM message_attachments ma JOIN files f ON f.id = ma.file_id WHERE ma.message_id = ?`, [messageId]),
+            query(`SELECT ? AS message_id, mr.employee_id, e.full_name, mr.emoji
+         FROM message_reactions mr JOIN employees e ON e.id = mr.employee_id WHERE mr.message_id = ?`, [messageId, messageId]),
+            queryOne(`SELECT COUNT(*) AS total, COALESCE(SUM(read_at IS NOT NULL), 0) AS read_count
+         FROM message_receipts WHERE message_id = ?`, [messageId]),
+        ]);
+        return mapMessage(message, attachments.map(mapAttachment), reactions.map(mapReaction), {
+            recipientCount: Number(receipts?.total ?? 0),
+            readCount: Number(receipts?.read_count ?? 0),
+        });
     }
     static async sendMessage(conversationId, sender, input) {
         await ChatService.assertMember(conversationId, sender.id);
@@ -239,14 +323,26 @@ export class ChatService {
             sender.roleLevel >= 60 ||
             isSmallGroup;
         const body = input.body?.trim() ?? '';
-        const fileIds = (input.fileIds ?? []).filter((id) => Number.isFinite(id));
+        const fileIds = [...new Set((input.fileIds ?? []).filter((id) => Number.isFinite(id)))];
+        const clientId = input.clientId?.trim().slice(0, 64) || null;
         if (!body && fileIds.length === 0)
             throw ApiError.badRequest('Message cannot be empty.');
+        if (body.length > 8000)
+            throw ApiError.badRequest('Message is too long.');
+        // Fast idempotency path: a retried POST returns the already stored message.
+        if (clientId) {
+            const existing = await queryOne('SELECT id FROM messages WHERE conversation_id = ? AND sender_id = ? AND client_id = ?', [conversationId, sender.id, clientId]);
+            if (existing)
+                return ChatService.hydrate(Number(existing.id));
+        }
         const files = fileIds.length
             ? await query(`SELECT id, owner_id FROM files WHERE id IN (${fileIds.map(() => '?').join(',')})`, fileIds)
             : [];
         if (files.length !== fileIds.length)
             throw ApiError.badRequest('One or more attachments are invalid.');
+        if (files.some((f) => f.owner_id !== null && Number(f.owner_id) !== sender.id)) {
+            throw ApiError.forbidden('You can only attach files you uploaded.');
+        }
         let type = input.type ?? (fileIds.length > 0 ? 'file' : 'text');
         if (fileIds.length > 0 && !['image', 'file', 'voice'].includes(type))
             type = 'file';
@@ -254,43 +350,49 @@ export class ChatService {
             throw ApiError.forbidden('Only group administrators can post in this announcement channel.');
         }
         const created = await transaction(async (conn) => {
-            const [result] = await conn.query('INSERT INTO messages (conversation_id, sender_id, body, message_type, reply_to_id) VALUES (?, ?, ?, ?, ?)', [conversationId, sender.id, body || null, type, input.replyToId ?? null]);
-            const messageId = Number(result.insertId);
-            for (const fileId of fileIds) {
-                await conn.query('INSERT INTO message_attachments (message_id, file_id, duration_seconds) VALUES (?, ?, ?)', [
-                    messageId,
-                    fileId,
-                    input.durationSeconds ?? null,
-                ]);
+            const [result] = await conn.query(`INSERT INTO messages (conversation_id, sender_id, body, message_type, reply_to_id, client_id)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)`, [conversationId, sender.id, body || null, type, input.replyToId ?? null, clientId]);
+            const header = result;
+            const messageId = Number(header.insertId);
+            const inserted = header.affectedRows === 1;
+            if (inserted) {
+                for (const fileId of fileIds) {
+                    await conn.query('INSERT INTO message_attachments (message_id, file_id, duration_seconds) VALUES (?, ?, ?)', [
+                        messageId,
+                        fileId,
+                        input.durationSeconds ?? null,
+                    ]);
+                }
+                const members = await conn.query('SELECT employee_id FROM conversation_members WHERE conversation_id = ?', [conversationId]);
+                for (const member of members[0]) {
+                    await conn.query('INSERT INTO message_receipts (message_id, employee_id, delivered_at) VALUES (?, ?, NOW(3)) ON DUPLICATE KEY UPDATE delivered_at = VALUES(delivered_at)', [messageId, member.employee_id]);
+                }
+                await conn.query('UPDATE conversations SET updated_at = NOW(3) WHERE id = ?', [conversationId]);
             }
-            const members = await conn.query('SELECT employee_id FROM conversation_members WHERE conversation_id = ?', [conversationId]);
-            for (const member of members[0]) {
-                await conn.query('INSERT INTO message_receipts (message_id, employee_id, delivered_at) VALUES (?, ?, NOW(3)) ON DUPLICATE KEY UPDATE delivered_at = VALUES(delivered_at)', [messageId, member.employee_id]);
-            }
-            await conn.query('UPDATE conversations SET updated_at = NOW(3) WHERE id = ?', [conversationId]);
-            return messageId;
+            // Sending a message makes the conversation visible again for its author.
+            await conn.query(`INSERT INTO conversation_user_state (conversation_id, employee_id, deleted_at)
+         VALUES (?, ?, NULL)
+         ON DUPLICATE KEY UPDATE deleted_at = NULL`, [conversationId, sender.id]);
+            return { messageId, inserted };
         });
-        const message = await queryOne(`SELECT m.*, e.full_name AS sender_name, e.photo_url AS sender_photo, rm.body AS reply_body, re.full_name AS reply_sender
-       FROM messages m JOIN employees e ON e.id = m.sender_id
-       LEFT JOIN messages rm ON rm.id = m.reply_to_id LEFT JOIN employees re ON re.id = rm.sender_id
-       WHERE m.id = ?`, [created]);
-        const attachments = await query(`SELECT f.id AS file_id, f.original_name, f.mime_type, f.size_bytes, ma.duration_seconds
-       FROM message_attachments ma JOIN files f ON f.id = ma.file_id WHERE ma.message_id = ?`, [created]);
-        const payload = mapMessage(message, attachments.map((a) => ({ ...a, fileId: Number(a.file_id) })));
-        emitToConversation(conversationId, 'message:new', payload);
-        const others = await query('SELECT cm.employee_id, cm.is_muted FROM conversation_members cm WHERE cm.conversation_id = ? AND cm.employee_id <> ?', [conversationId, sender.id]);
-        const offline = others
-            .filter((m) => !isOnline(Number(m.employee_id)) && !m.is_muted)
-            .map((m) => Number(m.employee_id));
-        if (offline.length > 0) {
-            await NotificationService.notify({
-                employeeIds: offline,
-                type: 'chat_message',
-                title: conversation.name ? `${sender.fullName} · ${conversation.name}` : sender.fullName,
-                body: body.slice(0, 160) || `[${type}]`,
-                link: `/chat?conversation=${conversationId}`,
-                actorId: sender.id,
-            });
+        const payload = await ChatService.hydrate(created.messageId);
+        if (created.inserted) {
+            emitToConversation(conversationId, 'message:new', payload);
+            const others = await query('SELECT cm.employee_id, cm.is_muted FROM conversation_members cm WHERE cm.conversation_id = ? AND cm.employee_id <> ?', [conversationId, sender.id]);
+            const offline = others
+                .filter((m) => !isOnline(Number(m.employee_id)) && !m.is_muted)
+                .map((m) => Number(m.employee_id));
+            if (offline.length > 0) {
+                await NotificationService.notify({
+                    employeeIds: offline,
+                    type: 'chat_message',
+                    title: conversation.name ? `${sender.fullName} · ${conversation.name}` : sender.fullName,
+                    body: body.slice(0, 160) || `[${type}]`,
+                    link: `/chat?c=${conversationId}`,
+                    actorId: sender.id,
+                });
+            }
         }
         return payload;
     }
@@ -378,8 +480,12 @@ export class ChatService {
     static async unreadTotal(employeeId) {
         const row = await queryOne(`SELECT COUNT(*) AS total
        FROM conversation_members cm
+       LEFT JOIN conversation_user_state cus
+         ON cus.conversation_id = cm.conversation_id AND cus.employee_id = cm.employee_id
        JOIN messages m ON m.conversation_id = cm.conversation_id AND m.deleted_at IS NULL AND m.sender_id <> cm.employee_id
-       WHERE cm.employee_id = ? AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)`, [employeeId]);
+       WHERE cm.employee_id = ? AND (cm.last_read_at IS NULL OR m.created_at > cm.last_read_at)
+         AND (cus.cleared_at IS NULL OR m.created_at > cus.cleared_at)
+         AND (cus.deleted_at IS NULL OR m.created_at > cus.deleted_at)`, [employeeId]);
         return Number(row?.total ?? 0);
     }
     static async addMembers(conversationId, actor, memberIds) {
@@ -400,7 +506,7 @@ export class ChatService {
             type: 'chat_group',
             title: 'Added to a group',
             body: `${actor.fullName} added you to a group conversation.`,
-            link: `/chat?conversation=${conversationId}`,
+            link: `/chat?c=${conversationId}`,
             actorId: actor.id,
         });
     }
@@ -450,14 +556,35 @@ export class ChatService {
             after: { name: name.trim(), description },
         });
     }
+    /**
+     * Deletes a conversation for the caller.
+     *
+     * Direct chats are hidden and cleared per user only: the other participant's
+     * messages, attachments and history remain intact. Group administrators keep
+     * the existing organisation-wide delete behaviour for groups they manage.
+     */
     static async deleteConversation(conversationId, actor) {
         await ChatService.assertMember(conversationId, actor.id);
         const conv = await queryOne('SELECT conv_type, created_by FROM conversations WHERE id = ?', [conversationId]);
         if (!conv)
             throw ApiError.notFound('Conversation not found');
+        if (conv.conv_type === 'direct') {
+            await execute(`INSERT INTO conversation_user_state (conversation_id, employee_id, deleted_at, cleared_at)
+         VALUES (?, ?, NOW(3), NOW(3))
+         ON DUPLICATE KEY UPDATE deleted_at = NOW(3), cleared_at = NOW(3)`, [conversationId, actor.id]);
+            emitToEmployee(actor.id, 'conversation:hidden', { conversationId });
+            emitToEmployees([actor.id], 'conversation:deleted', { conversationId });
+            await recordAudit({
+                actorId: actor.id,
+                action: 'chat.conversation_hidden',
+                entityType: 'conversation',
+                entityId: conversationId,
+                after: { scope: 'self' },
+            });
+            return { deleted: false, left: false, hidden: true };
+        }
         const membership = await queryOne('SELECT member_role FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
-        const isAdmin = conv.conv_type === 'direct' ||
-            membership?.member_role === 'admin' ||
+        const isAdmin = membership?.member_role === 'admin' ||
             Number(conv.created_by) === actor.id ||
             actor.roleLevel >= 50 ||
             actor.permissions.includes('chat.groups.manage');
@@ -470,7 +597,7 @@ export class ChatService {
                     await conn.query(`DELETE FROM message_reactions WHERE message_id IN (${ph})`, msgIds);
                     await conn.query(`DELETE FROM message_attachments WHERE message_id IN (${ph})`, msgIds);
                     await conn.query(`DELETE FROM message_receipts WHERE message_id IN (${ph})`, msgIds);
-                    await conn.query(`DELETE FROM messages WHERE conversation_id = ?`, [conversationId]);
+                    await conn.query('DELETE FROM messages WHERE conversation_id = ?', [conversationId]);
                 }
                 await conn.query('DELETE FROM conversation_members WHERE conversation_id = ?', [conversationId]);
                 await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
@@ -482,14 +609,12 @@ export class ChatService {
                 entityType: 'conversation',
                 entityId: conversationId,
             });
-            return { deleted: true, left: false };
+            return { deleted: true, left: false, hidden: false };
         }
-        else {
-            // Leave group
-            await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
-            emitToConversation(conversationId, 'conversation:members_changed', { conversationId });
-            return { deleted: false, left: true };
-        }
+        // Leave group
+        await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
+        emitToConversation(conversationId, 'conversation:members_changed', { conversationId });
+        return { deleted: false, left: true, hidden: false };
     }
     static async emptyOrEnsureGeneral(employeeId, departmentId) {
         // New employees are automatically added to general and department channels.

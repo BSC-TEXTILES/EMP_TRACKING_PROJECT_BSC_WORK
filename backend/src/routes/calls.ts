@@ -163,6 +163,18 @@ callsRouter.post(
       [callId, user.id, target.id, body.type],
     );
 
+    // Two callers can pass the busy check at the same moment; the earliest live call wins.
+    const contested = await queryOne<{ id: number }>(
+      `SELECT id FROM calls WHERE id < ? AND (caller_id IN (?, ?) OR callee_id IN (?, ?))
+         AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL 60 SECOND)))
+       LIMIT 1`,
+      [result.insertId, user.id, target.id, user.id, target.id],
+    );
+    if (contested) {
+      await execute("UPDATE calls SET status = 'busy', ended_at = NOW(3) WHERE id = ?", [result.insertId]);
+      throw new ApiError(409, `${target.fullName} is on another call.`, 'busy');
+    }
+
     emitToEmployees([target.id], 'call:incoming', {
       callId,
       caller: {
@@ -172,6 +184,7 @@ callsRouter.post(
         photoUrl: user.photoUrl,
         department: user.departmentName,
         designation: user.designationTitle,
+        location: user.locationName,
       },
       type: body.type,
     });
@@ -221,7 +234,8 @@ callsRouter.post(
     if (Number(call.callee_id) !== user.id) throw ApiError.forbidden('Not authorized for this call');
     if (call.status !== 'ringing') throw new ApiError(409, 'Call is no longer ringing.', 'call_ended');
 
-    await execute('UPDATE calls SET status = ?, accepted_at = NOW(3) WHERE id = ?', ['active', call.id]);
+    const accepted = await execute("UPDATE calls SET status = 'active', accepted_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (accepted.affectedRows !== 1) throw new ApiError(409, 'Call is no longer ringing.', 'call_ended');
 
     emitToEmployees([call.caller_id], 'call:accepted', { callId });
     await markCallNotificationRead(user.id, callId);
@@ -251,7 +265,8 @@ callsRouter.post(
       return;
     }
 
-    await execute('UPDATE calls SET status = ?, ended_at = NOW(3) WHERE id = ?', ['declined', call.id]);
+    const changed = await execute("UPDATE calls SET status = 'declined', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (changed.affectedRows !== 1) { res.json({ ok: true }); return; }
     emitToEmployees([call.caller_id], 'call:rejected', { callId });
     await markCallNotificationRead(user.id, callId);
 
@@ -280,7 +295,8 @@ callsRouter.post(
       return;
     }
 
-    await execute('UPDATE calls SET status = ?, ended_at = NOW(3) WHERE id = ?', ['missed', call.id]);
+    const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (changed.affectedRows !== 1) { res.json({ ok: true }); return; }
     emitToEmployees([call.caller_id], 'call:missed', { callId: call.call_id });
     await notifyMissedCall({ ...call, call_id: call.call_id }, user.id);
     await markCallNotificationRead(user.id, call.call_id);
@@ -308,7 +324,8 @@ callsRouter.post(
       return;
     }
 
-    await execute('UPDATE calls SET status = ?, ended_at = NOW(3) WHERE id = ?', ['declined', call.id]);
+    const changed = await execute("UPDATE calls SET status = 'declined', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (changed.affectedRows !== 1) { res.json({ ok: true }); return; }
     emitToEmployees([call.caller_id], 'call:rejected', { callId: call.call_id });
     await markCallNotificationRead(user.id, call.call_id);
 
@@ -336,7 +353,8 @@ callsRouter.post(
       return;
     }
 
-    await execute('UPDATE calls SET status = ?, ended_at = NOW(3) WHERE id = ?', ['missed', call.id]);
+    const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (changed.affectedRows !== 1) { res.json({ ok: true }); return; }
     emitToEmployees([call.caller_id, call.callee_id], 'call:ended', { callId, reason: 'no_answer' });
     await notifyMissedCall(call, user.id);
     await markCallNotificationRead(user.id, callId);
@@ -376,17 +394,19 @@ callsRouter.post(
       return;
     }
 
-    const duration = call.accepted_at
-      ? Math.max(0, Math.floor((Date.now() - new Date(call.accepted_at).getTime()) / 1000))
-      : 0;
     const status = call.status === 'ringing'
       ? (Number(call.caller_id) === user.id ? 'missed' : 'declined')
       : 'completed';
 
-    await execute(
-      'UPDATE calls SET status = ?, ended_at = NOW(3), duration_seconds = ? WHERE id = ?',
-      [status, duration, call.id],
+    // Duration comes from database server timestamps, never a client or host-local clock.
+    const ended = await execute(
+      `UPDATE calls SET status = ?, ended_at = NOW(3),
+              duration_seconds = IF(accepted_at IS NULL, 0, GREATEST(0, TIMESTAMPDIFF(SECOND, accepted_at, NOW(3))))
+       WHERE id = ? AND status IN ('ringing', 'active')`,
+      [status, call.id],
     );
+    if (ended.affectedRows !== 1) { res.json({ ok: true, duration: 0 }); return; }
+    const duration = Number((await queryOne<{ d: number }>('SELECT duration_seconds AS d FROM calls WHERE id = ?', [call.id]))?.d ?? 0);
 
     emitToEmployees([call.caller_id, call.callee_id], 'call:ended', {
       callId,
@@ -486,8 +506,8 @@ callsRouter.get(
   '/history',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    const limit = Math.min(100, req.query.limit ? Number(req.query.limit) : 50);
-    const offset = req.query.offset ? Number(req.query.offset) : 0;
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit ?? 50)) || 50));
+    const offset = Math.max(0, Math.floor(Number(req.query.offset ?? 0)) || 0);
 
     const rows = await query<{
       id: number;
@@ -589,3 +609,30 @@ callsRouter.post(
     res.json({ ok: true });
   })
 );
+
+/**
+ * Scheduler: closes calls nobody finished. Unanswered ringing calls become
+ * missed (with a missed-call notification); active calls abandoned by both
+ * clients are closed at the maximum call length. Safe to run repeatedly.
+ */
+export async function sweepStaleCalls(ringTimeoutSeconds = 60, maxCallSeconds = 4 * 3600): Promise<{ missed: number; closed: number }> {
+  const ringing = await query<{ id: number; call_id: string; caller_id: number; callee_id: number; type: string }>(
+    `SELECT id, call_id, caller_id, callee_id, type FROM calls
+     WHERE status = 'ringing' AND started_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)`,
+    [ringTimeoutSeconds],
+  );
+  let missed = 0;
+  for (const call of ringing) {
+    const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    if (changed.affectedRows !== 1) continue;
+    missed += 1;
+    emitToEmployees([call.caller_id, call.callee_id], 'call:ended', { callId: call.call_id, reason: 'no_answer' });
+    await notifyMissedCall(call, call.caller_id);
+  }
+  const closed = await execute(
+    `UPDATE calls SET status = 'completed', ended_at = DATE_ADD(accepted_at, INTERVAL ? SECOND), duration_seconds = ?
+     WHERE status = 'active' AND accepted_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)`,
+    [maxCallSeconds, maxCallSeconds, maxCallSeconds],
+  );
+  return { missed, closed: closed.affectedRows };
+}

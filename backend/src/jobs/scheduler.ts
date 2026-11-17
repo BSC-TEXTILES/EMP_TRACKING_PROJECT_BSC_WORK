@@ -53,6 +53,14 @@ export function startJobs(): void {
     { timezone: config.timezone },
   );
 
+  cron.schedule('* * * * *', () => {
+    void runJob('stale_calls', async () => {
+      const { sweepStaleCalls } = await import('../routes/calls.js');
+      const result = await sweepStaleCalls();
+      return `${result.missed} unanswered call(s) marked missed, ${result.closed} abandoned call(s) closed`;
+    });
+  });
+
   cron.schedule('*/5 * * * *', () => {
     void runJob('activity_stale_sessions', async () => {
       const closed = await ActivityService.closeStaleSessions();

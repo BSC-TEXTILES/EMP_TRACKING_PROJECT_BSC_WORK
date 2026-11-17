@@ -176,11 +176,10 @@ authRouter.get(
         'SELECT id, title, department_id FROM designations WHERE is_active = 1 ORDER BY title',
       ),
       query<{ id: number; name: string; city: string | null }>('SELECT id, name, city FROM locations WHERE is_active = 1 ORDER BY name'),
-      query<{ id: number; full_name: string; designation_title: string | null; department_name: string | null }>(
-        `SELECT e.id, e.full_name, dg.title AS designation_title, d.name AS department_name
+      query<{ id: number; full_name: string; location_name: string | null }>(
+        `SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
-         LEFT JOIN designations dg ON dg.id = e.designation_id
-         LEFT JOIN departments d ON d.id = e.department_id
+         LEFT JOIN locations l ON l.id = e.location_id
          WHERE e.status = 'active' ORDER BY e.full_name`,
       ),
     ]);

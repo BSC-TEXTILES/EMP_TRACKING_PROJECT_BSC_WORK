@@ -8,6 +8,7 @@ import { MeetingService } from '../services/MeetingService.js';
 import { TaskService } from '../services/TaskService.js';
 import { TicketService } from '../services/TicketService.js';
 import { ActivityService } from '../services/ActivityService.js';
+import { FileService } from '../services/FileService.js';
 import { processEmailQueue } from '../lib/mailer.js';
 import { addDays, today } from '../lib/dates.js';
 const running = new Set();
@@ -47,6 +48,13 @@ export function startJobs() {
             return `${result.removed} activity record(s) older than ${result.retentionDays} days removed`;
         });
     }, { timezone: config.timezone });
+    cron.schedule('* * * * *', () => {
+        void runJob('stale_calls', async () => {
+            const { sweepStaleCalls } = await import('../routes/calls.js');
+            const result = await sweepStaleCalls();
+            return `${result.missed} unanswered call(s) marked missed, ${result.closed} abandoned call(s) closed`;
+        });
+    });
     cron.schedule('*/5 * * * *', () => {
         void runJob('activity_stale_sessions', async () => {
             const closed = await ActivityService.closeStaleSessions();
@@ -116,8 +124,9 @@ export function startJobs() {
         void runJob('housekeeping', async () => {
             const sessions = await execute('DELETE FROM employee_sessions WHERE expires_at < DATE_SUB(NOW(3), INTERVAL 30 DAY)');
             const otps = await execute('DELETE FROM otp_verifications WHERE created_at < DATE_SUB(NOW(3), INTERVAL 7 DAY)');
+            const uploads = await FileService.cleanupExpiredSessions();
             await KpiService.monthlyReminder();
-            return `${sessions.affectedRows} expired session(s), ${otps.affectedRows} stale OTP row(s) removed`;
+            return `${sessions.affectedRows} expired session(s), ${otps.affectedRows} stale OTP row(s), ${uploads} abandoned upload(s) removed`;
         });
     });
     cron.schedule('0 * * * *', () => {

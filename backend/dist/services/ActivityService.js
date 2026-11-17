@@ -6,7 +6,6 @@ import { subtreeIds } from '../lib/scope.js';
 import { emitToEmployee, emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import { TicketService } from './TicketService.js';
-import { AttendanceService } from './AttendanceService.js';
 const DEVICE_TOKEN_PREFIX = 'wfm_dev_';
 const MAX_BATCH = 200;
 export const APP_CATEGORIES = ['Development', 'Browser', 'Communication', 'Design', 'Data Analytics', 'Office Productivity', 'Marketing', 'Administration', 'IT Support', 'Other'];
@@ -200,9 +199,9 @@ export class ActivityService {
             throw ApiError.badRequest('A stable machine fingerprint is required.');
         const existing = await queryOne('SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
         if (existing && Number(existing.employee_id) !== user.id) {
-            // Reassign device to the currently signed-in user on this workstation
-            await execute('UPDATE employee_devices SET employee_id = ? WHERE id = ?', [user.id, existing.id]);
-            await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [existing.id]);
+            // A fingerprint already registered to another employee must never be
+            // silently transferred: that would mix two employees' activity records.
+            throw new ApiError(409, 'This device is already registered to another employee.', 'device_conflict');
         }
         let deviceId;
         if (existing) {
@@ -310,16 +309,11 @@ export class ActivityService {
         if (!consent.acknowledged)
             throw ApiError.forbidden('Acknowledge the monitoring policy before starting a session.');
         const workDate = today();
-        let attendance = await queryOne('SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, workDate]);
+        const attendance = await queryOne('SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, workDate]);
+        // Monitoring must never fabricate an attendance record. The employee has to
+        // check in first so payroll and presence stay truthful.
         if (!attendance?.check_in_at || attendance.check_out_at) {
-            // Auto check-in attendance so work session monitoring starts smoothly without blocking the user
-            await AttendanceService.checkIn(user.id, {
-                source: 'monitoring',
-                notes: 'Auto check-in on starting work session monitoring',
-                ip: context.ip,
-                userAgent: context.userAgent,
-            }).catch(() => undefined);
-            attendance = await queryOne('SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, workDate]);
+            throw new ApiError(409, 'Check in for attendance before starting a monitoring session.', 'attendance_required');
         }
         const onBreak = attendance?.id ? await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND ended_at IS NULL', [attendance.id]) : null;
         const active = await queryOne("SELECT id, device_id, status FROM monitoring_sessions WHERE employee_id = ? AND status IN ('active','paused') ORDER BY id DESC LIMIT 1", [user.id]);
@@ -1111,19 +1105,24 @@ export class ActivityService {
     }
     static async autoStartTracking(user, context = {}) {
         try {
-            const todayStr = new Date().toISOString().slice(0, 10);
-            // 1. Ensure attendance is checked in for today
-            const att = await query('SELECT id, check_in_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, todayStr]);
-            if (!att || att.length === 0) {
-                await execute('INSERT INTO attendance (employee_id, work_date, check_in_at, status) VALUES (?, ?, NOW(3), ?)', [user.id, todayStr, 'present']);
-            }
-            // 2. Ensure policy consent
-            await execute('INSERT INTO employee_activity_consents (employee_id, policy_id, policy_version, acknowledged_at) VALUES (?, 1, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))', [user.id]);
-            // 3. Ensure device registration
-            const fingerprint = context.machineFingerprint || `web-${user.id}-${(context.userAgent || 'client').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
-            let device = await queryOne('SELECT id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
+            // 1. Monitoring is consent-gated. Never fabricate consent on the
+            // employee's behalf, and never use a stale policy version.
+            const consent = await ActivityService.consentStatus(user);
+            if (!consent.acknowledged)
+                return { started: false, reason: 'consent_required' };
+            // 2. Attendance is checked in by the employee (or the attendance module);
+            // monitoring only observes an existing work session.
+            const attendance = await queryOne('SELECT check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = CURDATE()', [user.id]);
+            if (!attendance?.check_in_at || attendance.check_out_at)
+                return { started: false, reason: 'attendance_required' };
+            // 3. Reuse only a browser device owned by this employee.
+            const fingerprint = context.machineFingerprint
+                || `web-${user.id}-${(context.userAgent || 'client').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
+            const existing = await queryOne('SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
+            if (existing && Number(existing.employee_id) !== user.id)
+                return { started: false, reason: 'device_conflict' };
             let deviceId;
-            if (!device) {
+            if (!existing) {
                 const res = await execute(`INSERT INTO employee_devices (employee_id, device_name, os_name, os_version, agent_version, machine_fingerprint, status, last_seen_at)
            VALUES (?, ?, ?, ?, ?, ?, 'active', NOW(3))`, [
                     user.id,
@@ -1136,10 +1135,12 @@ export class ActivityService {
                 deviceId = res.insertId;
             }
             else {
-                deviceId = Number(device.id);
-                await execute('UPDATE employee_devices SET employee_id = ?, status = "active", last_seen_at = NOW(3) WHERE id = ?', [user.id, deviceId]);
+                deviceId = Number(existing.id);
+                if (existing.status !== 'active')
+                    return { started: false, reason: 'device_revoked' };
+                await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [deviceId]);
             }
-            // 4. Start session
+            // 4. Start or resume today's session. startSession re-checks attendance.
             const result = await ActivityService.startSession(user, deviceId, context);
             return { started: true, sessionId: result.sessionId };
         }
@@ -1150,14 +1151,9 @@ export class ActivityService {
     }
     static async stopTracking(employeeId) {
         try {
-            const todayStr = new Date().toISOString().slice(0, 10);
-            // 1. End any active monitoring sessions
-            await ActivityService.endSessionsForEmployee(employeeId, 'attendance_checkout');
-            // 2. Update attendance check_out
-            await execute(`UPDATE attendance
-         SET check_out_at = NOW(3),
-             total_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)))
-         WHERE employee_id = ? AND work_date = ? AND check_out_at IS NULL`, [employeeId, todayStr]);
+            // Logging out ends monitoring only. Attendance check-out is an explicit
+            // payroll action and must not be triggered by closing the browser.
+            await ActivityService.endSessionsForEmployee(employeeId, 'logout');
             return { stopped: true };
         }
         catch (err) {
