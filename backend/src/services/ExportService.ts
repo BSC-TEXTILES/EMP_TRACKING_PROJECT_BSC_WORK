@@ -243,7 +243,7 @@ export class ExportService {
            LEFT JOIN designations dg ON dg.id = e.designation_id
            LEFT JOIN employees m ON m.id = e.manager_id
            LEFT JOIN locations l ON l.id = e.location_id
-           WHERE e.status <> 'rejected' ${placeholders ? `AND e.id IN (${placeholders})` : ''}
+           WHERE e.status NOT IN ('rejected','deleted') ${placeholders ? `AND e.id IN (${placeholders})` : ''}
            ORDER BY e.full_name`,
           placeholders ? teamIds! : [],
         );

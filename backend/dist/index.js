@@ -290,6 +290,16 @@ async function ensureDatabaseReady() {
           PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
                 try {
+                    const { syncRbac } = await import('./lib/rbacSync.js');
+                    const synced = await syncRbac();
+                    if (synced.newPermissions.length || synced.newRoles.length) {
+                        console.log(`[startup] RBAC synced: ${synced.newPermissions.length} new permission(s), ${synced.newRoles.length} new role(s)`);
+                    }
+                }
+                catch (rbacErr) {
+                    console.warn('[startup] RBAC sync note:', rbacErr);
+                }
+                try {
                     const { DailyTaskService } = await import('./services/DailyTaskService.js');
                     await DailyTaskService.ensureTemplatesExist();
                 }

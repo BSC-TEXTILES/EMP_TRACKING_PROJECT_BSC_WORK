@@ -17,12 +17,38 @@ async function employeeScope(user) {
     }
     return { clause: 'e.id = ?', params: [user.id] };
 }
+const SUPER_ADMIN_LEVEL = 100;
+/**
+ * Role hierarchy guard: you may only manage people whose role ranks strictly
+ * below your own (Super Admin may manage anyone except themselves).
+ */
+async function assertCanManageEmployee(actor, employeeId, verb) {
+    if (employeeId === actor.id)
+        throw ApiError.badRequest(`You cannot ${verb} your own account.`);
+    const target = await queryOne('SELECT r.level, r.name FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = ?', [employeeId]);
+    if (!target)
+        throw ApiError.notFound('Employee not found');
+    if (actor.roleLevel < SUPER_ADMIN_LEVEL && Number(target.level) >= actor.roleLevel) {
+        throw ApiError.forbidden(`You cannot ${verb} a ${target.name}: their role is the same as or above yours.`);
+    }
+}
+/** You can only hand out roles at or below your own level, so nobody can escalate privileges. */
+async function assertCanAssignRole(actor, roleId) {
+    if (!roleId)
+        return;
+    const role = await queryOne('SELECT level, name FROM roles WHERE id = ?', [roleId]);
+    if (!role)
+        throw ApiError.badRequest('That role does not exist.');
+    if (actor.roleLevel < SUPER_ADMIN_LEVEL && Number(role.level) > actor.roleLevel) {
+        throw ApiError.forbidden(`You cannot assign the ${role.name} role: it ranks above your own.`);
+    }
+}
 export class EmployeeService {
     static async list(user, filters) {
         const scope = await employeeScope(user);
         const clauses = [
             scope.clause,
-            "e.status <> 'rejected'",
+            "e.status NOT IN ('rejected','deleted')",
         ];
         const params = [...scope.params];
         if (filters.search) {
@@ -241,6 +267,8 @@ export class EmployeeService {
         const target = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
         if (!target)
             throw ApiError.notFound('Employee not found');
+        await assertCanManageEmployee(actor, employeeId, 'change the role or reporting line of');
+        await assertCanAssignRole(actor, input.roleId);
         if (input.managerId === employeeId)
             throw ApiError.badRequest('An employee cannot report to themselves.');
         if (input.managerId) {
@@ -280,6 +308,7 @@ export class EmployeeService {
         if (!actor.permissions.includes('employees.approve') && !actor.permissions.includes('employees.manage')) {
             throw ApiError.forbidden('You cannot approve registrations.');
         }
+        await assertCanAssignRole(actor, input.roleId);
         const employee = await queryOne('SELECT id, full_name, status, email, mobile, department_id FROM employees WHERE id = ?', [employeeId]);
         if (!employee)
             throw ApiError.notFound('Employee not found');
@@ -339,6 +368,7 @@ export class EmployeeService {
     static async createByAdmin(actor, input) {
         if (!actor.permissions.includes('employees.manage'))
             throw ApiError.forbidden('You cannot create employees.');
+        await assertCanAssignRole(actor, input.roleId);
         const issues = passwordIssues(input.password);
         if (issues.length > 0)
             throw ApiError.badRequest(`Password must contain ${issues.join(', ')}.`);
@@ -385,6 +415,9 @@ export class EmployeeService {
         const target = await queryOne('SELECT status, full_name FROM employees WHERE id = ?', [employeeId]);
         if (!target)
             throw ApiError.notFound('Employee not found');
+        if (target.status === 'deleted')
+            throw ApiError.badRequest('This account has been deleted and cannot be reactivated.');
+        await assertCanManageEmployee(actor, employeeId, status === 'active' ? 'reactivate' : 'deactivate');
         await execute('UPDATE employees SET status = ?, deactivated_at = ? WHERE id = ?', [
             status,
             status === 'inactive' ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null,
@@ -404,6 +437,47 @@ export class EmployeeService {
             before: { status: target.status },
             after: { status, reason },
         });
+    }
+    /**
+     * Deletes an employee account. Attendance, tasks, reports and audit history are
+     * kept for payroll and compliance, so the row is retired rather than erased:
+     * sign-in is blocked, every session ends, the email and mobile are released so
+     * they can be registered again, and direct reports move up to the next manager.
+     */
+    static async remove(employeeId, actor, reason) {
+        if (!actor.permissions.includes('employees.delete'))
+            throw ApiError.forbidden('You cannot delete employees.');
+        const target = await queryOne(`SELECT e.id, e.full_name, e.employee_code, e.email, e.mobile, e.status, e.manager_id, r.slug AS role_slug
+         FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = ?`, [employeeId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found');
+        if (target.status === 'deleted')
+            throw ApiError.badRequest('This employee has already been deleted.');
+        await assertCanManageEmployee(actor, employeeId, 'delete');
+        if (target.role_slug === 'super_admin') {
+            const others = await queryOne("SELECT COUNT(*) AS n FROM employees e JOIN roles r ON r.id = e.role_id WHERE r.slug = 'super_admin' AND e.status = 'active' AND e.id <> ?", [employeeId]);
+            if (Number(others?.n ?? 0) === 0)
+                throw ApiError.badRequest('You cannot delete the last Super Admin.');
+        }
+        await transaction(async (conn) => {
+            await conn.execute('UPDATE employees SET manager_id = ? WHERE manager_id = ?', [target.manager_id, employeeId]);
+            await conn.execute('UPDATE departments SET head_employee_id = NULL WHERE head_employee_id = ?', [employeeId]);
+            await conn.execute(`UPDATE employees
+            SET status = 'deleted', deactivated_at = NOW(3), manager_id = NULL,
+                email = ?, mobile = ?
+          WHERE id = ?`, [`deleted.${employeeId}.${Date.now()}@removed.invalid`, `DEL${employeeId}`.slice(0, 20), employeeId]);
+            await conn.execute("UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = 'account_deleted' WHERE employee_id = ? AND revoked_at IS NULL", [employeeId]);
+            await conn.execute('DELETE FROM user_permissions WHERE employee_id = ?', [employeeId]);
+        });
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.deleted',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { status: target.status, email: target.email, mobile: target.mobile, employeeCode: target.employee_code, name: target.full_name },
+            after: { status: 'deleted', reason: reason ?? null },
+        });
+        return { name: target.full_name };
     }
     static async hierarchy() {
         const rows = await query(`SELECT e.id, e.full_name, e.employee_code, e.manager_id, dg.title AS designation_title, d.name AS department_name,

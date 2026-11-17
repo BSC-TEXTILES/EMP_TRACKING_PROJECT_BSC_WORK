@@ -56,6 +56,36 @@ export default function Employees() {
   const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: '' });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '' });
 
+  // Role hierarchy: mirror the server rule so people only see actions they may take.
+  const myLevel = user?.roleLevel ?? 0;
+  const roleLevelOf = (roleIdOrName: number | string | null | undefined) =>
+    structure?.roles.find((r) => r.id === roleIdOrName || r.name === roleIdOrName)?.level ?? Number.MAX_SAFE_INTEGER;
+  const canManage = (employeeId: number, roleIdOrName: number | string | null | undefined) =>
+    employeeId !== user?.id && (myLevel >= 100 || roleLevelOf(roleIdOrName) < myLevel);
+  const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
+
+  const deleteEmployee = async (employeeId: number, name: string, code: string) => {
+    const typed = window.prompt(
+      `Delete ${name} (${code})?
+
+They will be signed out and can no longer log in. Their email and mobile are released. Attendance, tasks and reports stay in history.
+
+Type DELETE to confirm:`,
+    );
+    if (typed?.trim().toUpperCase() !== 'DELETE') {
+      if (typed !== null) toast.error('Not deleted: you must type DELETE to confirm.');
+      return;
+    }
+    try {
+      await api.del(`/employees/${employeeId}`);
+      toast.success(`${name} has been deleted.`);
+      setDetail(null);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
+
   const load = async () => {
     try {
       const query = new URLSearchParams({ page: String(page), pageSize: '25' });
@@ -238,6 +268,20 @@ export default function Employees() {
                               </button>
                             </>
                           )}
+                          {has('employees.delete') && canManage(employee.id, employee.roleName) && (
+                            <button
+                              type="button"
+                              title="Delete employee"
+                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void deleteEmployee(employee.id, employee.fullName, employee.employeeCode);
+                              }}
+                            >
+                              <Icon name="trash" size={13} />
+                              <span>Delete</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             title="View full details"
@@ -294,7 +338,14 @@ export default function Employees() {
                   }}>Reject</button>
                 </>
               )}
-              {has('employees.manage') && !['pending_approval', 'pending_verification'].includes(detail.status) && (
+              {has('employees.delete') && canManage(detail.id, detail.roleId) && (
+                <button className="btn-secondary btn-sm inline-flex items-center gap-1.5 !text-rose-700 !border-rose-200 hover:!bg-rose-50"
+                  onClick={() => void deleteEmployee(detail.id, detail.fullName, detail.employeeCode)}>
+                  <Icon name="trash" size={14} />
+                  <span>Delete</span>
+                </button>
+              )}
+              {has('employees.manage') && canManage(detail.id, detail.roleId) && !['pending_approval', 'pending_verification'].includes(detail.status) && (
                 <button className="btn-secondary btn-sm" onClick={() => void (async () => {
                   try {
                     await api.post(`/employees/${detail.id}/status`, { status: detail.status === 'active' ? 'inactive' : 'active' });
@@ -517,7 +568,7 @@ export default function Employees() {
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Field label="Role">
                         <select className="input" value={orgForm.roleId} onChange={(event) => setOrgForm({ ...orgForm, roleId: event.target.value })}>
-                          {structure?.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                          {assignableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
                         </select>
                       </Field>
                       <Field label="Department">
@@ -588,6 +639,9 @@ export default function Employees() {
 
 function CreateEmployee({ open, onClose, structure, employees, onCreated }: { open: boolean; onClose: () => void; structure: Structure | null; employees: EmployeeRow[]; onCreated: () => void }) {
   const toast = useToast();
+  const { user } = useAuth();
+  const myLevel = user?.roleLevel ?? 0;
+  const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
   const [form, setForm] = useState({ fullName: '', email: '', mobile: '', employeeCode: '', roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: 'full_time', password: '' });
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ employeeCode: string } | null>(null);
@@ -632,7 +686,7 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
             <Field label="Role" required>
               <select className="input" value={form.roleId} onChange={(event) => setForm({ ...form, roleId: event.target.value })} required>
                 <option value="">Select role</option>
-                {structure?.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                {assignableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
               </select>
             </Field>
             <Field label="Department" required>
