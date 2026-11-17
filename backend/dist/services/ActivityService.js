@@ -1113,12 +1113,12 @@ export class ActivityService {
         try {
             const todayStr = new Date().toISOString().slice(0, 10);
             // 1. Ensure attendance is checked in for today
-            const att = await query('SELECT id, check_in FROM employee_attendance WHERE employee_id = ? AND date = ?', [user.id, todayStr]);
+            const att = await query('SELECT id, check_in_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, todayStr]);
             if (!att || att.length === 0) {
-                await execute('INSERT INTO employee_attendance (employee_id, date, check_in, status) VALUES (?, ?, NOW(3), ?)', [user.id, todayStr, 'present']);
+                await execute('INSERT INTO attendance (employee_id, work_date, check_in_at, status) VALUES (?, ?, NOW(3), ?)', [user.id, todayStr, 'present']);
             }
             // 2. Ensure policy consent
-            await execute('INSERT INTO employee_monitoring_consent (employee_id, version, acknowledged_at) VALUES (?, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))', [user.id]);
+            await execute('INSERT INTO employee_activity_consents (employee_id, policy_id, policy_version, acknowledged_at) VALUES (?, 1, 1, NOW(3)) ON DUPLICATE KEY UPDATE acknowledged_at = COALESCE(acknowledged_at, NOW(3))', [user.id]);
             // 3. Ensure device registration
             const fingerprint = context.machineFingerprint || `web-${user.id}-${(context.userAgent || 'client').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
             let device = await queryOne('SELECT id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
@@ -1154,10 +1154,10 @@ export class ActivityService {
             // 1. End any active monitoring sessions
             await ActivityService.endSessionsForEmployee(employeeId, 'attendance_checkout');
             // 2. Update attendance check_out
-            await execute(`UPDATE employee_attendance
-         SET check_out = NOW(3),
-             total_hours = ROUND(GREATEST(0, TIMESTAMPDIFF(SECOND, check_in, NOW(3))) / 3600, 2)
-         WHERE employee_id = ? AND date = ? AND check_out IS NULL`, [employeeId, todayStr]);
+            await execute(`UPDATE attendance
+         SET check_out_at = NOW(3),
+             total_minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)))
+         WHERE employee_id = ? AND work_date = ? AND check_out_at IS NULL`, [employeeId, todayStr]);
             return { stopped: true };
         }
         catch (err) {

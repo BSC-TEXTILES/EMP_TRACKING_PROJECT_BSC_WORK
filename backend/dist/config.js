@@ -193,6 +193,8 @@ export const config = {
         username: process.env.TURN_USERNAME ?? '',
         credential: process.env.TURN_CREDENTIAL ?? '',
     },
+    vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
+    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
     uploadDir: process.env.UPLOAD_DIR ?? 'storage/uploads',
     maxUploadMb: int('MAX_UPLOAD_MB', 15),
     redisUrl: process.env.REDIS_URL ?? '',
