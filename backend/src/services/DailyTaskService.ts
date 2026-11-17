@@ -288,40 +288,55 @@ export class DailyTaskService {
     rating: string;
   }> {
     const targetDate = dateStr || new Date().toISOString().slice(0, 10);
-
-    // 1. Task Completion (Max 30) & Timely Completion (Max 15)
-    const taskStats = await queryOne<{ total: number; completed: number; verified: number; delayed: number }>(
-      `SELECT 
-        COUNT(*) AS total,
-        COALESCE(SUM(status IN ('completed', 'verified')), 0) AS completed,
-        COALESCE(SUM(status = 'verified' OR verification_status = 'verified'), 0) AS verified,
-        COALESCE(SUM(status = 'delayed'), 0) AS delayed
-       FROM tasks t
-       JOIN task_assignments ta ON ta.task_id = t.id
-       WHERE ta.employee_id = ? AND t.start_date = ?`,
-      [employeeId, targetDate],
-    );
-
-    const totalTasks = Number(taskStats?.total ?? 0);
-    const verifiedTasks = Number(taskStats?.verified ?? 0);
-    const delayedTasks = Number(taskStats?.delayed ?? 0);
-
-    const taskScore = totalTasks > 0 ? Number(((verifiedTasks / totalTasks) * 30).toFixed(2)) : 30.0;
-    const timelyScore = totalTasks > 0 ? Number((Math.max(0, (totalTasks - delayedTasks) / totalTasks) * 15).toFixed(2)) : 15.0;
-
-    // 2. Quality & Accuracy (Max 20)
-    const rejections = await queryOne<{ rejected: number }>(
-      `SELECT COUNT(*) AS rejected FROM tasks t
-       JOIN task_assignments ta ON ta.task_id = t.id
-       WHERE ta.employee_id = ? AND t.start_date = ? AND (t.status = 'rejected' OR t.verification_status = 'rejected')`,
-      [employeeId, targetDate],
-    );
-    const rejectedCount = Number(rejections?.rejected ?? 0);
-    const qualityScore = Math.max(0, Number((20 - rejectedCount * 5).toFixed(2)));
-
-    // 3. Reporting & Documentation (Max 10)
+    let taskScore = 30.0;
+    let timelyScore = 15.0;
+    let qualityScore = 20.0;
     let reportingScore = 10.0;
+    let attendanceScore = 10.0;
+    const coordinationScore = 9.5;
+    const escalationScore = 5.0;
+
     try {
+      // 1. Task Completion (Max 30) & Timely Completion (Max 15)
+      const taskStats = await queryOne<{ total: number; completed: number; verified: number; delayed: number }>(
+        `SELECT 
+          COUNT(*) AS total,
+          COALESCE(SUM(CASE WHEN t.status IN ('completed', 'verified') THEN 1 ELSE 0 END), 0) AS completed,
+          COALESCE(SUM(CASE WHEN t.status IN ('completed', 'verified') THEN 1 ELSE 0 END), 0) AS verified,
+          COALESCE(SUM(CASE WHEN t.status = 'delayed' THEN 1 ELSE 0 END), 0) AS delayed
+         FROM tasks t
+         JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND (t.start_date = ? OR t.due_date = ?)`,
+        [employeeId, targetDate, targetDate],
+      );
+
+      const totalTasks = Number(taskStats?.total ?? 0);
+      const verifiedTasks = Number(taskStats?.verified ?? 0);
+      const delayedTasks = Number(taskStats?.delayed ?? 0);
+
+      taskScore = totalTasks > 0 ? Number(((verifiedTasks / totalTasks) * 30).toFixed(2)) : 30.0;
+      timelyScore = totalTasks > 0 ? Number((Math.max(0, (totalTasks - delayedTasks) / totalTasks) * 15).toFixed(2)) : 15.0;
+    } catch {
+      taskScore = 30.0;
+      timelyScore = 15.0;
+    }
+
+    try {
+      // 2. Quality & Accuracy (Max 20)
+      const rejections = await queryOne<{ rejected: number }>(
+        `SELECT COUNT(*) AS rejected FROM tasks t
+         JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND (t.start_date = ? OR t.due_date = ?) AND t.status = 'rejected'`,
+        [employeeId, targetDate, targetDate],
+      );
+      const rejectedCount = Number(rejections?.rejected ?? 0);
+      qualityScore = Math.max(0, Number((20 - rejectedCount * 5).toFixed(2)));
+    } catch {
+      qualityScore = 20.0;
+    }
+
+    try {
+      // 3. Reporting & Documentation (Max 10)
       const checkpoints = await queryOne<{ submitted: number }>(
         `SELECT COUNT(*) AS submitted FROM store_daily_checkpoints
          WHERE employee_id = ? AND checkpoint_date = ? AND status IN ('submitted', 'verified')`,
@@ -333,9 +348,8 @@ export class DailyTaskService {
       reportingScore = 10.0;
     }
 
-    // 4. Attendance & Punctuality (Max 10)
-    let attendanceScore = 10.0;
     try {
+      // 4. Attendance & Punctuality (Max 10)
       const att = await queryOne<{ status: string; is_late: number }>(
         `SELECT status, COALESCE(is_late, 0) AS is_late
          FROM attendance WHERE employee_id = ? AND work_date = ?`,
@@ -350,12 +364,6 @@ export class DailyTaskService {
       attendanceScore = 10.0;
     }
 
-    // 5. Team Coordination & Briefing (Max 10)
-    const coordinationScore = 9.5;
-
-    // 6. Escalation & Problem-Solving (Max 5)
-    const escalationScore = 5.0;
-
     const totalScore = Number(
       (taskScore + timelyScore + qualityScore + reportingScore + attendanceScore + coordinationScore + escalationScore).toFixed(2),
     );
@@ -367,7 +375,6 @@ export class DailyTaskService {
     else if (totalScore >= 60) rating = 'Needs Improvement';
     else rating = 'Unsatisfactory';
 
-    // Store in employee_daily_performance if table exists
     try {
       await execute(
         `INSERT INTO employee_daily_performance (
