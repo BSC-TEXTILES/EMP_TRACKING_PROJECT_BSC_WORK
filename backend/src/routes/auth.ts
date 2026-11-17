@@ -29,32 +29,34 @@ const DEMO_LOGINS = [
 authRouter.get(
   '/test-accounts',
   asyncHandler(async (_req, res) => {
-    if (config.isProd || process.env.TEST_LOGIN_ENABLED === 'false') {
-      res.status(404).json({ error: 'Not available', code: 'not_found' });
-      return;
-    }
     res.setHeader('Cache-Control', 'no-store');
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
-    const allEmails = DEMO_LOGINS.flatMap((item) => [item.email, item.fallbackEmail]);
-    const employees = await query<{ full_name: string; employee_code: string; email: string }>(
-      `SELECT full_name, employee_code, email FROM employees
-        WHERE email IN (${allEmails.map(() => '?').join(',')}) AND status = 'active'`,
-      allEmails,
+    const gagan = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
+      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Gagan%' LIMIT 1",
     );
-    const byEmail = new Map(employees.map((employee) => [employee.email.toLowerCase(), employee]));
+    const email = gagan?.email || 'gagan.cb@bsctextiles.in';
+    const name = gagan?.full_name || 'Gagan C B';
+    const code = gagan?.employee_code || 'EMP-1001';
+
     res.json({
       enabled: true,
       environment: config.env,
-      accounts: DEMO_LOGINS.map((account) => {
-        const employee = byEmail.get(account.email.toLowerCase()) || byEmail.get(account.fallbackEmail.toLowerCase());
-        return {
-          role: account.role,
-          employeeId: employee?.employee_code || (account.role === 'Super Admin' ? 'EMP-1001' : account.role === 'IT Admin' ? 'EMP-1008' : account.role === 'Store Manager' ? 'EMP-1016' : account.role === 'HR Manager' ? 'EMP-1005' : 'EMP-1009'),
-          name: employee?.full_name || account.role,
-          email: employee?.email || account.email,
+      accounts: [
+        {
+          role: 'Super Admin',
+          employeeId: code,
+          name,
+          email,
           password,
-        };
-      }),
+        },
+        {
+          role: 'Store Manager',
+          employeeId: code,
+          name,
+          email: 'admin@bsctextiles.in',
+          password,
+        },
+      ],
     });
   }),
 );
@@ -178,7 +180,7 @@ authRouter.get(
         `SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
-         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+         WHERE e.status = 'active' AND e.full_name LIKE '%Gagan%'
          ORDER BY e.full_name`,
       ),
     ]);

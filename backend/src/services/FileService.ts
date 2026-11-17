@@ -192,6 +192,13 @@ export class FileService {
     if (Number(file.is_private) === 0) return file;
     if (Number(file.owner_id) === user.id) return file;
 
+    const leaveLink = await queryOne<{ id: number }>(
+      `SELECT l.id FROM leave_requests l JOIN employees e ON e.id = l.employee_id
+       WHERE l.document_file_id = ? AND (l.manager_id = ? OR l.hr_approver_id = ?)
+       AND (COALESCE(l.request_location_id, e.location_id) = ? OR EXISTS (
+         SELECT 1 FROM employee_locations el WHERE el.employee_id = ? AND el.location_id = COALESCE(l.request_location_id, e.location_id))) LIMIT 1`,
+      [fileId, user.id, user.id, user.locationId, user.id]);
+    if (leaveLink && (user.permissions.includes('leave.approve.manager') || user.permissions.includes('leave.approve.hr'))) return file;
     const [taskLink, reportLink, ticketLink, messageLink, mailLink] = await Promise.all([
       queryOne<{ id: number }>(
         `SELECT ta.id FROM task_attachments ta JOIN tasks t ON t.id = ta.task_id

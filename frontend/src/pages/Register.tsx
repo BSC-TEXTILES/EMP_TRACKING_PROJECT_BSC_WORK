@@ -47,9 +47,9 @@ export default function Register() {
   }, [options, form.departmentId]);
 
   const visibleManagers = useMemo(() => {
-    if (!options?.managers) return [];
+    if (!options?.managers) return [{ id: 1, full_name: 'Gagan C B', location_name: 'Head Office' }];
     const gaganList = options.managers.filter((m) => m.full_name.toLowerCase().includes('gagan'));
-    return gaganList.length > 0 ? gaganList : options.managers;
+    return gaganList.length > 0 ? gaganList : [{ id: 1, full_name: 'Gagan C B', location_name: 'Head Office' }];
   }, [options?.managers]);
 
   const submit = async (event: React.FormEvent) => {

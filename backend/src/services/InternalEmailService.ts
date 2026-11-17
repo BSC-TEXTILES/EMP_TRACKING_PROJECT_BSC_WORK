@@ -15,6 +15,18 @@ export interface EmailAttachment {
   mimeType: string;
 }
 
+export interface SendEmailPayload {
+  recipientIds?: number[];
+  toEmails?: string[];
+  ccEmails?: string[];
+  bccEmails?: string[];
+  subject: string;
+  body: string;
+  html?: string;
+  attachments?: EmailAttachment[];
+  idempotencyKey?: string;
+}
+
 export class InternalEmailService {
   static async inbox(
     userId: number,
@@ -54,16 +66,25 @@ export class InternalEmailService {
       sender_name: string;
       sender_email: string;
       sender_photo: string | null;
+      recipient_name: string | null;
+      recipient_email: string | null;
+      cc_emails: string | null;
+      bcc_emails: string | null;
       subject: string;
       body: string;
+      body_html: string | null;
       is_read: number;
       read_at: string | null;
       is_starred_by_recipient: number;
       attachments: string | null;
+      delivery_status: string;
+      provider_message_id: string | null;
       created_at: string;
     }>(
       `SELECT e.id, e.sender_id, s.full_name AS sender_name, s.email AS sender_email, s.photo_url AS sender_photo,
-              e.subject, e.body, e.is_read, e.read_at, e.is_starred_by_recipient, e.attachments, e.created_at
+              e.recipient_name, e.recipient_email, e.cc_emails, e.bcc_emails,
+              e.subject, e.body, e.body_html, e.is_read, e.read_at, e.is_starred_by_recipient,
+              e.attachments, e.delivery_status, e.provider_message_id, e.created_at
        FROM internal_emails e
        JOIN employees s ON s.id = e.sender_id
        WHERE ${where}
@@ -82,12 +103,19 @@ export class InternalEmailService {
         senderName: r.sender_name,
         senderEmail: r.sender_email,
         senderPhoto: r.sender_photo,
+        recipientName: r.recipient_name,
+        recipientEmail: r.recipient_email,
+        cc: r.cc_emails,
+        bcc: r.bcc_emails,
         subject: r.subject,
         body: r.body,
+        bodyHtml: r.body_html,
         isRead: Boolean(r.is_read),
         readAt: toIso(r.read_at),
         isStarred: Boolean(r.is_starred_by_recipient),
         attachments: r.attachments ? (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : r.attachments) : [],
+        deliveryStatus: r.delivery_status || 'accepted',
+        providerMessageId: r.provider_message_id,
         createdAt: toIso(r.created_at),
       })),
     };
@@ -105,15 +133,15 @@ export class InternalEmailService {
     const params: unknown[] = [userId];
 
     if (options.search?.trim()) {
-      clauses.push('(e.subject LIKE ? OR e.body LIKE ? OR r.full_name LIKE ?)');
+      clauses.push('(e.subject LIKE ? OR e.body LIKE ? OR r.full_name LIKE ? OR e.recipient_email LIKE ?)');
       const q = `%${options.search.trim()}%`;
-      params.push(q, q, q);
+      params.push(q, q, q, q);
     }
 
     const where = clauses.join(' AND ');
     const countRow = await queryOne<{ total: number }>(
       `SELECT COUNT(*) AS total FROM internal_emails e
-       JOIN employees r ON r.id = e.recipient_id
+       LEFT JOIN employees r ON r.id = e.recipient_id
        WHERE ${where}`,
       params,
     );
@@ -121,22 +149,33 @@ export class InternalEmailService {
 
     const rows = await query<{
       id: number;
-      recipient_id: number;
-      recipient_name: string;
-      recipient_email: string;
+      recipient_id: number | null;
+      recipient_name: string | null;
+      recipient_email: string | null;
       recipient_photo: string | null;
+      cc_emails: string | null;
+      bcc_emails: string | null;
       subject: string;
       body: string;
+      body_html: string | null;
       is_read: number;
       read_at: string | null;
       is_starred_by_sender: number;
       attachments: string | null;
+      delivery_status: string;
+      provider_message_id: string | null;
+      last_error: string | null;
       created_at: string;
     }>(
-      `SELECT e.id, e.recipient_id, r.full_name AS recipient_name, r.email AS recipient_email, r.photo_url AS recipient_photo,
-              e.subject, e.body, e.is_read, e.read_at, e.is_starred_by_sender, e.attachments, e.created_at
+      `SELECT e.id, e.recipient_id,
+              COALESCE(e.recipient_name, r.full_name, e.recipient_email) AS recipient_name,
+              COALESCE(e.recipient_email, r.email) AS recipient_email,
+              r.photo_url AS recipient_photo,
+              e.cc_emails, e.bcc_emails,
+              e.subject, e.body, e.body_html, e.is_read, e.read_at, e.is_starred_by_sender,
+              e.attachments, e.delivery_status, e.provider_message_id, e.last_error, e.created_at
        FROM internal_emails e
-       JOIN employees r ON r.id = e.recipient_id
+       LEFT JOIN employees r ON r.id = e.recipient_id
        WHERE ${where}
        ORDER BY e.created_at DESC
        LIMIT ${limit} OFFSET ${offset}`,
@@ -149,16 +188,22 @@ export class InternalEmailService {
       limit,
       emails: rows.map((r) => ({
         id: Number(r.id),
-        recipientId: Number(r.recipient_id),
-        recipientName: r.recipient_name,
-        recipientEmail: r.recipient_email,
+        recipientId: r.recipient_id ? Number(r.recipient_id) : null,
+        recipientName: r.recipient_name || 'Recipient',
+        recipientEmail: r.recipient_email || '',
         recipientPhoto: r.recipient_photo,
+        cc: r.cc_emails,
+        bcc: r.bcc_emails,
         subject: r.subject,
         body: r.body,
+        bodyHtml: r.body_html,
         isRead: Boolean(r.is_read),
         readAt: toIso(r.read_at),
         isStarred: Boolean(r.is_starred_by_sender),
         attachments: r.attachments ? (typeof r.attachments === 'string' ? JSON.parse(r.attachments) : r.attachments) : [],
+        deliveryStatus: r.delivery_status || 'accepted',
+        providerMessageId: r.provider_message_id,
+        lastError: r.last_error,
         createdAt: toIso(r.created_at),
       })),
     };
@@ -176,15 +221,18 @@ export class InternalEmailService {
     const row = await queryOne<{
       id: number;
       sender_id: number;
-      recipient_id: number;
+      recipient_id: number | null;
       sender_name: string;
       sender_email: string;
       sender_photo: string | null;
-      recipient_name: string;
-      recipient_email: string;
+      recipient_name: string | null;
+      recipient_email: string | null;
       recipient_photo: string | null;
+      cc_emails: string | null;
+      bcc_emails: string | null;
       subject: string;
       body: string;
+      body_html: string | null;
       is_read: number;
       read_at: string | null;
       is_starred_by_recipient: number;
@@ -192,14 +240,19 @@ export class InternalEmailService {
       is_deleted_by_sender: number;
       is_deleted_by_recipient: number;
       attachments: string | null;
+      delivery_status: string;
+      provider_message_id: string | null;
+      last_error: string | null;
       created_at: string;
     }>(
       `SELECT e.*,
               s.full_name AS sender_name, s.email AS sender_email, s.photo_url AS sender_photo,
-              r.full_name AS recipient_name, r.email AS recipient_email, r.photo_url AS recipient_photo
+              COALESCE(e.recipient_name, r.full_name, e.recipient_email) AS recipient_name,
+              COALESCE(e.recipient_email, r.email) AS recipient_email,
+              r.photo_url AS recipient_photo
        FROM internal_emails e
        JOIN employees s ON s.id = e.sender_id
-       JOIN employees r ON r.id = e.recipient_id
+       LEFT JOIN employees r ON r.id = e.recipient_id
        WHERE e.id = ?`,
       [id],
     );
@@ -220,118 +273,211 @@ export class InternalEmailService {
       senderName: row.sender_name,
       senderEmail: row.sender_email,
       senderPhoto: row.sender_photo,
-      recipientId: Number(row.recipient_id),
-      recipientName: row.recipient_name,
-      recipientEmail: row.recipient_email,
+      recipientId: row.recipient_id ? Number(row.recipient_id) : null,
+      recipientName: row.recipient_name || 'Recipient',
+      recipientEmail: row.recipient_email || '',
       recipientPhoto: row.recipient_photo,
+      cc: row.cc_emails,
+      bcc: row.bcc_emails,
       subject: row.subject,
       body: row.body,
+      bodyHtml: row.body_html,
       isRead: Boolean(row.is_read),
       readAt: toIso(row.read_at),
       isStarred: Number(row.recipient_id) === userId ? Boolean(row.is_starred_by_recipient) : Boolean(row.is_starred_by_sender),
       attachments: row.attachments ? (typeof row.attachments === 'string' ? JSON.parse(row.attachments) : row.attachments) : [],
+      deliveryStatus: row.delivery_status || 'accepted',
+      providerMessageId: row.provider_message_id,
+      lastError: row.last_error,
       createdAt: toIso(row.created_at),
     };
   }
 
   /**
-   * Sends a mailbox email: stored in Workforce for every recipient, plus a real
-   * email to each recipient's registered address (e.g. their Gmail inbox).
-   * Returns the true per-recipient delivery outcome — "sent" only after the
-   * mail provider accepted the message.
+   * Sends an email throughout the application:
+   * - Transmits through Nodemailer to recipient inboxes (external or internal)
+   * - Records delivery status, provider message ID, and delivery history
+   * - Delivers to internal employee mailboxes when recipient is a registered employee
    */
   static async send(
     sender: AuthUser,
-    input: { recipientIds: number[]; subject: string; body: string; attachments?: EmailAttachment[] },
+    input: SendEmailPayload,
   ) {
     const subject = input.subject.trim();
     const body = input.body.trim();
     if (!subject) throw ApiError.badRequest('Subject is required.');
     if (!body) throw ApiError.badRequest('Message body is required.');
-    const recipients = [...new Set(input.recipientIds.filter((id) => Number.isFinite(id) && id > 0 && id !== sender.id))];
-    if (recipients.length === 0) throw ApiError.badRequest('Select at least one recipient.');
-    if (recipients.length > 50) throw ApiError.badRequest('Send to at most 50 recipients at a time.');
 
-    // Attachments must be files the sender can actually access; metadata comes
-    // from the database, never from the browser.
+    const internalEmpIds = [...new Set((input.recipientIds ?? []).filter((id) => Number.isFinite(id) && id > 0))];
+    const externalTo = [...new Set((input.toEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    const cleanCc = [...new Set((input.ccEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    const cleanBcc = [...new Set((input.bccEmails ?? []).map((e) => e.trim().toLowerCase()).filter(Boolean))];
+
+    let internalEmployees: Array<{ id: number; email: string; full_name: string }> = [];
+    if (internalEmpIds.length > 0) {
+      const placeholders = internalEmpIds.map(() => '?').join(',');
+      internalEmployees = await query<{ id: number; email: string; full_name: string }>(
+        `SELECT id, email, full_name FROM employees WHERE id IN (${placeholders}) AND status = 'active'`,
+        internalEmpIds,
+      );
+    }
+
+    const allToAddresses = new Set<string>();
+    const internalMap = new Map<string, { id: number; full_name: string; email: string }>();
+
+    for (const emp of internalEmployees) {
+      if (emp.email) {
+        allToAddresses.add(emp.email.toLowerCase());
+        internalMap.set(emp.email.toLowerCase(), emp);
+      }
+    }
+    for (const ext of externalTo) {
+      allToAddresses.add(ext);
+    }
+
+    const finalToList = [...allToAddresses];
+    if (finalToList.length === 0) {
+      throw ApiError.badRequest('Please enter or select at least one recipient email address.');
+    }
+    if (finalToList.length + cleanCc.length + cleanBcc.length > 50) {
+      throw ApiError.badRequest('Total recipients (To + Cc + Bcc) cannot exceed 50 per email.');
+    }
+
+    const { assertNoHeaderInjection, isValidEmail, sendDirectEmail } = await import('../lib/mailer.js');
+    assertNoHeaderInjection(subject, ...finalToList, ...cleanCc, ...cleanBcc);
+
+    for (const addr of [...finalToList, ...cleanCc, ...cleanBcc]) {
+      if (!isValidEmail(addr)) {
+        throw ApiError.badRequest(`Invalid recipient email address format: ${addr}`);
+      }
+    }
+
+    // Attachments
     const attachments: EmailAttachment[] = [];
     for (const item of input.attachments ?? []) {
       const file = await FileService.getForUser(item.fileId, sender);
-      attachments.push({ fileId: Number(file.id), name: file.original_name, size: Number(file.size_bytes), mimeType: file.mime_type });
+      attachments.push({
+        fileId: Number(file.id),
+        name: file.original_name,
+        size: Number(file.size_bytes),
+        mimeType: file.mime_type,
+      });
     }
     const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : null;
 
-    const smtpReady = config.smtp.configured;
-    const results: { recipientId: number; name: string; email: string; emailId: number; delivery: 'sent' | 'failed' | 'queued' | 'not_configured'; error: string | null }[] = [];
+    // Send real email via SMTP
+    const sendResult = await sendDirectEmail({
+      senderId: sender.id,
+      senderName: sender.fullName,
+      senderEmail: sender.email,
+      to: finalToList,
+      cc: cleanCc.length > 0 ? cleanCc : undefined,
+      bcc: cleanBcc.length > 0 ? cleanBcc : undefined,
+      subject,
+      text: body,
+      html: input.html,
+      attachments: attachments.map((a) => ({ fileId: a.fileId, name: a.name })),
+      dedupeKey: input.idempotencyKey ? `user:${sender.id}:${input.idempotencyKey}` : undefined,
+    });
 
-    for (const recipientId of recipients) {
-      const recipient = await queryOne<{ id: number; email: string; full_name: string }>(
-        "SELECT id, email, full_name FROM employees WHERE id = ? AND status = 'active'",
-        [recipientId],
-      );
-      if (!recipient) continue;
+    const isAccepted = sendResult.status === 'accepted';
+    const deliveryStatus = isAccepted ? 'accepted' : (sendResult.status === 'skipped' ? 'queued' : 'failed');
+    const ccCsv = cleanCc.length > 0 ? cleanCc.join(', ') : null;
+    const bccCsv = cleanBcc.length > 0 ? cleanBcc.join(', ') : null;
 
-      const res = await execute(
-        'INSERT INTO internal_emails (sender_id, recipient_id, subject, body, attachments) VALUES (?, ?, ?, ?, ?)',
-        [sender.id, recipientId, subject, body, attachmentsJson],
-      );
-      const emailId = Number(res.insertId);
+    const createdIds: number[] = [];
 
-      await NotificationService.notify({
-        employeeIds: [recipientId],
-        type: 'system',
-        title: `Email from ${sender.fullName}`,
-        body: subject,
-        link: `/mailbox?id=${emailId}`,
-        actorId: sender.id,
-      });
+    // 1. Deliver to internal employee inboxes
+    for (const toAddr of finalToList) {
+      const emp = internalMap.get(toAddr);
+      if (emp && emp.id !== sender.id) {
+        const res = await execute(
+          `INSERT INTO internal_emails
+             (sender_id, recipient_id, recipient_email, recipient_name, cc_emails, bcc_emails, subject, body, body_html, attachments, delivery_status, provider_message_id, last_error)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            sender.id,
+            emp.id,
+            emp.email,
+            emp.full_name,
+            ccCsv,
+            bccCsv,
+            subject,
+            body,
+            input.html ?? null,
+            attachmentsJson,
+            deliveryStatus,
+            sendResult.messageId ?? null,
+            sendResult.error ?? null,
+          ],
+        );
+        const emailId = Number(res.insertId);
+        createdIds.push(emailId);
 
-      let delivery: (typeof results)[number]['delivery'] = 'not_configured';
-      let error: string | null = smtpReady ? null : 'Outgoing email (SMTP) is not configured on the server.';
-      const deliveryId = await enqueueEmail({
-        to: recipient.email,
-        toName: recipient.full_name,
-        template: 'internal_email',
-        subject,
-        relatedType: 'internal_email',
-        relatedId: emailId,
-        dedupeKey: `internal_email:${emailId}`,
-        data: {
-          title: subject,
-          body,
-          name: recipient.full_name,
-          senderName: sender.fullName,
+        await NotificationService.notify({
+          employeeIds: [emp.id],
+          type: 'system',
+          title: `Email from ${sender.fullName}`,
+          body: subject,
           link: `/mailbox?id=${emailId}`,
-          linkLabel: 'Open in Workforce',
-          meta: [{ label: 'From', value: `${sender.fullName} (${sender.email})` }],
-          attachments: attachments.map((file) => ({ fileId: file.fileId, name: file.name })),
-        },
-      });
-      if (smtpReady && deliveryId) {
-        const outcome = await deliverNow(deliveryId);
-        delivery = outcome.status === 'sent' ? 'sent' : outcome.status === 'failed' ? 'failed' : 'queued';
-        error = outcome.error;
-      } else if (smtpReady) {
-        delivery = 'failed';
-        error = 'The email could not be queued.';
+          actorId: sender.id,
+        }).catch(() => undefined);
       }
-      results.push({ recipientId, name: recipient.full_name, email: recipient.email, emailId, delivery, error });
     }
 
-    if (results.length === 0) throw ApiError.badRequest('None of the selected recipients are active employees.');
+    // 2. Deliver Sent item for the sender
+    const toCsv = finalToList.join(', ');
+    const sentRecord = await execute(
+      `INSERT INTO internal_emails
+         (sender_id, recipient_id, recipient_email, recipient_name, cc_emails, bcc_emails, subject, body, body_html, attachments, delivery_status, provider_message_id, last_error, is_deleted_by_recipient, is_read)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)`,
+      [
+        sender.id,
+        toCsv,
+        toCsv,
+        ccCsv,
+        bccCsv,
+        subject,
+        body,
+        input.html ?? null,
+        attachmentsJson,
+        deliveryStatus,
+        sendResult.messageId ?? null,
+        sendResult.error ?? null,
+      ],
+    );
+    const sentEmailId = Number(sentRecord.insertId);
+    createdIds.push(sentEmailId);
+
     await recordAudit({
       actorId: sender.id,
       action: 'internal_email.sent',
       entityType: 'internal_email',
-      entityId: results[0].emailId,
-      after: { recipients: results.length, delivered: results.filter((r) => r.delivery === 'sent').length, attachments: attachments.length },
+      entityId: sentEmailId,
+      after: {
+        to: finalToList,
+        cc: cleanCc,
+        bcc: cleanBcc,
+        deliveryStatus,
+        messageId: sendResult.messageId,
+      },
     });
+
     return {
-      sent: results.length,
-      emailIds: results.map((r) => r.emailId),
-      delivered: results.filter((r) => r.delivery === 'sent').length,
-      deliveryConfigured: smtpReady,
-      recipients: results,
+      success: isAccepted,
+      status: deliveryStatus,
+      messageId: sendResult.messageId,
+      emailId: sentEmailId,
+      emailIds: createdIds,
+      sent: finalToList.length,
+      delivered: isAccepted ? finalToList.length : 0,
+      deliveryConfigured: config.smtp.configured,
+      error: sendResult.error,
+      recipients: {
+        to: finalToList,
+        cc: cleanCc,
+        bcc: cleanBcc,
+      },
     };
   }
 

@@ -17,10 +17,17 @@ interface TestAccount {
 
 const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
   {
-    role: 'Super Admin & Store Manager',
-    employeeId: 'EMP-2201',
+    role: 'Super Admin',
+    employeeId: 'EMP-1001',
     name: 'Gagan C B',
-    email: 'exclusivedvgbsc@gmail.com',
+    email: 'gagan.cb@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+  {
+    role: 'Store Manager',
+    employeeId: 'EMP-1001',
+    name: 'Gagan C B',
+    email: 'admin@bsctextiles.in',
     password: 'Workforce@2026',
   },
 ];

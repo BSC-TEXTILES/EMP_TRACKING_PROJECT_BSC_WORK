@@ -7,6 +7,9 @@ import { assertEmployeeAccess } from '../lib/scope.js';
 import { addDays, endOfMonth, startOfMonth, today } from '../lib/dates.js';
 export const leaveRouter = Router();
 leaveRouter.use(authenticate);
+leaveRouter.get('/application-context', asyncHandler(async (req, res) => {
+    res.json(await LeaveService.applicationContext(currentUser(req).id));
+}));
 leaveRouter.get('/types', asyncHandler(async (_req, res) => {
     res.json({ types: await LeaveService.types() });
 }));
@@ -34,6 +37,7 @@ leaveRouter.get('/', requireAny('leave.view.own', 'leave.view.team', 'leave.view
 leaveRouter.post('/', requireAny('leave.apply'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const body = parseBody(z.object({
+        hrApproverId: z.number().int().positive().optional(),
         leaveTypeId: z.number().int().positive(),
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

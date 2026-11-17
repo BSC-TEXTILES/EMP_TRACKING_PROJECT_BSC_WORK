@@ -11,10 +11,16 @@ import type { PickerEmployee } from '../lib/types';
 
 /** Server's real per-recipient delivery outcome for "Send Email". */
 interface SendResult {
-  sent: number;
-  delivered: number;
-  deliveryConfigured: boolean;
-  recipients: { recipientId: number; name: string; email: string; emailId: number; delivery: 'sent' | 'failed' | 'queued' | 'not_configured'; error: string | null }[];
+  success?: boolean;
+  status?: string;
+  messageId?: string | null;
+  error?: string | null;
+  sent?: number;
+  delivered?: number;
+  deliveryConfigured?: boolean;
+  emailId?: number;
+  emailIds?: number[];
+  recipients?: any;
 }
 
 interface EmailItem {
@@ -23,17 +29,29 @@ interface EmailItem {
   senderName?: string;
   senderEmail?: string;
   senderPhoto?: string | null;
-  recipientId?: number;
+  recipientId?: number | null;
   recipientName?: string;
   recipientEmail?: string;
   recipientPhoto?: string | null;
+  cc?: string | null;
+  bcc?: string | null;
   subject: string;
   body: string;
+  bodyHtml?: string | null;
   isRead: boolean;
   readAt: string | null;
   isStarred: boolean;
+  deliveryStatus?: string;
+  providerMessageId?: string | null;
+  lastError?: string | null;
   attachments: { fileId: number; name: string; size: number; mimeType: string }[];
   createdAt: string;
+}
+
+interface RecipientChip {
+  id?: number;
+  name?: string;
+  email: string;
 }
 
 export default function Mailbox() {
@@ -337,9 +355,37 @@ export default function Mailbox() {
                 <div className="flex items-center gap-3">
                   <Avatar name={activeEmail.senderName ?? 'Sender'} src={activeEmail.senderPhoto} size={42} />
                   <div>
-                    <p className="text-sm font-semibold text-ink-900">{activeEmail.senderName}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-ink-900">{activeEmail.senderName}</p>
+                      {activeEmail.deliveryStatus && (
+                        <span
+                          className={cx(
+                            'text-[10px] font-semibold px-2 py-0.5 rounded-full uppercase tracking-wider',
+                            activeEmail.deliveryStatus === 'accepted' || activeEmail.deliveryStatus === 'delivered'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : activeEmail.deliveryStatus === 'failed'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800',
+                          )}
+                        >
+                          {activeEmail.deliveryStatus === 'accepted' ? 'Accepted by SMTP' : activeEmail.deliveryStatus}
+                        </span>
+                      )}
+                    </div>
                     <p className="text-xs text-ink-500">From: &lt;{activeEmail.senderEmail}&gt;</p>
-                    <p className="text-xs text-ink-500">To: {activeEmail.recipientName} &lt;{activeEmail.recipientEmail}&gt;</p>
+                    <p className="text-xs text-ink-500">To: {activeEmail.recipientName || activeEmail.recipientEmail} &lt;{activeEmail.recipientEmail}&gt;</p>
+                    {activeEmail.cc && (
+                      <p className="text-xs text-ink-500">Cc: {activeEmail.cc}</p>
+                    )}
+                    {activeEmail.bcc && (
+                      <p className="text-xs text-ink-500">Bcc: {activeEmail.bcc}</p>
+                    )}
+                    {activeEmail.providerMessageId && (
+                      <p className="text-[11px] text-ink-400 font-mono mt-0.5">Message-ID: {activeEmail.providerMessageId}</p>
+                    )}
+                    {activeEmail.lastError && (
+                      <p className="text-xs text-rose-600 mt-1">Delivery notice: {activeEmail.lastError}</p>
+                    )}
                   </div>
                 </div>
                 <div className="text-right text-xs text-ink-400">
@@ -389,15 +435,14 @@ export default function Mailbox() {
         onSent={async (result) => {
           setComposeOpen(false);
           await loadEmails();
-          // Report what really happened: delivered to the inbox, or only saved in Workforce.
-          const failed = result.recipients.filter((r) => r.delivery !== 'sent');
-          if (!result.deliveryConfigured) {
-            toast.warning(`Saved in the Workforce mailbox for ${result.sent} recipient(s). Outgoing email is not configured on the server, so nothing was sent to their email inbox. Ask an administrator to set up SMTP.`);
-          } else if (failed.length === 0) {
-            toast.success(`Email delivered to ${result.recipients.map((r) => r.email).join(', ')}.`);
+          if (result.success || result.status === 'accepted') {
+            toast.success(`Email accepted by SMTP server for delivery!`);
+          } else if (result.status === 'queued') {
+            toast.info(`Email queued for delivery.`);
+          } else if (!result.deliveryConfigured) {
+            toast.warning(`Saved in Workforce mailbox. Outgoing SMTP is not configured on the server.`);
           } else {
-            const reason = failed[0].error ?? 'delivery failed';
-            toast.error(`Delivered to ${result.delivered} of ${result.sent}. Not delivered to ${failed.map((r) => r.email).join(', ')}: ${reason} It is saved in their Workforce mailbox and will be retried.`);
+            toast.error(result.error || 'Email delivery failed.');
           }
         }}
         initialReply={activeEmail ? { recipientId: activeEmail.senderId, subject: `Re: ${activeEmail.subject}` } : undefined}
@@ -422,9 +467,9 @@ function ComposeEmailModal({
   const [maximized, setMaximized] = useState(false);
 
   const [contacts, setContacts] = useState<PickerEmployee[]>([]);
-  const [recipientIds, setRecipientIds] = useState<number[]>([]);
-  const [ccIds, setCcIds] = useState<number[]>([]);
-  const [bccIds, setBccIds] = useState<number[]>([]);
+  const [toRecipients, setToRecipients] = useState<RecipientChip[]>([]);
+  const [ccRecipients, setCcRecipients] = useState<RecipientChip[]>([]);
+  const [bccRecipients, setBccRecipients] = useState<RecipientChip[]>([]);
   const [showCc, setShowCc] = useState(false);
   const [showBcc, setShowBcc] = useState(false);
 
@@ -443,6 +488,47 @@ function ComposeEmailModal({
     return `${clean}@bsctextiles.in`;
   };
 
+  const isValidEmail = (str: string): boolean => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(str.trim());
+  };
+
+  const addRecipient = (type: 'to' | 'cc' | 'bcc', chip: RecipientChip) => {
+    const list = type === 'to' ? toRecipients : type === 'cc' ? ccRecipients : bccRecipients;
+    if (list.some((r) => r.email.toLowerCase() === chip.email.toLowerCase())) {
+      toast.info(`${chip.email} is already added.`);
+      return;
+    }
+    if (type === 'to') {
+      setToRecipients((prev) => [...prev, chip]);
+      setToSearch('');
+      setToOpen(false);
+    } else if (type === 'cc') {
+      setCcRecipients((prev) => [...prev, chip]);
+      setCcSearch('');
+      setCcOpen(false);
+    } else {
+      setBccRecipients((prev) => [...prev, chip]);
+      setBccSearch('');
+      setBccOpen(false);
+    }
+  };
+
+  const addRawEmail = (type: 'to' | 'cc' | 'bcc', raw: string) => {
+    const trimmed = raw.trim().toLowerCase();
+    if (!trimmed) return;
+    if (!isValidEmail(trimmed)) {
+      toast.error(`"${raw}" is not a valid email address.`);
+      return;
+    }
+    addRecipient(type, { email: trimmed, name: trimmed });
+  };
+
+  const removeRecipient = (type: 'to' | 'cc' | 'bcc', email: string) => {
+    if (type === 'to') setToRecipients((prev) => prev.filter((r) => r.email !== email));
+    else if (type === 'cc') setCcRecipients((prev) => prev.filter((r) => r.email !== email));
+    else setBccRecipients((prev) => prev.filter((r) => r.email !== email));
+  };
+
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [attachments, setAttachments] = useState<{ fileId: number; name: string; size: number; mimeType: string }[]>([]);
@@ -454,16 +540,22 @@ function ComposeEmailModal({
     if (!open) return;
     api
       .get<{ contacts: PickerEmployee[] }>('/chat/contacts')
-      .then((res) => setContacts(res.contacts))
+      .then((res) => {
+        setContacts(res.contacts);
+        if (initialReply?.recipientId) {
+          const existing = res.contacts.find((c) => c.id === initialReply.recipientId);
+          if (existing) {
+            setToRecipients([{ id: existing.id, name: existing.full_name, email: formatRealEmail(existing.email, existing.full_name) }]);
+          }
+        }
+      })
       .catch(() => undefined);
 
-    if (initialReply?.recipientId) {
-      setRecipientIds([initialReply.recipientId]);
-    } else {
-      setRecipientIds([]);
+    if (!initialReply?.recipientId) {
+      setToRecipients([]);
     }
-    setCcIds([]);
-    setBccIds([]);
+    setCcRecipients([]);
+    setBccRecipients([]);
     setShowCc(false);
     setShowBcc(false);
     setSubject(initialReply?.subject ?? '');
@@ -475,9 +567,9 @@ function ComposeEmailModal({
     setToOpen(false);
   }, [open, initialReply]);
 
-  const filterEmployees = (queryText: string, excludedIds: number[]) => {
+  const filterEmployees = (queryText: string, excludedEmails: string[]) => {
     const q = queryText.trim().toLowerCase();
-    const available = contacts.filter((c) => !excludedIds.includes(c.id));
+    const available = contacts.filter((c) => !excludedEmails.includes((c.email || '').toLowerCase()) && !excludedEmails.includes(formatRealEmail(c.email, c.full_name).toLowerCase()));
     if (!q) return available.slice(0, 10);
     return available
       .filter((c) => {
@@ -522,9 +614,8 @@ function ComposeEmailModal({
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    const allRecipients = Array.from(new Set([...recipientIds, ...ccIds, ...bccIds]));
-    if (allRecipients.length === 0) {
-      toast.error('Please specify at least one recipient.');
+    if (toRecipients.length === 0) {
+      toast.error('Please enter or select at least one recipient email.');
       return;
     }
     if (!subject.trim()) {
@@ -539,14 +630,27 @@ function ComposeEmailModal({
     setBusy(true);
     try {
       const result = await api.post<SendResult>('/emails/send', {
-        recipientIds: allRecipients,
+        recipientIds: toRecipients.filter((r) => r.id).map((r) => r.id!),
+        toEmails: toRecipients.map((r) => r.email),
+        ccEmails: ccRecipients.map((r) => r.email),
+        bccEmails: bccRecipients.map((r) => r.email),
         subject: subject.trim(),
         body: body.trim(),
         attachments: attachments.length > 0 ? attachments : undefined,
       });
+
+      if (result.success || result.status === 'accepted') {
+        toast.success(`Email accepted by mail server! Message ID: ${result.messageId || 'OK'}`);
+      } else if (result.status === 'queued') {
+        toast.info('Email queued for background delivery.');
+      } else {
+        toast.error(result.error || 'Email could not be delivered.');
+      }
       await onSent(result);
+      onClose();
     } catch (caught) {
       toast.error(errorMessage(caught));
+      // Form content is preserved so user does not lose their draft!
     } finally {
       setBusy(false);
     }
@@ -585,10 +689,6 @@ function ComposeEmailModal({
       </div>
     );
   }
-
-  const selectedRecipients = contacts.filter((c) => recipientIds.includes(c.id));
-  const selectedCcs = contacts.filter((c) => ccIds.includes(c.id));
-  const selectedBccs = contacts.filter((c) => bccIds.includes(c.id));
 
   return (
     <>
@@ -634,24 +734,24 @@ function ComposeEmailModal({
           </div>
         </div>
 
-        {/* Recipients (To) Section with instant search */}
+        {/* Recipients (To) Section with instant search and manual email entry */}
         <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[42px]">
           <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Recipients</span>
           <div className="flex-1 flex flex-wrap items-center gap-1.5">
-            {selectedRecipients.map((emp) => (
+            {toRecipients.map((r) => (
               <span
-                key={emp.id}
+                key={r.email}
                 className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
               >
                 <span className="flex h-4 w-4 items-center justify-center rounded-full bg-blue-600 text-[10px] font-bold text-white uppercase">
-                  {emp.full_name[0]}
+                  {(r.name || r.email)[0]}
                 </span>
-                <span className="font-medium">{emp.full_name}</span>
+                <span className="font-medium max-w-[170px] truncate">{r.name && r.name !== r.email ? r.name : r.email}</span>
                 <button
                   type="button"
-                  title={`Remove ${emp.full_name}`}
+                  title={`Remove ${r.email}`}
                   className="text-slate-400 hover:text-red-600 ml-0.5"
-                  onClick={() => setRecipientIds((prev) => prev.filter((id) => id !== emp.id))}
+                  onClick={() => removeRecipient('to', r.email)}
                 >
                   ✕
                 </button>
@@ -664,9 +764,15 @@ function ComposeEmailModal({
                 setToSearch(e.target.value);
                 setToOpen(true);
               }}
+              onKeyDown={(e) => {
+                if ((e.key === 'Enter' || e.key === ',' || e.key === 'Tab') && toSearch.trim()) {
+                  e.preventDefault();
+                  addRawEmail('to', toSearch);
+                }
+              }}
               onFocus={() => setToOpen(true)}
-              placeholder={recipientIds.length === 0 ? 'Search name or email...' : 'Add recipient...'}
-              className="flex-1 min-w-[140px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
+              placeholder={toRecipients.length === 0 ? 'Type email address or search name...' : 'Add another recipient...'}
+              className="flex-1 min-w-[160px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
             />
           </div>
           <div className="flex items-center gap-2 text-xs text-slate-500 shrink-0">
@@ -695,37 +801,39 @@ function ComposeEmailModal({
             <>
               <div className="fixed inset-0 z-10" onClick={() => setToOpen(false)} />
               <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
-                {filterEmployees(toSearch, recipientIds).length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-slate-500">No matching employees found</div>
-                ) : (
-                  filterEmployees(toSearch, recipientIds).map((emp) => (
-                    <button
-                      key={emp.id}
-                      type="button"
-                      className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50 transition-colors"
-                      onClick={() => {
-                        setRecipientIds((prev) => [...prev, emp.id]);
-                        setToSearch('');
-                        setToOpen(false);
-                      }}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
-                          {emp.full_name[0]}
-                        </span>
-                        <div>
-                          <p className="font-semibold text-slate-800">{emp.full_name}</p>
-                          <p className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</p>
-                        </div>
-                      </div>
-                      {emp.designation_title && (
-                        <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5">
-                          {emp.designation_title}
-                        </span>
-                      )}
-                    </button>
-                  ))
+                {toSearch.trim() && (
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-blue-700 bg-blue-50/70 hover:bg-blue-100 font-medium border-b border-slate-100"
+                    onClick={() => addRawEmail('to', toSearch)}
+                  >
+                    <Icon name="mail" size={13} className="text-blue-600 shrink-0" />
+                    <span>Send to email: <strong>{toSearch.trim()}</strong></span>
+                  </button>
                 )}
+                {filterEmployees(toSearch, toRecipients.map((r) => r.email)).map((emp) => (
+                  <button
+                    key={emp.id}
+                    type="button"
+                    className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50 transition-colors"
+                    onClick={() => addRecipient('to', { id: emp.id, name: emp.full_name, email: formatRealEmail(emp.email, emp.full_name) })}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
+                        {emp.full_name[0]}
+                      </span>
+                      <div>
+                        <p className="font-semibold text-slate-800">{emp.full_name}</p>
+                        <p className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</p>
+                      </div>
+                    </div>
+                    {emp.designation_title && (
+                      <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-1.5 py-0.5">
+                        {emp.designation_title}
+                      </span>
+                    )}
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -736,16 +844,16 @@ function ComposeEmailModal({
           <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[38px]">
             <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Cc</span>
             <div className="flex-1 flex flex-wrap items-center gap-1.5">
-              {selectedCcs.map((emp) => (
+              {ccRecipients.map((r) => (
                 <span
-                  key={emp.id}
+                  key={r.email}
                   className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
                 >
-                  <span className="font-medium">{emp.full_name}</span>
+                  <span className="font-medium max-w-[160px] truncate">{r.name && r.name !== r.email ? r.name : r.email}</span>
                   <button
                     type="button"
                     className="text-slate-400 hover:text-red-600 ml-0.5"
-                    onClick={() => setCcIds((prev) => prev.filter((id) => id !== emp.id))}
+                    onClick={() => removeRecipient('cc', r.email)}
                   >
                     ✕
                   </button>
@@ -758,8 +866,14 @@ function ComposeEmailModal({
                   setCcSearch(e.target.value);
                   setCcOpen(true);
                 }}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ',' || e.key === 'Tab') && ccSearch.trim()) {
+                    e.preventDefault();
+                    addRawEmail('cc', ccSearch);
+                  }
+                }}
                 onFocus={() => setCcOpen(true)}
-                placeholder="Add Cc..."
+                placeholder="Add Cc email or employee..."
                 className="flex-1 min-w-[120px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
               />
             </div>
@@ -767,16 +881,22 @@ function ComposeEmailModal({
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setCcOpen(false)} />
                 <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
-                  {filterEmployees(ccSearch, [...recipientIds, ...ccIds]).map((emp) => (
+                  {ccSearch.trim() && (
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-blue-700 bg-blue-50/70 hover:bg-blue-100 font-medium border-b border-slate-100"
+                      onClick={() => addRawEmail('cc', ccSearch)}
+                    >
+                      <Icon name="mail" size={13} className="text-blue-600 shrink-0" />
+                      <span>Add Cc: <strong>{ccSearch.trim()}</strong></span>
+                    </button>
+                  )}
+                  {filterEmployees(ccSearch, [...toRecipients, ...ccRecipients].map((r) => r.email)).map((emp) => (
                     <button
                       key={emp.id}
                       type="button"
                       className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50"
-                      onClick={() => {
-                        setCcIds((prev) => [...prev, emp.id]);
-                        setCcSearch('');
-                        setCcOpen(false);
-                      }}
+                      onClick={() => addRecipient('cc', { id: emp.id, name: emp.full_name, email: formatRealEmail(emp.email, emp.full_name) })}
                     >
                       <span className="font-medium text-slate-800">{emp.full_name}</span>
                       <span className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</span>
@@ -793,16 +913,16 @@ function ComposeEmailModal({
           <div className="relative border-b border-slate-200 px-4 py-1.5 flex flex-wrap items-center gap-1.5 min-h-[38px]">
             <span className="text-xs font-medium text-slate-500 w-16 shrink-0">Bcc</span>
             <div className="flex-1 flex flex-wrap items-center gap-1.5">
-              {selectedBccs.map((emp) => (
+              {bccRecipients.map((r) => (
                 <span
-                  key={emp.id}
+                  key={r.email}
                   className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-slate-100 pl-1.5 pr-2 py-0.5 text-xs text-slate-800"
                 >
-                  <span className="font-medium">{emp.full_name}</span>
+                  <span className="font-medium max-w-[160px] truncate">{r.name && r.name !== r.email ? r.name : r.email}</span>
                   <button
                     type="button"
                     className="text-slate-400 hover:text-red-600 ml-0.5"
-                    onClick={() => setBccIds((prev) => prev.filter((id) => id !== emp.id))}
+                    onClick={() => removeRecipient('bcc', r.email)}
                   >
                     ✕
                   </button>
@@ -815,8 +935,14 @@ function ComposeEmailModal({
                   setBccSearch(e.target.value);
                   setBccOpen(true);
                 }}
+                onKeyDown={(e) => {
+                  if ((e.key === 'Enter' || e.key === ',' || e.key === 'Tab') && bccSearch.trim()) {
+                    e.preventDefault();
+                    addRawEmail('bcc', bccSearch);
+                  }
+                }}
                 onFocus={() => setBccOpen(true)}
-                placeholder="Add Bcc..."
+                placeholder="Add Bcc email or employee..."
                 className="flex-1 min-w-[120px] text-xs text-slate-800 placeholder-slate-400 focus:outline-none py-1 bg-transparent"
               />
             </div>
@@ -824,16 +950,22 @@ function ComposeEmailModal({
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setBccOpen(false)} />
                 <div className="absolute left-16 right-4 top-full z-20 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl">
-                  {filterEmployees(bccSearch, [...recipientIds, ...ccIds, ...bccIds]).map((emp) => (
+                  {bccSearch.trim() && (
+                    <button
+                      type="button"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-blue-700 bg-blue-50/70 hover:bg-blue-100 font-medium border-b border-slate-100"
+                      onClick={() => addRawEmail('bcc', bccSearch)}
+                    >
+                      <Icon name="mail" size={13} className="text-blue-600 shrink-0" />
+                      <span>Add Bcc: <strong>{bccSearch.trim()}</strong></span>
+                    </button>
+                  )}
+                  {filterEmployees(bccSearch, [...toRecipients, ...ccRecipients, ...bccRecipients].map((r) => r.email)).map((emp) => (
                     <button
                       key={emp.id}
                       type="button"
                       className="w-full flex items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-blue-50"
-                      onClick={() => {
-                        setBccIds((prev) => [...prev, emp.id]);
-                        setBccSearch('');
-                        setBccOpen(false);
-                      }}
+                      onClick={() => addRecipient('bcc', { id: emp.id, name: emp.full_name, email: formatRealEmail(emp.email, emp.full_name) })}
                     >
                       <span className="font-medium text-slate-800">{emp.full_name}</span>
                       <span className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</span>
@@ -986,15 +1118,26 @@ function ComposeEmailModal({
                 type="button"
                 onClick={() => void submit()}
                 disabled={busy || uploading}
-                className="flex items-center gap-1.5 px-5 py-2 text-sm font-medium text-white focus:outline-none"
+                className="flex items-center gap-2 px-5 py-2 text-sm font-medium text-white focus:outline-none disabled:opacity-50"
               >
-                <span>{busy ? 'Sending…' : 'Send'}</span>
+                {busy ? (
+                  <>
+                    <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span>Sending via SMTP...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Send</span>
+                    <Icon name="send" size={13} />
+                  </>
+                )}
               </button>
               <button
                 type="button"
                 title="Send options"
-                className="border-l border-blue-500 pr-3 pl-2 py-2 hover:bg-blue-800 rounded-r-full text-white focus:outline-none"
-                onClick={() => toast.info('Send options: direct workforce inbox delivery active')}
+                disabled={busy || uploading}
+                className="border-l border-blue-500 pr-3 pl-2 py-2 hover:bg-blue-800 rounded-r-full text-white focus:outline-none disabled:opacity-50"
+                onClick={() => toast.info('Direct SMTP delivery active')}
               >
                 <Icon name="chevronDown" size={14} />
               </button>

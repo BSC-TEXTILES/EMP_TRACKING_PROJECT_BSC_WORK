@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
+import { rateLimit } from '../middleware/security.js';
 import { InternalEmailService } from '../services/InternalEmailService.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
@@ -57,13 +58,18 @@ internalEmailsRouter.get(
 
 internalEmailsRouter.post(
   '/send',
+  rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'mail-send' }),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(
       z.object({
-        recipientIds: z.array(z.number().int().positive()).min(1),
+        recipientIds: z.array(z.number().int().positive()).optional(),
+        toEmails: z.array(z.string().email().max(190)).optional(),
+        ccEmails: z.array(z.string().email().max(190)).optional(),
+        bccEmails: z.array(z.string().email().max(190)).optional(),
         subject: z.string().min(1).max(255),
         body: z.string().min(1).max(50000),
+        html: z.string().max(100000).optional(),
         attachments: z
           .array(
             z.object({
@@ -75,6 +81,7 @@ internalEmailsRouter.post(
           )
           .max(10)
           .optional(),
+        idempotencyKey: z.string().max(120).optional(),
       }),
       req.body,
     );

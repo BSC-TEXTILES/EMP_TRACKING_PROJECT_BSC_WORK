@@ -5,7 +5,35 @@ import { ApiError } from '../lib/http.js';
 import { assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { AttendanceService } from './AttendanceService.js';
+import { AuthService } from './AuthService.js';
 export class LeaveService {
+    static async applicationContext(employeeId) {
+        const employee = await queryOne(`SELECT e.id, e.full_name, e.location_id, l.name location_name, e.manager_id
+       FROM employees e LEFT JOIN locations l ON l.id = e.location_id WHERE e.id = ?`, [employeeId]);
+        if (!employee)
+            throw ApiError.notFound('Employee not found');
+        const candidates = employee.location_id ? await query(`SELECT e.id, e.full_name FROM employees e WHERE e.status = 'active' AND e.id <> ?
+       AND (e.location_id = ? OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.employee_id = e.id AND el.location_id = ?))
+       ORDER BY e.full_name`, [employeeId, employee.location_id, employee.location_id]) : [];
+        const hrApprovers = [];
+        let manager = null;
+        for (const candidate of candidates) {
+            const approver = await AuthService.buildUser(Number(candidate.id));
+            if (Number(candidate.id) === Number(employee.manager_id) && approver?.permissions.includes('leave.approve.manager')) {
+                manager = { id: Number(candidate.id), name: candidate.full_name };
+            }
+            if (approver?.permissions.includes('leave.approve.hr') && Number(candidate.id) !== Number(employee.manager_id)) {
+                hrApprovers.push({ id: Number(candidate.id), name: candidate.full_name });
+            }
+        }
+        const issues = [
+            ...(!employee.location_id ? ['Your employee record needs an assigned location.'] : []),
+            ...(!manager ? ['An active reporting manager with leave approval access must be assigned to your location.'] : []),
+            ...(!hrApprovers.length ? ['An HR approver must be assigned to your location. Contact administration.'] : []),
+        ];
+        return { employeeName: employee.full_name, locationId: employee.location_id, locationName: employee.location_name,
+            manager, hrApprovers, canApply: issues.length === 0, issues };
+    }
     static async types() {
         return query('SELECT id, name, code, annual_quota, is_paid, requires_document FROM leave_types WHERE is_active = 1 ORDER BY name');
     }
@@ -29,6 +57,23 @@ export class LeaveService {
         });
     }
     static async apply(employeeId, input, context) {
+        const routing = await LeaveService.applicationContext(employeeId);
+        if (!routing.canApply)
+            throw ApiError.conflict(routing.issues.join(' '));
+        const hr = routing.hrApprovers.find((entry) => entry.id === input.hrApproverId)
+            ?? (input.hrApproverId === undefined && routing.hrApprovers.length === 1 ? routing.hrApprovers[0] : undefined);
+        if (!hr)
+            throw ApiError.badRequest('Select an HR approver assigned to your location.');
+        if (![input.startDate, input.endDate].every((value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value)) {
+            throw ApiError.badRequest('Enter valid leave dates.');
+        }
+        if (input.startDate.slice(0, 4) !== input.endDate.slice(0, 4))
+            throw ApiError.badRequest('Submit separate requests for each calendar year.');
+        if (input.documentFileId) {
+            const file = await queryOne("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status = 'clean'", [input.documentFileId, employeeId]);
+            if (!file)
+                throw ApiError.forbidden('Select a supporting document uploaded by you.');
+        }
         if (input.endDate < input.startDate)
             throw ApiError.badRequest('End date cannot be before the start date.');
         if (input.startDate < today())
@@ -54,8 +99,15 @@ export class LeaveService {
             throw ApiError.badRequest(`Insufficient ${selected.name} balance (${selected.available} day(s) available).`);
         }
         const employee = await queryOne('SELECT manager_id, full_name FROM employees WHERE id = ?', [employeeId]);
-        const result = await execute(`INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, reason, document_file_id, status, manager_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?)`, [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, input.reason.trim(), input.documentFileId ?? null, employee?.manager_id ?? null]);
+        const result = await transaction(async (conn) => {
+            await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [employeeId]);
+            const [overlaps] = await conn.query("SELECT id FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?", [employeeId, input.endDate, input.startDate]);
+            if (overlaps.length)
+                throw ApiError.conflict('You already have a leave request overlapping these dates.');
+            const [created] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?, ?, ?)`, [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, input.reason.trim(), input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id]);
+            return created;
+        });
         await recordAudit({
             actorId: employeeId,
             action: 'leave.applied',
@@ -97,12 +149,17 @@ export class LeaveService {
             const ids = await subtreeIds(user.id);
             if (ids.length === 0)
                 return { items: [], total: 0 };
-            clauses.push(`l.employee_id IN (${ids.map(() => '?').join(',')})`);
-            params.push(...ids);
+            clauses.push(`(l.employee_id IN (${ids.map(() => '?').join(',')}) OR l.manager_id = ? OR l.hr_approver_id = ?)`);
+            params.push(...ids, user.id, user.id);
         }
         else {
             clauses.push('l.employee_id = ?');
             params.push(user.id);
+        }
+        if (wantsAll || wantsTeam) {
+            const location = await locationEmployeeClause(user, 'l.employee_id');
+            clauses.push(location.clause);
+            params.push(...location.params);
         }
         if (filters.status) {
             clauses.push('l.status = ?');
@@ -113,11 +170,14 @@ export class LeaveService {
         const where = clauses.join(' AND ');
         const rows = await query(`SELECT l.*, e.full_name, e.employee_code, d.name AS department_name, lt.name AS type_name,
               (l.employee_id = ?) AS created_by_me,
-              (e.manager_id = ?) AS is_my_report
+              (l.manager_id = ?) AS is_my_report, loc.name location_name, mgr.full_name manager_name, hr.full_name hr_name
        FROM leave_requests l
        JOIN employees e ON e.id = l.employee_id
        JOIN leave_types lt ON lt.id = l.leave_type_id
        LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN locations loc ON loc.id = COALESCE(l.request_location_id, e.location_id)
+       LEFT JOIN employees mgr ON mgr.id = l.manager_id
+       LEFT JOIN employees hr ON hr.id = l.hr_approver_id
        WHERE ${where}
        ORDER BY FIELD(l.status, 'pending_manager','pending_hr','approved','rejected','cancelled'), l.start_date DESC
        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, [user.id, user.id, ...params]);
@@ -129,6 +189,8 @@ export class LeaveService {
                 employeeCode: r.employee_code,
                 departmentName: r.department_name,
                 leaveType: r.type_name,
+                documentFileId: r.document_file_id ? Number(r.document_file_id) : null,
+                locationName: r.location_name, managerName: r.manager_name, hrName: r.hr_name,
                 startDate: r.start_date,
                 endDate: r.end_date,
                 days: Number(r.days),
@@ -138,8 +200,8 @@ export class LeaveService {
                 managerActionAt: toIso(r.manager_action_at),
                 hrActionAt: toIso(r.hr_action_at),
                 createdAt: toIso(r.created_at),
-                canApproveManager: r.status === 'pending_manager' && Number(r.is_my_report) === 1,
-                canApproveHr: r.status === 'pending_hr' && user.permissions.includes('leave.approve.hr'),
+                canApproveManager: r.status === 'pending_manager' && Number(r.is_my_report) === 1 && user.permissions.includes('leave.approve.manager') && Number(r.employee_id) !== user.id,
+                canApproveHr: r.status === 'pending_hr' && user.permissions.includes('leave.approve.hr') && Number(r.employee_id) !== user.id && (r.hr_approver_id === null || Number(r.hr_approver_id) === user.id),
                 canCancel: Number(r.created_by_me) === 1 && ['pending_manager', 'pending_hr'].includes(r.status),
             })),
             total: rows.length,
@@ -149,34 +211,52 @@ export class LeaveService {
         const leave = await queryOne(`SELECT l.*, e.full_name FROM leave_requests l JOIN employees e ON e.id = l.employee_id WHERE l.id = ?`, [leaveId]);
         if (!leave)
             throw ApiError.notFound('Leave request not found');
+        if (Number(leave.employee_id) === actor.id)
+            throw ApiError.forbidden('You cannot approve your own leave.');
+        const routing = await LeaveService.applicationContext(Number(leave.employee_id));
+        const assignedLocations = await query('SELECT location_id FROM employee_locations WHERE employee_id = ?', [actor.id]);
+        const requestLocation = Number(leave.request_location_id ?? routing.locationId);
+        if (Number(actor.locationId) !== requestLocation && !assignedLocations.some((l) => Number(l.location_id) === requestLocation)) {
+            throw ApiError.forbidden('You can only approve leave for your assigned locations.');
+        }
         if (input.stage === 'manager') {
             if (leave.status !== 'pending_manager')
                 throw ApiError.conflict('This request is not awaiting manager approval.');
             const isManager = Number(leave.manager_id) === actor.id;
-            if (!isManager && !actor.permissions.includes('leave.approve.hr')) {
+            if (!isManager || !actor.permissions.includes('leave.approve.manager')) {
                 throw ApiError.forbidden('You are not the reporting manager for this employee.');
             }
             if (input.approve) {
-                await execute("UPDATE leave_requests SET status = 'pending_hr', manager_action_at = NOW(3), manager_id = COALESCE(manager_id, ?), decision_note = ? WHERE id = ?", [actor.id, input.note ?? null, leaveId]);
+                await execute("UPDATE leave_requests SET status = 'pending_hr', manager_action_at = NOW(3), manager_id = COALESCE(manager_id, ?), decision_note = ? WHERE id = ? AND status = 'pending_manager'", [actor.id, input.note ?? null, leaveId]);
             }
             else {
                 if (!input.note)
                     throw ApiError.badRequest('Provide a rejection reason.');
-                await execute("UPDATE leave_requests SET status = 'rejected', manager_action_at = NOW(3), decision_note = ? WHERE id = ?", [input.note, leaveId]);
+                await execute("UPDATE leave_requests SET status = 'rejected', manager_action_at = NOW(3), decision_note = ? WHERE id = ? AND status = 'pending_manager'", [input.note, leaveId]);
             }
         }
         else {
+            if (leave.hr_approver_id && Number(leave.hr_approver_id) !== actor.id)
+                throw ApiError.forbidden('This request is assigned to another HR approver.');
             if (!actor.permissions.includes('leave.approve.hr'))
                 throw ApiError.forbidden('You cannot approve at HR stage.');
             if (leave.status !== 'pending_hr')
                 throw ApiError.conflict('This request is not awaiting HR approval.');
             if (input.approve) {
                 await transaction(async (conn) => {
-                    await conn.query("UPDATE leave_requests SET status = 'approved', hr_action_at = NOW(3), decision_note = ? WHERE id = ?", [
+                    await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [leave.employee_id]);
+                    const [updated] = await conn.query("UPDATE leave_requests SET status = 'approved', hr_action_at = NOW(3), decision_note = ? WHERE id = ? AND status = 'pending_hr'", [
                         input.note ?? null,
                         leaveId,
                     ]);
+                    if (!updated.affectedRows)
+                        throw ApiError.conflict('This request was already processed.');
                     const year = Number(String(leave.start_date).slice(0, 4));
+                    const [balanceRows] = await conn.query(`SELECT COALESCE(b.allocated, t.annual_quota) allocated, COALESCE(b.used, 0) used
+             FROM leave_types t LEFT JOIN leave_balances b ON b.leave_type_id = t.id AND b.employee_id = ? AND b.balance_year = ? WHERE t.id = ?`, [leave.employee_id, year, leave.leave_type_id]);
+                    if (!balanceRows.length || Number(balanceRows[0].allocated) - Number(balanceRows[0].used) < Number(leave.days)) {
+                        throw ApiError.conflict('The employee no longer has sufficient leave balance.');
+                    }
                     await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
              VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
              ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, year, leave.leave_type_id, leave.days]);
@@ -186,7 +266,7 @@ export class LeaveService {
             else {
                 if (!input.note)
                     throw ApiError.badRequest('Provide a rejection reason.');
-                await execute("UPDATE leave_requests SET status = 'rejected', hr_action_at = NOW(3), decision_note = ? WHERE id = ?", [
+                await execute("UPDATE leave_requests SET status = 'rejected', hr_action_at = NOW(3), decision_note = ? WHERE id = ? AND status = 'pending_hr'", [
                     input.note,
                     leaveId,
                 ]);
@@ -212,10 +292,7 @@ export class LeaveService {
             actorId: actor.id,
         });
         if (input.approve && input.stage === 'manager') {
-            const hrUsers = await query(`SELECT DISTINCT e.id FROM employees e
-         JOIN role_permissions rp ON rp.role_id = e.role_id
-         JOIN permissions p ON p.id = rp.permission_id AND p.code = 'leave.approve.hr'
-         WHERE e.status = 'active'`);
+            const hrUsers = leave.hr_approver_id ? [{ id: Number(leave.hr_approver_id) }] : routing.hrApprovers;
             if (hrUsers.length > 0) {
                 await NotificationService.notify({
                     employeeIds: hrUsers.map((h) => Number(h.id)),
@@ -238,7 +315,7 @@ export class LeaveService {
             throw ApiError.forbidden('You can only cancel your own leave requests.');
         if (!['pending_manager', 'pending_hr'].includes(leave.status))
             throw ApiError.badRequest('Only pending requests can be cancelled.');
-        await execute("UPDATE leave_requests SET status = 'cancelled' WHERE id = ?", [leaveId]);
+        await execute("UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND status IN ('pending_manager','pending_hr')", [leaveId]);
         await recordAudit({ actorId: employeeId, action: 'leave.cancelled', entityType: 'leave_request', entityId: leaveId });
     }
     static async holidays(from, to) {

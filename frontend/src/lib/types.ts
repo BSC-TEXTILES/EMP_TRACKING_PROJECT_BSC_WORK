@@ -268,6 +268,10 @@ export interface ProjectSummary {
 }
 
 export interface LeaveItem {
+  documentFileId: number | null;
+  locationName: string | null;
+  managerName: string | null;
+  hrName: string | null;
   id: number;
   employeeId: number;
   employeeName: string;

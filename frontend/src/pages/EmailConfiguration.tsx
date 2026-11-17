@@ -30,6 +30,7 @@ interface Delivery {
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
+  messageId?: string | null;
   nextAttemptAt: string | null;
   sentAt: string | null;
   createdAt: string;
@@ -53,9 +54,10 @@ interface Overview {
 
 const FILTERS = [
   { value: '', label: 'All' },
+  { value: 'accepted', label: 'Accepted by SMTP' },
   { value: 'queued', label: 'Queued' },
-  { value: 'failed', label: 'Failed' },
   { value: 'sent', label: 'Sent' },
+  { value: 'failed', label: 'Failed' },
   { value: 'skipped', label: 'Skipped' },
 ];
 

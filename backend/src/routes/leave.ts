@@ -9,6 +9,9 @@ import type { AuthedRequest } from '../middleware/auth.js';
 
 export const leaveRouter = Router();
 leaveRouter.use(authenticate);
+leaveRouter.get('/application-context', asyncHandler(async (req: AuthedRequest, res) => {
+  res.json(await LeaveService.applicationContext(currentUser(req).id));
+}));
 
 leaveRouter.get(
   '/types',
@@ -60,6 +63,7 @@ leaveRouter.post(
     const user = currentUser(req);
     const body = parseBody(
       z.object({
+        hrApproverId: z.number().int().positive().optional(),
         leaveTypeId: z.number().int().positive(),
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

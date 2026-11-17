@@ -152,20 +152,109 @@ async function ensureDatabaseReady() {
                 await execute(`UPDATE employees 
           SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
           WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
-                // Retain only Gagan C B and remove all other demo employee records
-                const gagan = await queryOne('SELECT id, employee_code, email FROM employees WHERE full_name LIKE ? ORDER BY id DESC LIMIT 1', ['%Gagan%']);
-                if (gagan) {
+                // Retain only Gagan C B and purge all other demo/legacy employee records
+                const { pool } = await import('./db/index.js');
+                const dbConn = await pool.getConnection();
+                try {
+                    await dbConn.query('SET FOREIGN_KEY_CHECKS = 0');
+                    const [gaganRows] = await dbConn.query("SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Gagan%' ORDER BY id DESC LIMIT 1");
+                    let gaganId;
                     const { hashPassword } = await import('./lib/crypto.js');
                     const validHash = await hashPassword('Workforce@2026');
-                    await execute('SET FOREIGN_KEY_CHECKS = 0');
-                    await execute('DELETE FROM employee_sessions WHERE employee_id <> ?', [gagan.id]);
-                    await execute('DELETE FROM employee_login_audit WHERE employee_id <> ?', [gagan.id]);
-                    await execute('DELETE FROM employee_roles WHERE employee_id <> ?', [gagan.id]);
-                    await execute('DELETE FROM employees WHERE id <> ? AND full_name NOT LIKE ?', [gagan.id, '%Gagan%']);
-                    await execute('UPDATE employees SET manager_id = NULL, status = "active", failed_login_attempts = 0, locked_until = NULL, password_hash = ? WHERE id = ?', [validHash, gagan.id]);
-                    await execute('UPDATE departments SET head_employee_id = ?', [gagan.id]);
-                    await execute('SET FOREIGN_KEY_CHECKS = 1');
-                    console.log('[startup] Retained Gagan C B as sole primary employee record and reset credentials to Workforce@2026.');
+                    if (gaganRows.length > 0) {
+                        gaganId = Number(gaganRows[0].id);
+                        await dbConn.query(`UPDATE employees 
+               SET full_name = 'Gagan C B',
+                   email = 'gagan.cb@bsctextiles.in',
+                   mobile = '9876543210',
+                   manager_id = NULL,
+                   status = 'active',
+                   failed_login_attempts = 0,
+                   locked_until = NULL,
+                   password_hash = ?
+               WHERE id = ?`, [validHash, gaganId]);
+                    }
+                    else {
+                        const [superAdminRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'super_admin' LIMIT 1");
+                        const roleId = superAdminRole.length > 0 ? Number(superAdminRole[0].id) : 1;
+                        const [insertRes] = await dbConn.query(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, status, joining_date, email_verified_at, mobile_verified_at)
+               VALUES ('EMP-1001', 'Gagan C B', 'gagan.cb@bsctextiles.in', '9876543210', ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, roleId]);
+                        gaganId = Number(insertRes.insertId);
+                    }
+                    // Delete all records of non-Gagan employees across all dependent tables
+                    const tablesWithEmpId = [
+                        'employee_sessions',
+                        'employee_login_audit',
+                        'attendance',
+                        'attendance_records',
+                        'attendance_breaks',
+                        'attendance_corrections',
+                        'daily_reports',
+                        'daily_work_reports',
+                        'task_assignments',
+                        'task_time_logs',
+                        'ticket_assignments',
+                        'conversation_members',
+                        'conversation_user_state',
+                        'employee_activities',
+                        'employee_daily_performance',
+                        'employee_roles',
+                        'user_permissions',
+                        'otp_codes',
+                        'employee_devices',
+                        'employee_preferences',
+                        'employee_activity_consents',
+                        'login_history',
+                        'store_daily_checkpoints'
+                    ];
+                    for (const tbl of tablesWithEmpId) {
+                        try {
+                            await dbConn.query(`DELETE FROM \`${tbl}\` WHERE employee_id <> ?`, [gaganId]);
+                        }
+                        catch {
+                            // Ignore if table does not exist
+                        }
+                    }
+                    try {
+                        await dbConn.query('DELETE FROM task_comments WHERE author_id <> ?', [gaganId]);
+                    }
+                    catch { }
+                    try {
+                        await dbConn.query('DELETE FROM tasks WHERE created_by <> ?', [gaganId]);
+                    }
+                    catch { }
+                    try {
+                        await dbConn.query('DELETE FROM ticket_comments WHERE author_id <> ?', [gaganId]);
+                    }
+                    catch { }
+                    try {
+                        await dbConn.query('DELETE FROM tickets WHERE requester_id <> ?', [gaganId]);
+                    }
+                    catch { }
+                    try {
+                        await dbConn.query('DELETE FROM messages WHERE sender_id <> ?', [gaganId]);
+                    }
+                    catch { }
+                    try {
+                        await dbConn.query('DELETE FROM internal_emails WHERE sender_id <> ? AND recipient_id <> ?', [gaganId, gaganId]);
+                    }
+                    catch { }
+                    // Delete all other non-Gagan employees
+                    await dbConn.query('DELETE FROM employees WHERE id <> ?', [gaganId]);
+                    // Reassign departments head to Gagan C B
+                    await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]);
+                    // Ensure Gagan has Super Admin and Admin roles in employee_roles
+                    await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
+             SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'store_manager', 'general_manager', 'executive')`, [gaganId]);
+                    await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
+                    console.log(`[startup] Retained Gagan C B (ID: ${gaganId}) as sole primary employee record and reset credentials to Workforce@2026.`);
+                }
+                finally {
+                    try {
+                        await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
+                    }
+                    catch { }
+                    dbConn.release();
                 }
                 // Ensure task management tables exist
                 await execute(`CREATE TABLE IF NOT EXISTS store_daily_checkpoints (
@@ -224,6 +313,43 @@ async function ensureDatabaseReady() {
           created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
           PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+                // Ensure email delivery and mailbox schema readiness
+                try {
+                    const colCheckDeliveries = await queryOne("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'email_deliveries' AND column_name = 'sender_id'");
+                    if (!colCheckDeliveries || Number(colCheckDeliveries.cnt) === 0) {
+                        await execute("ALTER TABLE email_deliveries MODIFY status ENUM('queued', 'sending', 'sent', 'accepted', 'failed', 'skipped', 'delivered') NOT NULL DEFAULT 'queued'");
+                        await execute(`ALTER TABLE email_deliveries
+              ADD COLUMN sender_id BIGINT UNSIGNED NULL AFTER id,
+              ADD COLUMN cc_emails TEXT NULL AFTER recipient_name,
+              ADD COLUMN bcc_emails TEXT NULL AFTER cc_emails,
+              ADD COLUMN body_text MEDIUMTEXT NULL AFTER payload,
+              ADD COLUMN body_html MEDIUMTEXT NULL AFTER body_text,
+              ADD COLUMN attachments JSON NULL AFTER body_html`);
+                        await execute('CREATE INDEX idx_email_sender_created ON email_deliveries (sender_id, created_at)');
+                    }
+                }
+                catch (e) {
+                    console.warn('[startup] email_deliveries schema update note:', e);
+                }
+                try {
+                    const colCheckInternal = await queryOne("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'internal_emails' AND column_name = 'recipient_email'");
+                    if (!colCheckInternal || Number(colCheckInternal.cnt) === 0) {
+                        await execute('ALTER TABLE internal_emails MODIFY recipient_id BIGINT UNSIGNED NULL');
+                        await execute(`ALTER TABLE internal_emails
+              ADD COLUMN recipient_email VARCHAR(190) NULL AFTER recipient_id,
+              ADD COLUMN recipient_name VARCHAR(150) NULL AFTER recipient_email,
+              ADD COLUMN cc_emails TEXT NULL AFTER recipient_name,
+              ADD COLUMN bcc_emails TEXT NULL AFTER cc_emails,
+              ADD COLUMN body_html MEDIUMTEXT NULL AFTER body,
+              ADD COLUMN delivery_status ENUM('queued', 'sending', 'accepted', 'failed', 'delivered') NOT NULL DEFAULT 'accepted' AFTER attachments,
+              ADD COLUMN provider_message_id VARCHAR(190) NULL AFTER delivery_status,
+              ADD COLUMN last_error VARCHAR(500) NULL AFTER provider_message_id`);
+                        await execute('CREATE INDEX idx_internal_emails_recipient_email ON internal_emails (recipient_email, created_at)');
+                    }
+                }
+                catch (e) {
+                    console.warn('[startup] internal_emails schema update note:', e);
+                }
             }
             catch (schemaErr) {
                 console.warn('[startup] Schema readiness note:', schemaErr);

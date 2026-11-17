@@ -8,6 +8,15 @@ import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, titleize } from '../lib/format';
 import type { LeaveItem } from '../lib/types';
 
+interface ApplicationContext {
+  employeeName: string;
+  locationName: string | null;
+  manager: { id: number; name: string } | null;
+  hrApprovers: { id: number; name: string }[];
+  canApply: boolean;
+  issues: string[];
+}
+
 interface LeaveType {
   id: number;
   name: string;
@@ -49,6 +58,9 @@ export default function Leave() {
   const [balances, setBalances] = useState<Balance[]>([]);
   const [types, setTypes] = useState<LeaveType[]>([]);
   const [holidays, setHolidays] = useState<Holiday[]>([]);
+  const [routing, setRouting] = useState<ApplicationContext | null>(null);
+  const [routingError, setRoutingError] = useState('');
+  const [hrApproverId, setHrApproverId] = useState('');
   const [applyOpen, setApplyOpen] = useState(false);
   const [form, setForm] = useState({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
   const [document, setDocument] = useState<File | null>(null);
@@ -84,14 +96,26 @@ export default function Leave() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loadRouting = async () => {
+    setRouting(null); setRoutingError('');
+    try {
+      const result = await api.get<ApplicationContext>('/leave/application-context');
+      setRouting(result);
+      setHrApproverId(result.hrApprovers.length === 1 ? String(result.hrApprovers[0].id) : '');
+    } catch (error) { setRoutingError(errorMessage(error)); }
+  };
+  useEffect(() => { if (applyOpen) void loadRouting(); }, [applyOpen]);
+
   const apply = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!routing?.canApply || !hrApproverId || busy) return;
     setBusy(true);
     try {
       let documentFileId: number | undefined;
       if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
       await api.post('/leave', {
         leaveTypeId: Number(form.leaveTypeId),
+        hrApproverId: Number(hrApproverId),
         startDate: form.startDate,
         endDate: form.endDate,
         reason: form.reason,
@@ -112,7 +136,8 @@ export default function Leave() {
   };
 
   const decide = async (id: number, approve: boolean, stage: 'manager' | 'hr') => {
-    const note = approve ? window.prompt('Optional note:') ?? '' : window.prompt('Reason for rejection:') ?? '';
+    const note = window.prompt(approve ? 'Optional note:' : 'Reason for rejection:');
+    if (note === null) return;
     if (!approve && !note) return;
     try {
       await api.post(`/leave/${id}/decide`, { approve, note: note || undefined, stage });
@@ -154,7 +179,7 @@ export default function Leave() {
           <Tabs
             tabs={[
               { value: 'mine', label: 'My requests' },
-              ...(has('leave.view.team') ? [{ value: 'team', label: 'Team requests' }] : []),
+              ...(has('leave.view.team', 'leave.view.all') ? [{ value: 'team', label: 'Team requests' }] : []),
               ...(has('leave.view.all') ? [{ value: 'all', label: 'All requests' }] : []),
             ]}
             value={tab}
@@ -178,6 +203,9 @@ export default function Leave() {
                   </div>
                   <p className="mt-1 text-xs text-ink-500">{formatDate(leave.startDate)} → {formatDate(leave.endDate)} · applied {formatDateTime(leave.createdAt)}</p>
                   <p className="mt-1 text-sm text-ink-600">{leave.reason}</p>
+                  <p className="mt-1 text-xs text-ink-500">Location: {leave.locationName ?? 'Not assigned'} · Manager: {leave.managerName ?? 'Not assigned'} · HR: {leave.hrName ?? 'Legacy request'}</p>
+                  <p className="mt-1 text-xs text-brand-700">Submitted → Manager {leave.managerActionAt ? 'reviewed' : 'pending'} → HR {leave.hrActionAt ? 'reviewed' : 'pending'} → {titleize(leave.status)}</p>
+                  {leave.documentFileId && <a href={`/api/files/${leave.documentFileId}?download=1`} className="mt-1 block text-xs text-brand-700 underline">Download supporting document</a>}
                   {leave.decisionNote && <p className="mt-1 text-xs text-ink-500">Decision note: {leave.decisionNote}</p>}
                 </div>
                 <div className="flex flex-wrap gap-1.5">
@@ -229,8 +257,24 @@ export default function Leave() {
       </Card>
 
       <Modal open={applyOpen} onClose={() => setApplyOpen(false)} title="Apply for leave" description="Your manager approves first, then HR. Balances are validated on the server."
-        footer={<><button className="btn-secondary" onClick={() => setApplyOpen(false)}>Cancel</button><button className="btn-primary" form="leave-form" type="submit" disabled={busy}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
+        footer={<><button className="btn-secondary" onClick={() => setApplyOpen(false)}>Cancel</button><button className="btn-primary" form="leave-form" type="submit" disabled={busy || !routing?.canApply || !hrApproverId}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
         <form id="leave-form" onSubmit={apply} className="space-y-4">
+          {routingError ? <div role="alert" className="text-sm text-red-600">{routingError}<button type="button" className="btn-secondary ml-2" onClick={() => void loadRouting()}>Retry</button></div> : !routing ? <p role="status">Loading your approval route…</p> : (
+            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50 p-3">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Employee"><input className="input" value={routing.employeeName} readOnly /></Field>
+                <Field label="Assigned location"><input className="input" value={routing.locationName ?? 'Not assigned'} readOnly /></Field>
+                <Field label="Reporting manager"><input className="input" value={routing.manager?.name ?? 'Not assigned'} readOnly /></Field>
+                <Field label="HR approver" required><select className="input" value={hrApproverId} onChange={(event) => setHrApproverId(event.target.value)} required>
+                  <option value="">Select location HR</option>
+                  {routing.hrApprovers.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+                </select></Field>
+              </div>
+              <p className="text-xs text-ink-600">1. Submit request → 2. {routing.manager?.name ?? 'Manager'} reviews → 3. {routing.hrApprovers.find((person) => String(person.id) === hrApproverId)?.name ?? 'Location HR'} gives final approval → 4. Balance and attendance update.</p>
+              <p className="text-xs text-ink-500">Your location and reporting manager are maintained by administration. Pending requests can be cancelled; rejected requests can be submitted again with corrected details.</p>
+              {routing.issues.map((issue) => <p key={issue} role="alert" className="text-xs text-red-700">{issue}</p>)}
+            </div>
+          )}
           <Field label="Leave type" required>
             <select className="input" value={form.leaveTypeId} onChange={(event) => setForm({ ...form, leaveTypeId: event.target.value })} required>
               <option value="">Select leave type</option>

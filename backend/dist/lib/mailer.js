@@ -186,6 +186,198 @@ export function describeSmtpError(error) {
         return 'The mail server refused the message (size or content policy).';
     return 'SMTP delivery failed.';
 }
+export function assertNoHeaderInjection(...values) {
+    for (const v of values) {
+        if (v && /[\r\n]/.test(v)) {
+            throw new Error('Invalid email input: line breaks or header injection characters are not permitted.');
+        }
+    }
+}
+export function isValidEmail(email) {
+    if (!email || typeof email !== 'string')
+        return false;
+    const clean = email.trim();
+    if (clean.length > 254)
+        return false;
+    return /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(clean);
+}
+/**
+ * Robust, production-grade direct email sender.
+ * Transmits through Nodemailer, records delivery status, CC, BCC, and messageId in the database,
+ * and reports true provider acceptance.
+ */
+export async function sendDirectEmail(options) {
+    const toList = Array.isArray(options.to) ? options.to : options.to.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
+    const ccList = Array.isArray(options.cc) ? options.cc : (options.cc ? options.cc.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : []);
+    const bccList = Array.isArray(options.bcc) ? options.bcc : (options.bcc ? options.bcc.split(/[,;]/).map((s) => s.trim()).filter(Boolean) : []);
+    assertNoHeaderInjection(options.subject, ...toList, ...ccList, ...bccList, options.replyTo, options.senderName, options.toName);
+    const cleanTo = toList.map((e) => e.trim()).filter(Boolean);
+    const cleanCc = ccList.map((e) => e.trim()).filter(Boolean);
+    const cleanBcc = bccList.map((e) => e.trim()).filter(Boolean);
+    if (cleanTo.length === 0) {
+        throw new Error('At least one recipient email address is required.');
+    }
+    for (const addr of [...cleanTo, ...cleanCc, ...cleanBcc]) {
+        if (!isValidEmail(addr)) {
+            throw new Error(`Invalid email address: ${addr}`);
+        }
+    }
+    const subject = options.subject.trim();
+    if (!subject)
+        throw new Error('Email subject is required.');
+    let text = options.text?.trim() || '';
+    let html = options.html?.trim() || '';
+    if (options.template) {
+        const rendered = renderEmail(options.template, {
+            ...options.data,
+            name: options.toName || undefined,
+            title: subject,
+            body: text,
+            appName: config.appName,
+            appUrl: config.appUrl,
+        });
+        if (!html)
+            html = rendered.html;
+        if (!text)
+            text = rendered.text;
+    }
+    else if (!html && text) {
+        html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:24px;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+    <tr><td style="padding:20px 24px;border-bottom:1px solid #e2e8f0;background:#1e293b;color:#ffffff;">
+      <h2 style="margin:0;font-size:16px;font-weight:600;letter-spacing:-0.01em;">${config.appName}</h2>
+    </td></tr>
+    <tr><td style="padding:24px;color:#1e293b;font-size:14px;line-height:1.6;white-space:pre-wrap;">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</td></tr>
+    <tr><td style="padding:14px 24px;border-top:1px solid #f1f5f9;background:#f8fafc;color:#64748b;font-size:11px;">
+      Sent via ${config.appName} Secure Workforce Mailer
+    </td></tr>
+  </table>
+</body>
+</html>`;
+    }
+    // Load attachments safely
+    const attachments = [];
+    if (options.attachments && options.attachments.length > 0) {
+        const { FileService } = await import('../services/FileService.js');
+        const fs = await import('node:fs/promises');
+        let totalBytes = 0;
+        for (const item of options.attachments.slice(0, 10)) {
+            if (item.content) {
+                totalBytes += item.content.length;
+                if (totalBytes > MAX_ATTACHMENT_BYTES) {
+                    throw new Error('Total attachments size exceeds 20MB limit.');
+                }
+                attachments.push({
+                    filename: item.filename || item.name || 'attachment',
+                    content: item.content,
+                    contentType: item.contentType || item.mimeType || 'application/octet-stream',
+                });
+            }
+            else if (item.fileId) {
+                const file = await queryOne("SELECT storage_key, original_name, mime_type, size_bytes FROM files WHERE id = ? AND scan_status IN ('clean','validated')", [item.fileId]);
+                if (file) {
+                    totalBytes += Number(file.size_bytes);
+                    if (totalBytes > MAX_ATTACHMENT_BYTES) {
+                        throw new Error('Total attachments size exceeds 20MB limit.');
+                    }
+                    try {
+                        const buf = await fs.readFile(FileService.absolutePath(file.storage_key));
+                        attachments.push({
+                            filename: file.original_name,
+                            content: buf,
+                            contentType: file.mime_type,
+                        });
+                    }
+                    catch (e) {
+                        console.error('[mail] attachment file read error:', e);
+                    }
+                }
+            }
+        }
+    }
+    const primaryRecipient = cleanTo[0];
+    const allToCsv = cleanTo.join(', ');
+    const ccCsv = cleanCc.length > 0 ? cleanCc.join(', ') : null;
+    const bccCsv = cleanBcc.length > 0 ? cleanBcc.join(', ') : null;
+    const deliveryInsert = await execute(`INSERT INTO email_deliveries
+       (sender_id, recipient_email, recipient_name, cc_emails, bcc_emails, subject, template, body_text, body_html, attachments, status, attempts, dedupe_key, related_type, related_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'sending', 1, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE attempts = attempts + 1, status = 'sending'`, [
+        options.senderId ?? null,
+        primaryRecipient.slice(0, 190),
+        options.toName?.slice(0, 150) ?? null,
+        ccCsv,
+        bccCsv,
+        subject.slice(0, 255),
+        options.template || 'direct',
+        text.slice(0, 50_000),
+        html.slice(0, 100_000),
+        options.attachments ? JSON.stringify(options.attachments).slice(0, 10_000) : null,
+        options.dedupeKey ?? null,
+        options.relatedType ?? null,
+        options.relatedId ?? null,
+    ]);
+    const deliveryId = Number(deliveryInsert.insertId);
+    const transport = buildTransporter();
+    if (!transport) {
+        const errorMsg = 'SMTP is not configured on the server. Outgoing emails cannot be sent.';
+        await execute("UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?", [errorMsg, deliveryId]).catch(() => undefined);
+        return {
+            status: 'skipped',
+            messageId: null,
+            accepted: [],
+            rejected: cleanTo,
+            deliveryId,
+            error: errorMsg,
+        };
+    }
+    try {
+        const senderDisplayName = options.senderName ? `${options.senderName} via ${config.appName}` : config.appName;
+        const fromAddress = config.smtp.from.includes('<') ? config.smtp.from : `"${senderDisplayName.replace(/"/g, '')}" <${config.smtp.user || config.smtp.from}>`;
+        const info = await transport.sendMail({
+            from: fromAddress,
+            to: cleanTo,
+            cc: cleanCc.length > 0 ? cleanCc : undefined,
+            bcc: cleanBcc.length > 0 ? cleanBcc : undefined,
+            replyTo: options.replyTo || options.senderEmail || config.smtp.replyTo || undefined,
+            subject,
+            text,
+            html: html || undefined,
+            attachments,
+        });
+        const accepted = Array.isArray(info.accepted) ? info.accepted.map(String) : [];
+        const rejected = Array.isArray(info.rejected) ? info.rejected.map(String) : [];
+        if (accepted.length === 0 && rejected.length > 0) {
+            throw Object.assign(new Error('Recipient address was rejected by the SMTP provider'), { code: 'EENVELOPE' });
+        }
+        const messageId = String(info.messageId || '').slice(0, 190) || null;
+        await execute("UPDATE email_deliveries SET status = 'accepted', sent_at = NOW(3), message_id = ?, last_error = NULL WHERE id = ?", [messageId, deliveryId]);
+        return {
+            status: 'accepted',
+            messageId,
+            accepted: accepted.length > 0 ? accepted : cleanTo,
+            rejected,
+            deliveryId,
+            error: null,
+        };
+    }
+    catch (error) {
+        const message = describeSmtpError(error);
+        await execute("UPDATE email_deliveries SET status = 'failed', last_error = ? WHERE id = ?", [message, deliveryId]).catch(() => undefined);
+        console.error(`[mail] Direct email send failed for ${allToCsv}:`, message);
+        return {
+            status: 'failed',
+            messageId: null,
+            accepted: [],
+            rejected: cleanTo,
+            deliveryId,
+            error: message,
+        };
+    }
+}
 /**
  * Sends one queued email right now (used where the user is waiting for the
  * result, e.g. "Send email"). Returns the real outcome: 'sent' only after the
@@ -199,8 +391,9 @@ export async function deliverNow(id) {
             await deliver(row);
     }
     const after = await queryOne('SELECT status, last_error FROM email_deliveries WHERE id = ?', [id]);
-    const status = (['sent', 'failed', 'skipped'].includes(String(after?.status)) ? after.status : 'queued');
-    return { status, error: status === 'sent' ? null : after?.last_error ?? null };
+    const rawStatus = String(after?.status);
+    const status = (['accepted', 'sent', 'failed', 'skipped'].includes(rawStatus) ? rawStatus : 'queued');
+    return { status, error: (status === 'accepted' || status === 'sent') ? null : after?.last_error ?? null };
 }
 /** Processes due queue rows. Returns counters for the job log. */
 export async function processEmailQueue(limit = 20) {
@@ -276,7 +469,7 @@ export async function sendOtpEmail(input) {
 }
 export async function emailStats() {
     const rows = await query('SELECT status, COUNT(*) AS total FROM email_deliveries GROUP BY status');
-    const stats = { queued: 0, sending: 0, sent: 0, failed: 0, skipped: 0 };
+    const stats = { queued: 0, sending: 0, sent: 0, accepted: 0, failed: 0, skipped: 0, delivered: 0 };
     for (const row of rows)
         stats[row.status] = Number(row.total);
     return stats;
@@ -284,29 +477,37 @@ export async function emailStats() {
 export async function listDeliveries(options) {
     const clauses = ['1 = 1'];
     const params = [];
-    if (options.status && ['queued', 'sending', 'sent', 'failed', 'skipped'].includes(options.status)) {
+    if (options.status && ['queued', 'sending', 'sent', 'accepted', 'failed', 'skipped', 'delivered'].includes(options.status)) {
         clauses.push('status = ?');
         params.push(options.status);
     }
+    if (options.senderId) {
+        clauses.push('sender_id = ?');
+        params.push(options.senderId);
+    }
     if (options.search) {
-        clauses.push('(recipient_email LIKE ? OR subject LIKE ? OR template LIKE ?)');
+        clauses.push('(recipient_email LIKE ? OR subject LIKE ? OR template LIKE ? OR message_id LIKE ?)');
         const term = `%${options.search}%`;
-        params.push(term, term, term);
+        params.push(term, term, term, term);
     }
     const limit = Math.max(1, Math.min(200, options.limit ?? 50));
-    const rows = await query(`SELECT id, recipient_email, recipient_name, subject, template, status, attempts, max_attempts,
-            last_error, next_attempt_at, sent_at, created_at
+    const rows = await query(`SELECT id, sender_id, recipient_email, recipient_name, cc_emails, bcc_emails, subject, template, status, attempts, max_attempts,
+            last_error, message_id, next_attempt_at, sent_at, created_at
        FROM email_deliveries WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT ${limit}`, params);
     return rows.map((row) => ({
         id: Number(row.id),
+        senderId: row.sender_id ? Number(row.sender_id) : null,
         recipient: row.recipient_email,
         recipientName: row.recipient_name,
+        cc: row.cc_emails,
+        bcc: row.bcc_emails,
         subject: row.subject,
         template: row.template,
         status: row.status,
         attempts: Number(row.attempts),
         maxAttempts: Number(row.max_attempts),
         lastError: row.last_error,
+        messageId: row.message_id,
         nextAttemptAt: row.next_attempt_at,
         sentAt: row.sent_at,
         createdAt: row.created_at,

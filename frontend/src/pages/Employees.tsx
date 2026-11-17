@@ -303,7 +303,7 @@ export default function Employees() {
                   <Field label="Reporting manager">
                     <select className="input" value={orgForm.managerId} onChange={(event) => setOrgForm({ ...orgForm, managerId: event.target.value })}>
                       <option value="">None</option>
-                      {structure?.designations && (data?.items ?? []).filter((employee) => employee.id !== detail.id).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
+                      {structure?.designations && (data?.items ?? []).filter((employee) => employee.id !== detail.id && employee.fullName.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
                     </select>
                   </Field>
                 </div>
@@ -411,7 +411,7 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
             <Field label="Reporting manager">
               <select className="input" value={form.managerId} onChange={(event) => setForm({ ...form, managerId: event.target.value })}>
                 <option value="">Select manager</option>
-                {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
+                {employees.filter((e) => e.fullName.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
               </select>
             </Field>
             <Field label="Location">
