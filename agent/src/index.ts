@@ -70,17 +70,39 @@ interface AgentState {
 }
 
 const APP_CATEGORIES: Record<string, string> = {
-  chrome: 'Browser', brave: 'Browser', msedge: 'Browser', firefox: 'Browser',
+  chrome: 'Browser', brave: 'Browser', msedge: 'Browser', firefox: 'Browser', opera: 'Browser',
   code: 'Development', antigravity: 'Development', studio64: 'Development', idea64: 'Development', postman: 'Development',
-  excel: 'Office Productivity', winword: 'Office Productivity', powerpnt: 'Office Productivity', teams: 'Communication',
-  figma: 'Design', notion: 'Documentation', slack: 'Communication',
+  excel: 'Office Productivity', winword: 'Office Productivity', powerpnt: 'Office Productivity', outlook: 'Communication', onenote: 'Office Productivity',
+  teams: 'Communication', whatsapp: 'Communication', slack: 'Communication', zoom: 'Communication', telegram: 'Communication',
+  figma: 'Design', notion: 'Documentation',
+  tally: 'Data Analytics', pos: 'Business Operations', billing: 'Business Operations', quickbooks: 'Data Analytics',
+  notepad: 'Office Productivity', notepadplusplus: 'Office Productivity', calc: 'Office Productivity', explorer: 'Administration',
 };
 
 const APPLICATION_NAMES: Record<string, string> = {
-  chrome: 'Google Chrome', brave: 'Brave Browser', msedge: 'Microsoft Edge', firefox: 'Firefox',
-  code: 'Visual Studio Code', antigravity: 'Antigravity', studio64: 'Android Studio', idea64: 'IntelliJ IDEA',
-  postman: 'Postman', excel: 'Microsoft Excel', winword: 'Microsoft Word', powerpnt: 'PowerPoint', teams: 'Microsoft Teams',
+  chrome: 'Google Chrome', brave: 'Brave Browser', msedge: 'Microsoft Edge', firefox: 'Firefox', opera: 'Opera',
+  code: 'Visual Studio Code', antigravity: 'Antigravity IDE', studio64: 'Android Studio', idea64: 'IntelliJ IDEA',
+  postman: 'Postman', excel: 'Microsoft Excel', winword: 'Microsoft Word', powerpnt: 'Microsoft PowerPoint', outlook: 'Microsoft Outlook', onenote: 'Microsoft OneNote',
+  teams: 'Microsoft Teams', whatsapp: 'WhatsApp Desktop', slack: 'Slack', zoom: 'Zoom Meetings', telegram: 'Telegram',
+  figma: 'Figma', notion: 'Notion',
+  tally: 'Tally Accounting', pos: 'Retail POS & Billing Software', billing: 'Store Billing System',
+  notepad: 'Notepad', calc: 'Windows Calculator', explorer: 'File Explorer',
 };
+
+function resolveAppInfo(processName: string, windowTitle = ''): { appName: string; appCategory: string } {
+  const cleanProc = processName.toLowerCase().replace(/\.exe$/i, '');
+  if (windowTitle && (windowTitle.includes('BSC') || windowTitle.includes('HRMS') || windowTitle.includes('emptrack'))) {
+    return { appName: 'BSC HRMS & Web Portal', appCategory: 'Business Operations' };
+  }
+  if (APPLICATION_NAMES[cleanProc]) {
+    return { appName: APPLICATION_NAMES[cleanProc], appCategory: APP_CATEGORIES[cleanProc] ?? 'Office Productivity' };
+  }
+  for (const [key, name] of Object.entries(APPLICATION_NAMES)) {
+    if (cleanProc.includes(key)) return { appName: name, appCategory: APP_CATEGORIES[key] ?? 'Office Productivity' };
+  }
+  const formatted = cleanProc.charAt(0).toUpperCase() + cleanProc.slice(1);
+  return { appName: formatted, appCategory: 'Office Productivity' };
+}
 
 function log(message: string): void {
   console.log(`[agent ${new Date().toLocaleTimeString()}] ${message}`);
@@ -156,25 +178,66 @@ async function registerDevice(cookie: string): Promise<{ deviceId: number; token
   return response.json() as Promise<{ deviceId: number; token: string }>;
 }
 
-async function foregroundProcess(): Promise<{ name: string; pid: number } | null> {
+interface ProcessSnapshot {
+  procName: string;
+  appName: string;
+  appCategory: string;
+  pid: number;
+  idleSeconds: number;
+  windowTitle: string;
+}
+
+async function foregroundProcess(): Promise<ProcessSnapshot | null> {
   if (process.platform !== 'win32') return null;
   const script = `
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
-public class Foreground {
+public class Win32 {
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+  [StructLayout(LayoutKind.Sequential)]
+  public struct LASTINPUTINFO {
+    public uint cbSize;
+    public uint dwTime;
+  }
 }
 "@
-$h = [Foreground]::GetForegroundWindow()
-$pid2 = 0
-[void][Foreground]::GetWindowThreadProcessId($h, [ref]$pid2)
-if ($pid2 -gt 0) { $p = Get-Process -Id $pid2 -ErrorAction SilentlyContinue; if ($p) { "$($p.ProcessName)|$pid2" } }`;
+$h = [Win32]::GetForegroundWindow()
+$targetPid = 0
+[void][Win32]::GetWindowThreadProcessId($h, [ref]$targetPid)
+$lii = New-Object Win32+LASTINPUTINFO
+$lii.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($lii)
+[void][Win32]::GetLastInputInfo([ref]$lii)
+$idleMs = [Environment]::TickCount - $lii.dwTime
+$procName = ""
+$title = ""
+if ($targetPid -gt 0) {
+  $p = Get-Process -Id $targetPid -ErrorAction SilentlyContinue
+  if ($p) {
+    $procName = $p.ProcessName
+    $title = $p.MainWindowTitle
+  }
+}
+"$procName|$targetPid|$idleMs|$title"`;
   try {
     const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 8000 });
-    const [name, pid] = stdout.trim().split('|');
-    return name ? { name: name.toLowerCase(), pid: Number(pid) || 0 } : null;
+    const parts = stdout.trim().split('|');
+    const proc = (parts[0] ?? '').trim().toLowerCase();
+    const pid = Number(parts[1]) || 0;
+    const idleMs = Math.max(0, Number(parts[2]) || 0);
+    const title = parts.slice(3).join('|').trim();
+    if (!proc) return null;
+    const { appName, appCategory } = resolveAppInfo(proc, title);
+    return {
+      procName: proc,
+      appName,
+      appCategory,
+      pid,
+      idleSeconds: Math.floor(idleMs / 1000),
+      windowTitle: title,
+    };
   } catch {
     return null;
   }
@@ -243,14 +306,14 @@ async function main(): Promise<void> {
   const queue = await readEncrypted<QueueEvent[]>(queueFile, token, []);
   if (queue.length) log(`${queue.length} queued event(s) from a previous offline session will be uploaded.`);
 
-  let activeProcess: string | null = null;
-  let activePid = 0;
+  let activeSnapshot: ProcessSnapshot | null = null;
   let activeSince = Date.now();
   let stopped = false;
   let ticks = 0;
   let syncFailures = 0;
   let lastNetworkErrorAt = 0;
   const seenErrors = new Set<number>();
+  const idleThresholdSeconds = (policy.retentionDays ? 5 : 5) * 60;
 
   const flushQueue = async (): Promise<void> => {
     if (queue.length === 0) return;
@@ -294,30 +357,32 @@ async function main(): Promise<void> {
     }
   };
 
-  const recordTransition = (next: string | null, pid = 0): void => {
+  const recordTransition = (next: ProcessSnapshot | null): void => {
     const now = Date.now();
     const seconds = Math.round((now - activeSince) / 1000);
-    if (activeProcess && seconds >= 5) {
-      if (!APPLICATION_NAMES[activeProcess]) {
-        // Unapproved/unknown applications are never recorded as named activity.
-      } else if (policy.blockedApps.some((app) => app.toLowerCase().includes(activeProcess!))) {
-        log(`Excluded application detected; activity not recorded.`);
-      } else if (policy.allowedApps.length === 0 || policy.allowedApps.includes(APPLICATION_NAMES[activeProcess])) {
+    if (activeSnapshot && seconds >= 3) {
+      const isBlocked = policy.blockedApps.some((app) =>
+        activeSnapshot!.procName.includes(app.toLowerCase()) ||
+        activeSnapshot!.appName.toLowerCase().includes(app.toLowerCase()),
+      );
+      if (isBlocked) {
+        log(`Excluded application ${activeSnapshot.appName} detected; activity not recorded.`);
+      } else {
+        const isIdle = activeSnapshot.idleSeconds >= idleThresholdSeconds;
         queue.push({
-          type: 'app',
+          type: isIdle ? 'work' : 'app',
           clientEventId: crypto.randomUUID(),
-          appName: APPLICATION_NAMES[activeProcess],
-          appCategory: APP_CATEGORIES[activeProcess] ?? 'Other',
-          processName: `${activeProcess}.exe`,
-          processId: activePid || undefined,
+          appName: isIdle ? 'Idle Time' : activeSnapshot.appName,
+          appCategory: isIdle ? 'Administration' : activeSnapshot.appCategory,
+          processName: `${activeSnapshot.procName}.exe`,
+          processId: activeSnapshot.pid || undefined,
           startedAt: new Date(activeSince).toISOString(),
           endedAt: new Date(now).toISOString(),
           activeSeconds: seconds,
         });
       }
     }
-    activeProcess = next;
-    activePid = pid;
+    activeSnapshot = next;
     activeSince = now;
   };
 
@@ -331,9 +396,26 @@ async function main(): Promise<void> {
         await shutdown(false);
         return;
       }
-      await api('/activity/agent/heartbeat', { method: 'POST', body: '{}' }, { deviceToken: token });
-      const next = await foregroundProcess();
-      if ((next?.name ?? null) !== activeProcess) recordTransition(next?.name ?? null, next?.pid ?? 0);
+      const fg = await foregroundProcess();
+      const isIdle = fg ? fg.idleSeconds >= idleThresholdSeconds : false;
+      const currentApp = isIdle ? 'Idle / Away' : (fg?.appName ?? 'Desktop');
+      const currentCategory = isIdle ? 'Administration' : (fg?.appCategory ?? 'Other');
+
+      await api('/activity/agent/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({
+          currentApp,
+          currentCategory,
+          isIdle,
+          idleSeconds: fg?.idleSeconds ?? 0,
+        }),
+      }, { deviceToken: token });
+
+      const procChanged = (fg?.procName ?? null) !== (activeSnapshot?.procName ?? null);
+      if (procChanged) {
+        recordTransition(fg);
+      }
+
       if (ticks++ % 10 === 0) {
         for (const error of await recentWindowsErrors()) {
           if (!error.recordId || seenErrors.has(error.recordId)) continue;

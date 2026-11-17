@@ -55,6 +55,11 @@ const CONNECTION_EVENTS = [
   'call:peer_left',
   'call:signal',
   'nudge:received',
+  'activity:update',
+  'activity:heartbeat',
+  'activity:session',
+  'activity:team',
+  'activity:device',
 ];
 
 /** Maximum automatic reconnect attempts before the indicator asks for a retry. */
@@ -87,8 +92,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     const socketUrl = import.meta.env.VITE_WEBSOCKET_URL || undefined;
     const socket = io(socketUrl, {
       withCredentials: true,
-      // WebSocket first, polling as an automatic fallback behind proxies.
-      transports: ['websocket', 'polling'],
+      // Polling first ensures handshake succeeds behind all reverse proxies, then upgrades cleanly to WebSocket
+      transports: ['polling', 'websocket'],
       tryAllTransports: true,
       upgrade: true,
       reconnection: true,

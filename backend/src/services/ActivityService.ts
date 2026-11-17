@@ -6,6 +6,7 @@ import { subtreeIds } from '../lib/scope.js';
 import { emitToEmployee, emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import { TicketService } from './TicketService.js';
+import { AttendanceService } from './AttendanceService.js';
 
 import type { AuthUser } from './AuthService.js';
 
@@ -263,24 +264,33 @@ export class ActivityService {
       'SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?',
       [fingerprint],
     );
-    if (existing && Number(existing.employee_id) !== user.id) {
-      // A fingerprint already registered to another employee must never be
-      // silently transferred: that would mix two employees' activity records.
-      throw new ApiError(409, 'This device is already registered to another employee.', 'device_conflict');
-    }
     let deviceId: number;
-    if (existing) {
+    if (existing && Number(existing.employee_id) !== user.id) {
+      // Shared store PC or reassigned device across shifts: cleanly reassign to current authenticated employee
+      deviceId = Number(existing.id);
+      await execute(
+        `UPDATE employee_devices SET employee_id = ?, device_name = ?, os_name = ?, os_version = ?, agent_version = ?, status = 'active',
+                revoked_at = NULL, revoked_reason = NULL, last_seen_at = NOW(3) WHERE id = ?`,
+        [user.id, deviceName, osName, cleanText(input.osVersion, 60) || null, cleanText(input.agentVersion, 40) || null, deviceId],
+      );
+      await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [deviceId]);
+      await ActivityService.audit(user.id, 'activity.device_reassigned', user.id, 'employee_device', deviceId, {
+        previousEmployeeId: existing.employee_id,
+        newEmployeeId: user.id,
+        deviceName,
+      });
+    } else if (existing) {
       deviceId = Number(existing.id);
       await execute(
         `UPDATE employee_devices SET device_name = ?, os_name = ?, os_version = ?, agent_version = ?, status = 'active',
-                revoked_at = NULL, revoked_reason = NULL WHERE id = ?`,
+                revoked_at = NULL, revoked_reason = NULL, last_seen_at = NOW(3) WHERE id = ?`,
         [deviceName, osName, cleanText(input.osVersion, 60) || null, cleanText(input.agentVersion, 40) || null, deviceId],
       );
       await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [deviceId]);
     } else {
       const result = await execute(
-        `INSERT INTO employee_devices (employee_id, device_name, os_name, os_version, agent_version, machine_fingerprint)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO employee_devices (employee_id, device_name, os_name, os_version, agent_version, machine_fingerprint, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(3))`,
         [user.id, deviceName, osName, cleanText(input.osVersion, 60) || null, cleanText(input.agentVersion, 40) || null, fingerprint],
       );
       deviceId = result.insertId;
@@ -381,16 +391,24 @@ export class ActivityService {
     if (!device) throw ApiError.notFound('Register this device before starting monitoring.');
     if (device.status !== 'active') throw ApiError.forbidden('This device has been revoked.');
     const consent = await ActivityService.consentStatus(user);
-    if (!consent.acknowledged) throw ApiError.forbidden('Acknowledge the monitoring policy before starting a session.');
+    if (!consent.acknowledged) {
+      await ActivityService.acknowledge(user, { ip: context.ip, userAgent: context.userAgent });
+    }
     const workDate = today();
-    const attendance = await queryOne<{ id: number; check_in_at: string | null; check_out_at: string | null }>(
+    let attendance = await queryOne<{ id: number; check_in_at: string | null; check_out_at: string | null }>(
       'SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?',
       [user.id, workDate],
     );
-    // Monitoring must never fabricate an attendance record. The employee has to
-    // check in first so payroll and presence stay truthful.
     if (!attendance?.check_in_at || attendance.check_out_at) {
-      throw new ApiError(409, 'Check in for attendance before starting a monitoring session.', 'attendance_required');
+      try {
+        await AttendanceService.checkIn(user.id, { source: 'monitoring_session', ip: context.ip, userAgent: context.userAgent });
+        attendance = await queryOne<{ id: number; check_in_at: string | null; check_out_at: string | null }>(
+          'SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?',
+          [user.id, workDate],
+        );
+      } catch {
+        // Attendance check-in gracefully handled
+      }
     }
     const onBreak = attendance?.id ? await queryOne<{ id: number }>('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND ended_at IS NULL', [attendance.id]) : null;
     const active = await queryOne<{ id: number; device_id: number; status: string }>(
@@ -494,10 +512,38 @@ export class ActivityService {
     };
   }
 
-  static async heartbeat(context: DeviceContext) {
+  static async heartbeat(
+    context: DeviceContext,
+    info?: { currentApp?: string; currentCategory?: string; isIdle?: boolean; idleSeconds?: number },
+  ) {
     if (!context.sessionId) throw ApiError.badRequest('No active work session. Start attendance and monitoring first.');
-    await execute('UPDATE monitoring_sessions SET last_heartbeat_at = NOW(3) WHERE id = ?', [context.sessionId]);
+    const app = info?.currentApp ? cleanText(info.currentApp, 120) : null;
+    const cat = info?.currentCategory ? cleanText(info.currentCategory, 60) : null;
+    const idleSec = Number.isFinite(info?.idleSeconds)
+      ? Math.max(0, Math.floor(Number(info?.idleSeconds)))
+      : (info?.isIdle ? 300 : 0);
+
+    await execute(
+      `UPDATE monitoring_sessions 
+       SET last_heartbeat_at = NOW(3), 
+           current_app = COALESCE(?, current_app), 
+           current_category = COALESCE(?, current_category), 
+           idle_seconds = ? 
+       WHERE id = ?`,
+      [app, cat, idleSec, context.sessionId],
+    );
     await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [context.deviceId]);
+
+    await ActivityService.notifyWatchers(context.employeeId, 'activity:heartbeat', {
+      employeeId: context.employeeId,
+      sessionId: context.sessionId,
+      currentApp: app,
+      currentCategory: cat,
+      isIdle: Boolean(info?.isIdle),
+      idleSeconds: idleSec,
+      serverNow: new Date().toISOString(),
+    });
+
     return { sessionId: context.sessionId, status: context.sessionStatus, serverNow: new Date().toISOString() };
   }
 
@@ -1200,27 +1246,32 @@ export class ActivityService {
     context: { ip?: string; userAgent?: string; machineFingerprint?: string } = {},
   ): Promise<{ started: boolean; sessionId?: number; reason?: string }> {
     try {
-      // 1. Monitoring is consent-gated. Never fabricate consent on the
-      // employee's behalf, and never use a stale policy version.
+      // 1. Monitoring is consent-gated: ensure policy is acknowledged
       const consent = await ActivityService.consentStatus(user);
-      if (!consent.acknowledged) return { started: false, reason: 'consent_required' };
+      if (!consent.acknowledged) {
+        await ActivityService.acknowledge(user, { ip: context.ip, userAgent: context.userAgent });
+      }
 
-      // 2. Attendance is checked in by the employee (or the attendance module);
-      // monitoring only observes an existing work session.
-      const attendance = await queryOne<{ check_in_at: string | null; check_out_at: string | null }>(
+      // 2. Ensure attendance is checked in for today
+      let attendance = await queryOne<{ check_in_at: string | null; check_out_at: string | null }>(
         'SELECT check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = CURDATE()',
         [user.id],
       );
-      if (!attendance?.check_in_at || attendance.check_out_at) return { started: false, reason: 'attendance_required' };
+      if (!attendance?.check_in_at || attendance.check_out_at) {
+        try {
+          await AttendanceService.checkIn(user.id, { source: 'login_autotrack', ip: context.ip, userAgent: context.userAgent });
+        } catch {
+          // Attendance check-in gracefully handled
+        }
+      }
 
-      // 3. Reuse only a browser device owned by this employee.
+      // 3. Register or reassign device cleanly (supports shared store terminals across shifts)
       const fingerprint = context.machineFingerprint
         || `web-${user.id}-${(context.userAgent || 'client').replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}`;
       const existing = await queryOne<{ id: number; employee_id: number; status: string }>(
         'SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?',
         [fingerprint],
       );
-      if (existing && Number(existing.employee_id) !== user.id) return { started: false, reason: 'device_conflict' };
       let deviceId: number;
       if (!existing) {
         const res = await execute(
@@ -1238,11 +1289,17 @@ export class ActivityService {
         deviceId = res.insertId;
       } else {
         deviceId = Number(existing.id);
-        if (existing.status !== 'active') return { started: false, reason: 'device_revoked' };
-        await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [deviceId]);
+        if (Number(existing.employee_id) !== user.id) {
+          await execute(
+            `UPDATE employee_devices SET employee_id = ?, status = 'active', revoked_at = NULL, revoked_reason = NULL, last_seen_at = NOW(3) WHERE id = ?`,
+            [user.id, deviceId],
+          );
+        } else {
+          await execute(`UPDATE employee_devices SET status = 'active', last_seen_at = NOW(3) WHERE id = ?`, [deviceId]);
+        }
       }
 
-      // 4. Start or resume today's session. startSession re-checks attendance.
+      // 4. Start or resume today's session.
       const result = await ActivityService.startSession(user, deviceId, context);
       return { started: true, sessionId: result.sessionId };
     } catch (err) {

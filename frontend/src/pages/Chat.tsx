@@ -980,41 +980,47 @@ export default function Chat() {
   return (
     <div className="flex h-[calc(100vh-8.5rem)] min-h-[520px] overflow-hidden rounded-xl border border-ink-200 bg-white shadow-sm">
       <aside className={cx('flex w-full flex-col border-r border-ink-200 sm:w-80', mobileOpen && 'hidden sm:flex')}>
-        <div className="flex items-center justify-between gap-2 border-b border-ink-200 px-3 py-2.5">
+        {/* Header matching Image 1 */}
+        <div className="flex items-center justify-between gap-2 border-b border-ink-200 px-3.5 py-3">
           <div className="flex items-center gap-2">
-            <h1 className="text-sm font-semibold text-ink-900">Messages</h1>
+            <h1 className="text-base font-semibold text-ink-900">Messages</h1>
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" title="Online" />
           </div>
-          <div className="flex gap-1">
+          <div className="flex items-center gap-1 text-ink-500">
             <button
               type="button"
-              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100"
-              title="New chat"
+              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+              title="New conversation"
               onClick={() => setContactsOpen(true)}
             >
-              <Icon name="plus" size={16} />
+              <Icon name="plus" size={17} />
             </button>
             <button
               type="button"
-              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100"
-              title="New group"
+              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+              title="New group chat"
               onClick={() => setGroupOpen(true)}
             >
-              <Icon name="users" size={16} />
+              <Icon name="user" size={17} />
             </button>
           </div>
         </div>
-        <div className="border-b border-ink-100 p-2">
+
+        {/* Search input matching Image 1 */}
+        <div className="border-b border-ink-100 p-2.5">
           <div className="relative">
-            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
+            <Icon name="search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
             <input
-              className="input py-1.5 pl-8 text-sm"
+              className="w-full rounded-lg border border-blue-400/80 bg-white py-1.5 pl-9 pr-3 text-sm text-ink-900 placeholder-ink-400 focus:border-blue-600 focus:outline-none focus:ring-1 focus:ring-blue-600"
               placeholder="Search conversations"
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
             />
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto">
+
+        {/* Conversations List matching Image 1 */}
+        <div className="flex-1 overflow-y-auto divide-y divide-ink-50">
           {loadingConversations ? (
             <div className="p-3">
               <Skeleton lines={6} />
@@ -1022,89 +1028,110 @@ export default function Chat() {
           ) : filteredConversations.length === 0 ? (
             <EmptyState compact title="No conversations" description="Start a direct chat or create a group." />
           ) : (
-            filteredConversations.map((conversation) => (
-              <div
-                key={conversation.id}
-                className={cx(
-                  'group relative flex w-full items-center justify-between border-b border-ink-100 transition-colors hover:bg-ink-50',
-                  activeId === conversation.id && 'bg-brand-50 hover:bg-brand-50',
-                )}
-              >
-                <button
-                  type="button"
+            filteredConversations.map((conversation) => {
+              const isSelected = activeId === conversation.id;
+              const isOnline = conversation.otherEmployeeId ? onlineIds.includes(conversation.otherEmployeeId) : false;
+              const initials = conversation.name
+                .split(' ')
+                .map((n) => n[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase();
+
+              return (
+                <div
+                  key={conversation.id}
+                  className={cx(
+                    'group relative flex w-full items-center justify-between transition-colors hover:bg-blue-50/50 cursor-pointer',
+                    isSelected ? 'bg-[#f0f4f9]' : 'bg-white',
+                  )}
                   onClick={() => openConversation(conversation.id)}
-                  className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left"
                 >
-                  <Avatar
-                    name={conversation.name}
-                    src={conversation.otherPhoto}
-                    size={38}
-                    online={
-                      conversation.otherEmployeeId
-                        ? onlineIds.includes(conversation.otherEmployeeId)
-                        : undefined
-                    }
-                  />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-medium text-ink-900">{conversation.name}</p>
-                      {conversation.lastMessageAt && (
-                        <span className="shrink-0 text-[10px] text-ink-400">
-                          {formatTime(conversation.lastMessageAt)}
-                        </span>
+                  <div className="flex min-w-0 flex-1 items-start gap-3 px-3.5 py-3 text-left">
+                    {/* Circle avatar with initials and status dot matching Image 1 */}
+                    <div className="relative shrink-0">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe] text-[#1e40af] text-sm font-semibold uppercase">
+                        {initials || 'C'}
+                      </div>
+                      {conversation.type === 'direct' && (
+                        <span
+                          className={cx(
+                            'absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white',
+                            isOnline ? 'bg-emerald-500' : 'bg-slate-300',
+                          )}
+                          title={isOnline ? 'Online' : 'Offline'}
+                        />
                       )}
                     </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-xs text-ink-500">
-                        {conversation.lastSender ? `${conversation.lastSender.split(' ')[0]}: ` : ''}
-                        {conversation.lastMessage ?? 'No messages yet'}
-                      </p>
-                      {conversation.unread > 0 && (
-                        <span className="shrink-0 rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                          {conversation.unread}
-                        </span>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={cx('truncate text-sm font-semibold', isSelected ? 'text-slate-900' : 'text-slate-800')}>
+                          {conversation.name}
+                        </p>
+                        {conversation.lastMessageAt && (
+                          <span className="shrink-0 text-[11px] text-slate-400 font-normal">
+                            {formatTime(conversation.lastMessageAt).toLowerCase()}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 mt-0.5">
+                        <p className="truncate text-xs text-slate-500">
+                          {conversation.lastSender ? `${conversation.lastSender.split(' ')[0]}: ` : ''}
+                          {conversation.lastMessage ?? 'No messages yet'}
+                        </p>
+                        {conversation.unread > 0 && (
+                          <span className="shrink-0 rounded-full bg-blue-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                            {conversation.unread}
+                          </span>
+                        )}
+                      </div>
+
+                      {conversation.type === 'group' && (
+                        <div className="mt-1">
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-600 uppercase">
+                            {conversation.memberCount || 3} MEMBERS
+                          </span>
+                        </div>
                       )}
-                    </div>
-                    <div className="mt-0.5 flex gap-1">
-                      {conversation.type === 'channel' && <Badge tone="brand">Channel</Badge>}
-                      {conversation.type === 'group' && <Badge tone="neutral">{conversation.memberCount} members</Badge>}
-                      {conversation.isAnnouncement && <Badge tone="warning">Announcements</Badge>}
-                      {conversation.muted && <Badge tone="neutral">Muted</Badge>}
                     </div>
                   </div>
-                </button>
-                <div className="flex items-center gap-0.5 pr-2 shrink-0">
-                  <button
-                    type="button"
-                    title="Change name"
-                    aria-label="Change name"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRenameTarget(conversation);
-                      setRenameInput(conversation.name);
-                      setRenameDescription(conversation.description ?? '');
-                      setRenameOpen(true);
-                    }}
-                    className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600 transition-colors"
-                  >
-                    <Icon name="edit" size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    title="Delete chat"
-                    aria-label="Delete chat"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeleteTarget(conversation);
-                      setDeleteOpen(true);
-                    }}
-                    className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                  >
-                    <Icon name="trash" size={14} />
-                  </button>
+
+                  {/* Actions on hover: rename / delete */}
+                  <div className="hidden group-hover:flex items-center gap-1 pr-2.5 shrink-0">
+                    <button
+                      type="button"
+                      title="Change name"
+                      aria-label="Change name"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenameTarget(conversation);
+                        setRenameInput(conversation.name);
+                        setRenameDescription(conversation.description ?? '');
+                        setRenameOpen(true);
+                      }}
+                      className="rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-blue-600 transition-colors"
+                    >
+                      <Icon name="edit" size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      title="Delete chat"
+                      aria-label="Delete chat"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteTarget(conversation);
+                        setDeleteOpen(true);
+                      }}
+                      className="rounded-lg p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </aside>
@@ -1185,6 +1212,31 @@ export default function Chat() {
               <div className="flex items-center gap-1.5">
                 {detail?.type === 'direct' && detail.otherEmployee && (
                   <>
+                    {detail.otherEmployee.phone && (
+                      <>
+                        <span className="hidden md:inline-block text-xs font-mono font-medium text-slate-600 bg-slate-100 px-2 py-1 rounded-md">
+                          {detail.otherEmployee.phone}
+                        </span>
+                        <a
+                          href={`https://wa.me/${detail.otherEmployee.phone.replace(/\D/g, '')}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="rounded-lg p-1.5 text-emerald-600 hover:bg-emerald-50 transition-colors"
+                          title={`WhatsApp ${detail.otherEmployee.name} (${detail.otherEmployee.phone})`}
+                        >
+                          <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                            <path d="M12.031 6.172c-3.181 0-5.767 2.586-5.768 5.766-.001 1.298.38 2.27 1.019 3.287l-.582 2.128 2.182-.573c.978.58 1.911.928 3.145.929 3.178 0 5.767-2.587 5.768-5.766.001-3.187-2.575-5.77-5.764-5.771zm3.392 8.244c-.144.405-.837.774-1.17.824-.312.045-.698.057-2.071-.475-1.428-.553-2.346-2.001-2.417-2.096-.07-.095-.579-.77-.579-1.468 0-.698.366-1.042.497-1.185.131-.143.286-.179.382-.179s.191.006.274.012c.088.006.203-.033.318.243.12.287.411 1.004.448 1.077.036.073.06.157.012.253s-.072.156-.144.239c-.072.083-.152.185-.217.249-.072.072-.148.15-.064.294.084.144.373.616.8 1 0 .548.497.892.68.995.183.103.29.091.399-.036.109-.126.467-.544.591-.73.124-.186.248-.155.418-.092.17.063 1.08.51 1.266.603.186.093.31.139.356.216.046.077.046.452-.098.857z" />
+                          </svg>
+                        </a>
+                        <a
+                          href={`tel:${detail.otherEmployee.phone}`}
+                          className="rounded-lg p-1.5 text-blue-600 hover:bg-blue-50 transition-colors"
+                          title={`Call phone: ${detail.otherEmployee.phone}`}
+                        >
+                          <Icon name="phone" size={16} />
+                        </a>
+                      </>
+                    )}
                     <button
                       type="button"
                       className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100"

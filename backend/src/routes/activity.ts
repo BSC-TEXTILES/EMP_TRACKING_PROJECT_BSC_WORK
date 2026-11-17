@@ -28,7 +28,7 @@ activityRouter.post(
   rateLimit({ windowMs: 60000, max: 120, keyPrefix: 'agent-heartbeat' }),
   requireDevice,
   asyncHandler(async (req: AgentRequest, res) => {
-    res.json(await ActivityService.heartbeat(req.device!));
+    res.json(await ActivityService.heartbeat(req.device!, req.body));
   }),
 );
 

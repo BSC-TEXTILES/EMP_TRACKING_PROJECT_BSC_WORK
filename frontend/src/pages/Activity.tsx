@@ -6,7 +6,7 @@ import { useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, ProgressBar, SectionHeader, Skeleton, StatCard, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { formatDate, formatDateTime, titleize } from '../lib/format';
+import { cx, formatDate, formatDateTime, titleize } from '../lib/format';
 
 interface Policy {
   id: number;
@@ -84,8 +84,13 @@ interface TeamRow {
   photoUrl: string | null;
   department: string | null;
   designation: string | null;
+  location?: string | null;
   active: boolean;
   sessionStartedAt: string | null;
+  lastHeartbeatAt?: string | null;
+  currentApp?: string | null;
+  currentCategory?: string | null;
+  idleSeconds?: number;
   activeMinutes: number;
   tasksCompleted: number;
   dailyStatus: string | null;
@@ -203,7 +208,11 @@ export default function Activity() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, date, month]);
 
+  const [locationFilter, setLocationFilter] = useState<string>('ALL');
+  const [liveSearch, setLiveSearch] = useState('');
+
   useSocketEvent('activity:update', () => { if (tab === 'today' || tab === 'team' || tab === 'admin') void load(); });
+  useSocketEvent('activity:heartbeat', () => { if (tab === 'today' || tab === 'team' || tab === 'admin') void load(); });
   useSocketEvent('activity:session', () => void load());
   useSocketEvent('activity:error', () => void load());
 
@@ -666,16 +675,160 @@ export default function Activity() {
               <StatCard label="Tasks completed" value={team.totals.tasksCompleted ?? 0} tone="neutral" />
               <StatCard label="Summaries to review" value={team.totals.pendingReviews ?? 0} tone="warning" />
             </div>
+
+            {/* Location Filters & Live Search */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-ink-200">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-semibold text-ink-500 mr-1">Store / Location:</span>
+                {[
+                  { key: 'ALL', label: 'All Stores' },
+                  { key: 'DAV', label: 'Davanagere (DAV)' },
+                  { key: 'SHI', label: 'Shivamogga (SHI)' },
+                  { key: 'BEL', label: 'Belagavi (BEL)' },
+                  { key: 'HQ', label: 'Head Office (HQ)' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setLocationFilter(item.key)}
+                    className={cx(
+                      'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
+                      locationFilter === item.key
+                        ? 'bg-brand-600 text-white shadow-sm'
+                        : 'bg-ink-100 text-ink-700 hover:bg-ink-200',
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <div className="relative min-w-[200px]">
+                <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
+                <input
+                  type="text"
+                  placeholder="Filter by name, app or role..."
+                  value={liveSearch}
+                  onChange={(e) => setLiveSearch(e.target.value)}
+                  className="input py-1 pl-8 text-xs w-full"
+                />
+              </div>
+            </div>
+
+            {/* Live Employee Activity Grid */}
+            <div>
+              <SectionHeader
+                title="Live Employee Activity"
+                description="Real-time foreground applications, idle detection, and live session updates."
+              />
+              {(() => {
+                const filtered = (team.employees ?? []).filter((emp) => {
+                  if (locationFilter !== 'ALL') {
+                    const loc = (emp.location ?? '').toLowerCase();
+                    if (locationFilter === 'DAV' && !loc.includes('davanagere') && !loc.includes('dav')) return false;
+                    if (locationFilter === 'SHI' && !loc.includes('shivamogga') && !loc.includes('shi')) return false;
+                    if (locationFilter === 'BEL' && !loc.includes('belagavi') && !loc.includes('bel')) return false;
+                    if (locationFilter === 'HQ' && !loc.includes('head') && !loc.includes('main') && !loc.includes('hq')) return false;
+                  }
+                  if (liveSearch.trim()) {
+                    const q = liveSearch.toLowerCase();
+                    return (
+                      emp.name.toLowerCase().includes(q) ||
+                      (emp.designation ?? '').toLowerCase().includes(q) ||
+                      (emp.currentApp ?? '').toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <Card className="card-pad mt-3">
+                      <EmptyState compact title="No employees match filter" description="Try selecting 'All Stores' or clearing search." />
+                    </Card>
+                  );
+                }
+
+                return (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {filtered.map((row) => (
+                      <Card key={row.id} className="card-pad flex flex-col justify-between hover:shadow-md transition-shadow">
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <Avatar name={row.name} src={row.photoUrl} size={36} />
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-ink-900">{row.name}</p>
+                                <p className="truncate text-xs text-ink-500">{row.designation ?? 'Team Member'}</p>
+                              </div>
+                            </div>
+                            <span
+                              className={cx(
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase shrink-0',
+                                row.active ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500',
+                              )}
+                            >
+                              <span className={cx('h-1.5 w-1.5 rounded-full', row.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400')} />
+                              {row.active ? 'Active' : 'Offline'}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 rounded-lg bg-ink-50 p-2.5 space-y-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-ink-500">Current App:</span>
+                              <span className="font-medium text-brand-700 bg-white px-2 py-0.5 rounded border border-ink-200 truncate max-w-[170px]">
+                                {row.currentApp || (row.active ? 'Active Session' : 'None')}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-ink-500">Active Duration:</span>
+                              <span className="font-semibold text-ink-800">{minutes(row.activeMinutes)}</span>
+                            </div>
+                            {row.idleSeconds ? (
+                              <div className="flex items-center justify-between">
+                                <span className="text-ink-500">Idle Status:</span>
+                                <span className="text-amber-700 font-medium">{minutes(Math.floor(row.idleSeconds / 60))} idle</span>
+                              </div>
+                            ) : null}
+                            {row.location && (
+                              <div className="flex items-center justify-between pt-1 border-t border-ink-200/60 text-[11px] text-ink-500">
+                                <span>Store Location:</span>
+                                <span className="font-medium text-ink-700">{row.location}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between pt-2 border-t border-ink-100 text-xs">
+                          <span className="text-ink-400">Score: {row.weeklyScore ?? '—'}</span>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            onClick={() => void openEmployee(row)}
+                          >
+                            View Details
+                          </button>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
             <Card>
+              <div className="card-pad pb-0">
+                <SectionHeader title="Employee Activity Table" description="Comprehensive daily logs and compliance reports." />
+              </div>
               {!team.employees?.length ? <EmptyState title="No team members in scope" /> : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto mt-2">
                   <table className="table">
-                    <thead><tr><th>Employee</th><th>Status</th><th>Active today</th><th>Tasks done</th><th>Daily summary</th><th>Weekly score</th><th /></tr></thead>
+                    <thead><tr><th>Employee</th><th>Status</th><th>Current App</th><th>Active today</th><th>Tasks done</th><th>Daily summary</th><th>Weekly score</th><th /></tr></thead>
                     <tbody>
                       {team.employees.map((row) => (
                         <tr key={row.id}>
-                          <td><div className="flex items-center gap-2"><Avatar name={row.name} src={row.photoUrl} size={28} /><div><p className="font-medium text-ink-800">{row.name}</p><p className="text-xs text-ink-500">{row.designation ?? '—'} · {row.department ?? '—'}</p></div></div></td>
+                          <td><div className="flex items-center gap-2"><Avatar name={row.name} src={row.photoUrl} size={28} /><div><p className="font-medium text-ink-800">{row.name}</p><p className="text-xs text-ink-500">{row.designation ?? '—'} · {row.location ?? row.department ?? '—'}</p></div></div></td>
                           <td>{row.active ? <Badge tone="success">Monitoring</Badge> : <Badge tone="neutral">Offline</Badge>}{row.needsAssistance && <Badge tone="warning" className="ml-1">Needs support</Badge>}</td>
+                          <td><span className="text-xs font-medium text-ink-700">{row.currentApp || '—'}</span></td>
                           <td>{minutes(row.activeMinutes)}</td>
                           <td>{row.tasksCompleted}</td>
                           <td>{row.dailyStatus ? <Badge tone={row.dailyStatus === 'approved' ? 'success' : row.dailyStatus === 'submitted' ? 'info' : 'neutral'}>{titleize(row.dailyStatus)}</Badge> : <span className="text-xs text-ink-400">—</span>}</td>
@@ -703,6 +856,145 @@ export default function Activity() {
               <StatCard label="Automatic tickets" value={team.totals.automaticTickets ?? 0} tone="warning" />
               <StatCard label="Pending daily reviews" value={team.totals.pendingDailyReviews ?? 0} tone="warning" />
               <StatCard label="Average weekly score" value={team.totals.averageWeeklyScore ?? '—'} tone="success" />
+            </div>
+
+            {/* Live Store Location Filtering */}
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-ink-200">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-xs font-semibold text-ink-500 mr-1">Store / Location:</span>
+                {[
+                  { key: 'ALL', label: 'All Stores' },
+                  { key: 'DAV', label: 'Davanagere (DAV)' },
+                  { key: 'SHI', label: 'Shivamogga (SHI)' },
+                  { key: 'BEL', label: 'Belagavi (BEL)' },
+                  { key: 'HQ', label: 'Head Office (HQ)' },
+                ].map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    onClick={() => setLocationFilter(item.key)}
+                    className={cx(
+                      'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
+                      locationFilter === item.key
+                        ? 'bg-brand-600 text-white shadow-sm'
+                        : 'bg-ink-100 text-ink-700 hover:bg-ink-200',
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              <div className="relative min-w-[200px]">
+                <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
+                <input
+                  type="text"
+                  placeholder="Search live employees..."
+                  value={liveSearch}
+                  onChange={(e) => setLiveSearch(e.target.value)}
+                  className="input py-1 pl-8 text-xs w-full"
+                />
+              </div>
+            </div>
+
+            {/* Live Workforce Monitoring Cards */}
+            <div>
+              <SectionHeader
+                title="Live Workforce Monitoring"
+                description="Real-time view of store employee application activity across Davanagere, Shivamogga, Belagavi and Head Office."
+              />
+              {(() => {
+                const filtered = (team.employees ?? []).filter((emp) => {
+                  if (locationFilter !== 'ALL') {
+                    const loc = (emp.location ?? '').toLowerCase();
+                    if (locationFilter === 'DAV' && !loc.includes('davanagere') && !loc.includes('dav')) return false;
+                    if (locationFilter === 'SHI' && !loc.includes('shivamogga') && !loc.includes('shi')) return false;
+                    if (locationFilter === 'BEL' && !loc.includes('belagavi') && !loc.includes('bel')) return false;
+                    if (locationFilter === 'HQ' && !loc.includes('head') && !loc.includes('main') && !loc.includes('hq')) return false;
+                  }
+                  if (liveSearch.trim()) {
+                    const q = liveSearch.toLowerCase();
+                    return (
+                      emp.name.toLowerCase().includes(q) ||
+                      (emp.designation ?? '').toLowerCase().includes(q) ||
+                      (emp.currentApp ?? '').toLowerCase().includes(q)
+                    );
+                  }
+                  return true;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <Card className="card-pad mt-3">
+                      <EmptyState compact title="No employees active in selected store" description="No active monitoring sessions recorded for this location filter." />
+                    </Card>
+                  );
+                }
+
+                return (
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {filtered.map((row) => (
+                      <Card key={row.id} className="card-pad flex flex-col justify-between hover:shadow-md transition-shadow">
+                        <div>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <Avatar name={row.name} src={row.photoUrl} size={36} />
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold text-ink-900">{row.name}</p>
+                                <p className="truncate text-xs text-ink-500">{row.designation ?? 'Team Member'}</p>
+                              </div>
+                            </div>
+                            <span
+                              className={cx(
+                                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase shrink-0',
+                                row.active ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500',
+                              )}
+                            >
+                              <span className={cx('h-1.5 w-1.5 rounded-full', row.active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400')} />
+                              {row.active ? 'Active' : 'Offline'}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 rounded-lg bg-ink-50 p-2.5 space-y-1.5 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-ink-500">Current App:</span>
+                              <span className="font-medium text-brand-700 bg-white px-2 py-0.5 rounded border border-ink-200 truncate max-w-[170px]">
+                                {row.currentApp || (row.active ? 'Active Session' : 'None')}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-ink-500">Active Duration:</span>
+                              <span className="font-semibold text-ink-800">{minutes(row.activeMinutes)}</span>
+                            </div>
+                            {row.idleSeconds ? (
+                              <div className="flex items-center justify-between">
+                                <span className="text-ink-500">Idle Status:</span>
+                                <span className="text-amber-700 font-medium">{minutes(Math.floor(row.idleSeconds / 60))} idle</span>
+                              </div>
+                            ) : null}
+                            {row.location && (
+                              <div className="flex items-center justify-between pt-1 border-t border-ink-200/60 text-[11px] text-ink-500">
+                                <span>Store Location:</span>
+                                <span className="font-medium text-ink-700">{row.location}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between pt-2 border-t border-ink-100 text-xs">
+                          <span className="text-ink-400">Score: {row.weeklyScore ?? '—'}</span>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-sm"
+                            onClick={() => void openEmployee(row)}
+                          >
+                            View Details
+                          </button>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
             <div className="grid gap-5 lg:grid-cols-2">
               <Card className="card-pad"><SectionHeader title="Department activity today" />{!team.departments?.length ? <EmptyState compact title="No activity recorded" /> : <div className="mt-3 divide-y divide-ink-100">{team.departments.map((row) => <div key={row.department} className="flex items-center justify-between py-2 text-sm"><span>{row.department}</span><span className="text-xs text-ink-500">{row.employees} employees · {minutes(row.minutes)}</span></div>)}</div>}</Card>

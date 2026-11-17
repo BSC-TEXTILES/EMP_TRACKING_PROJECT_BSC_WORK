@@ -769,8 +769,13 @@ export class ActivityAnalyticsService {
     const [employees, appTotals, taskTotals, summaries, weeks] = await Promise.all([
       query<Record<string, unknown>>(
         `SELECT e.id, e.full_name, e.employee_code, e.photo_url, d.name AS department_name, dg.title AS designation_title,
-                s.id AS session_id, s.started_at AS session_started_at, s.last_heartbeat_at
-         FROM employees e LEFT JOIN departments d ON d.id = e.department_id LEFT JOIN designations dg ON dg.id = e.designation_id
+                l.name AS location_name,
+                s.id AS session_id, s.started_at AS session_started_at, s.last_heartbeat_at,
+                s.current_app, s.current_category, s.idle_seconds
+         FROM employees e 
+         LEFT JOIN departments d ON d.id = e.department_id 
+         LEFT JOIN designations dg ON dg.id = e.designation_id
+         LEFT JOIN locations l ON l.id = e.location_id
          LEFT JOIN monitoring_sessions s ON s.employee_id = e.id AND s.status = 'active'
          WHERE e.id IN (${placeholders}) AND e.status = 'active' ORDER BY e.full_name`,
         ids,
@@ -825,9 +830,13 @@ export class ActivityAnalyticsService {
         photoUrl: employee.photo_url,
         department: employee.department_name,
         designation: employee.designation_title,
+        location: (employee.location_name as string | null) ?? null,
         active: Boolean(employee.session_id),
         sessionStartedAt: employee.session_started_at,
         lastHeartbeatAt: employee.last_heartbeat_at,
+        currentApp: (employee.current_app as string | null) ?? (Boolean(employee.session_id) ? 'Working session' : null),
+        currentCategory: (employee.current_category as string | null) ?? null,
+        idleSeconds: employee.idle_seconds ? Number(employee.idle_seconds) : 0,
         activeMinutes: appMap.get(Number(employee.id)) ?? 0,
         tasksCompleted: taskMap.get(Number(employee.id)) ?? 0,
         dailyStatus: summary?.status ?? null,

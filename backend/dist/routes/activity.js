@@ -17,7 +17,7 @@ function dateParam(value) {
 }
 // ------------------------------- Agent API --------------------------------
 activityRouter.post('/agent/heartbeat', rateLimit({ windowMs: 60000, max: 120, keyPrefix: 'agent-heartbeat' }), requireDevice, asyncHandler(async (req, res) => {
-    res.json(await ActivityService.heartbeat(req.device));
+    res.json(await ActivityService.heartbeat(req.device, req.body));
 }));
 activityRouter.post('/agent/events', rateLimit({ windowMs: 60000, max: 60, keyPrefix: 'agent-events' }), requireDevice, asyncHandler(async (req, res) => {
     const events = Array.isArray(req.body?.events) ? req.body.events : [req.body];
