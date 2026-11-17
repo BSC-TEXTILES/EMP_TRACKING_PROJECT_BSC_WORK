@@ -5,6 +5,7 @@ import {
   emailStats,
   enqueueEmail,
   listDeliveries,
+  retryAllDeliveries,
   retryDelivery,
   sendTestEmail,
   smtpStatus,
@@ -109,6 +110,10 @@ export class EmailService {
 
   static async retry(id: number) {
     return retryDelivery(id);
+  }
+
+  static async retryAll(days?: number) {
+    return retryAllDeliveries(days);
   }
 
   static async deliveries(options: { status?: string; search?: string; limit?: number }): Promise<DeliveryRow[]> {

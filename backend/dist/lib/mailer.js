@@ -520,6 +520,17 @@ export async function retryDelivery(id) {
       WHERE id = ? AND template <> 'otp' AND status IN ('failed', 'skipped')`, [id]);
     return result.affectedRows > 0;
 }
+/**
+ * Requeues every failed/skipped message from the last `days` days with a fresh
+ * retry budget. OTP codes are excluded: they have expired and must be re-requested.
+ */
+export async function retryAllDeliveries(days = 7) {
+    const result = await execute(`UPDATE email_deliveries
+        SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NOW(3)
+      WHERE template NOT IN ('otp', 'test') AND status IN ('failed', 'skipped')
+        AND created_at >= DATE_SUB(NOW(3), INTERVAL ? DAY)`, [Math.max(1, Math.min(90, Math.floor(days)))]);
+    return result.affectedRows;
+}
 export async function sendTestEmail(to) {
     const transport = buildTransporter();
     if (!transport)

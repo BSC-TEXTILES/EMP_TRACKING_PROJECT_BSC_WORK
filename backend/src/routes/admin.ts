@@ -9,6 +9,7 @@ import { connectedSocketCount, onlineEmployeeIds } from '../realtime/io.js';
 import { FileService } from '../services/FileService.js';
 import { EmailService } from '../services/EmailService.js';
 import { processEmailQueue } from '../lib/mailer.js';
+import { config } from '../config.js';
 import { validateEnvironment } from '../lib/envValidation.js';
 import { getIO } from '../realtime/io.js';
 import type { AuthedRequest } from '../middleware/auth.js';
@@ -181,6 +182,24 @@ adminRouter.post(
     await processEmailQueue(5);
     await recordAudit({ actorId: user.id, action: 'email.retried', entityType: 'email', entityId: id });
     res.json({ queued: true });
+  }),
+);
+
+adminRouter.post(
+  '/email/retry-all',
+  requireAny('settings.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    if (!config.smtp.configured) {
+      res.status(400).json({ error: 'SMTP is not configured. Save the SMTP settings above first, then retry.', code: 'smtp_not_configured' });
+      return;
+    }
+    const body = parseBody(z.object({ days: z.number().int().min(1).max(90).optional() }), req.body ?? {});
+    const requeued = await EmailService.retryAll(body.days ?? 7);
+    // Send the first batch now; the scheduler drains the rest with backoff.
+    if (requeued > 0) await processEmailQueue(25);
+    await recordAudit({ actorId: user.id, action: 'email.retried_all', entityType: 'email', after: { requeued } });
+    res.json({ requeued });
   }),
 );
 

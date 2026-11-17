@@ -23,7 +23,6 @@ export class EmployeeService {
         const clauses = [
             scope.clause,
             "e.status <> 'rejected'",
-            "(e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))",
         ];
         const params = [...scope.params];
         if (filters.search) {
@@ -284,9 +283,13 @@ export class EmployeeService {
         const employee = await queryOne('SELECT id, full_name, status, email, mobile, department_id FROM employees WHERE id = ?', [employeeId]);
         if (!employee)
             throw ApiError.notFound('Employee not found');
-        if (employee.status !== 'pending_approval')
+        if (!['pending_approval', 'pending_verification'].includes(employee.status)) {
             throw ApiError.badRequest('This registration is not awaiting approval.');
-        await execute(`UPDATE employees SET status = 'active', role_id = COALESCE(?, role_id), department_id = COALESCE(?, department_id),
+        }
+        await execute(`UPDATE employees SET status = 'active',
+              email_verified_at = COALESCE(email_verified_at, NOW(3)),
+              mobile_verified_at = COALESCE(mobile_verified_at, NOW(3)),
+              role_id = COALESCE(?, role_id), department_id = COALESCE(?, department_id),
               designation_id = COALESCE(?, designation_id), manager_id = COALESCE(?, manager_id), location_id = COALESCE(?, location_id),
               joining_date = COALESCE(joining_date, CURDATE())
        WHERE id = ?`, [
@@ -430,7 +433,7 @@ export class EmployeeService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
+       WHERE e.status = 'active'
        ORDER BY e.full_name`, []);
     }
     static async structure() {

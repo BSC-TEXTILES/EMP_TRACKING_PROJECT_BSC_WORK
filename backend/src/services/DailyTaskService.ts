@@ -256,6 +256,31 @@ export class DailyTaskService {
           );
         }
       }
+
+      // Ensure required daily SOP columns exist on tasks table
+      const colsToAdd: [string, string][] = [
+        ['time_slot', "VARCHAR(32) NULL DEFAULT 'operations'"],
+        ['requires_evidence', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['evidence_type', 'VARCHAR(64) NULL'],
+        ['requires_metric', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['metric_label', 'VARCHAR(64) NULL'],
+        ['metric_unit', 'VARCHAR(24) NULL'],
+        ['metric_value', 'VARCHAR(64) NULL'],
+        ['evidence_url', 'TEXT NULL'],
+      ];
+      for (const [colName, colDef] of colsToAdd) {
+        try {
+          const exists = await queryOne<{ cnt: number }>(
+            "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'tasks' AND column_name = ?",
+            [colName],
+          );
+          if (!exists || Number(exists.cnt) === 0) {
+            await execute(`ALTER TABLE tasks ADD COLUMN \`${colName}\` ${colDef}`);
+          }
+        } catch {
+          // ignore
+        }
+      }
     } catch {
       // non-blocking
     }
@@ -357,10 +382,10 @@ export class DailyTaskService {
         try {
           const [taskRes] = await conn.query(
             `INSERT INTO tasks (
-              task_no, title, description, department_id, priority, status, time_slot,
+              task_no, title, description, category, department_id, priority, status, time_slot,
               requires_evidence, evidence_type, requires_metric, metric_label, metric_unit,
               created_by, manager_id, start_date, due_date, due_time, progress
-            ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+            ) VALUES (?, ?, ?, 'Retail Store Ops', ?, ?, 'assigned', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
             [
               taskNo,
               tpl.title,
@@ -390,9 +415,9 @@ export class DailyTaskService {
           try {
             const [baseTaskRes] = await conn.query(
               `INSERT INTO tasks (
-                task_no, title, description, department_id, priority, status,
+                task_no, title, description, category, department_id, priority, status,
                 created_by, manager_id, start_date, due_date, due_time, progress
-              ) VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?, ?, ?, ?, 0)`,
+              ) VALUES (?, ?, ?, 'Retail Store Ops', ?, ?, 'assigned', ?, ?, ?, ?, ?, 0)`,
               [
                 taskNo,
                 tpl.title,

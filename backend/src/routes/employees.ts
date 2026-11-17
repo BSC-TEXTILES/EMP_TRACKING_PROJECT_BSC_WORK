@@ -191,6 +191,18 @@ employeesRouter.post(
   }),
 );
 
+employeesRouter.delete(
+  '/:id',
+  requireAny('employees.delete'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({ reason: z.string().max(500).optional() }), req.body ?? {});
+    const result = await EmployeeService.remove(id, user, body.reason);
+    res.json({ ok: true, ...result });
+  }),
+);
+
 employeesRouter.put(
   '/roles/:id/permissions',
   requireAny('roles.manage'),

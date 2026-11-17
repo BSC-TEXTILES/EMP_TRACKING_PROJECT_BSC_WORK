@@ -214,152 +214,16 @@ async function ensureDatabaseReady() {
                     // Assign HR Manager role to Chetan TK
                     await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
              SELECT ?, id FROM roles WHERE slug IN ('hr_manager', 'manager')`, [chetanId]);
-                    // Safe foreign-key nullification and reassignment to Gagan C B and Chetan TK
+                    // Purge only deprecated mock/test accounts with @workforce.test domain
                     try {
-                        await dbConn.query('UPDATE employees SET manager_id = ? WHERE id = ?', [gaganId, chetanId]);
+                        await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''");
                     }
                     catch { }
-                    try {
-                        await dbConn.query('UPDATE departments SET head_employee_id = ? WHERE code <> "HR"', [gaganId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE departments SET head_employee_id = ? WHERE code = "HR"', [chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE projects SET manager_id = ?, created_by = ?', [gaganId, gaganId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE tasks SET created_by = ?, manager_id = ?, approved_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE task_assignments SET assigned_by = ? WHERE assigned_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE daily_reports SET reviewed_by = ? WHERE reviewed_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE tickets SET requester_id = ?, assignee_id = ? WHERE requester_id NOT IN (?, ?)', [gaganId, gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE conversations SET created_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE meetings SET host_id = ? WHERE host_id NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE files SET owner_id = ? WHERE owner_id NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE announcements SET created_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('UPDATE leave_requests SET reviewed_by = ?, hr_approver_id = ? WHERE employee_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    // Delete all records of non-Gagan, non-Chetan employees across all dependent tables
-                    const tablesWithEmpId = [
-                        'employee_sessions',
-                        'employee_login_audit',
-                        'attendance',
-                        'attendance_records',
-                        'attendance_breaks',
-                        'attendance_corrections',
-                        'daily_reports',
-                        'daily_work_reports',
-                        'task_assignments',
-                        'task_time_logs',
-                        'ticket_assignments',
-                        'conversation_members',
-                        'conversation_user_state',
-                        'employee_activities',
-                        'employee_daily_performance',
-                        'employee_roles',
-                        'user_permissions',
-                        'otp_codes',
-                        'employee_devices',
-                        'employee_preferences',
-                        'employee_activity_consents',
-                        'login_history',
-                        'store_daily_checkpoints',
-                        'project_members',
-                        'announcement_acknowledgements',
-                        'leave_requests',
-                        'leave_balances',
-                        'kpi_evaluations',
-                        'meeting_participants',
-                        'activity_work_logs',
-                        'activity_daily_summaries',
-                        'activity_weekly_summaries',
-                        'activity_screenshots',
-                        'activity_errors',
-                        'activity_health_checks',
-                        'employee_locations',
-                        'employee_mfa',
-                        'mfa_recovery_codes',
-                        'mfa_attempts',
-                        'status_events',
-                        'push_subscriptions',
-                        'upload_sessions',
-                        'message_receipts'
-                    ];
-                    for (const tbl of tablesWithEmpId) {
-                        try {
-                            await dbConn.query(`DELETE FROM \`${tbl}\` WHERE employee_id NOT IN (?, ?)`, [gaganId, chetanId]);
-                        }
-                        catch {
-                            // Ignore if table does not exist
-                        }
-                    }
-                    try {
-                        await dbConn.query('DELETE FROM task_comments WHERE author_id NOT IN (?, ?)', [gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM tasks WHERE created_by NOT IN (?, ?) AND NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.employee_id IN (?, ?))', [gaganId, chetanId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM ticket_comments WHERE author_id NOT IN (?, ?)', [gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM tickets WHERE requester_id NOT IN (?, ?)', [gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM messages WHERE sender_id NOT IN (?, ?)', [gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM internal_emails WHERE sender_id NOT IN (?, ?) AND recipient_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM activity_audit_logs WHERE actor_id NOT IN (?, ?)', [gaganId, chetanId]);
-                    }
-                    catch { }
-                    try {
-                        await dbConn.query('DELETE FROM calls WHERE caller_id NOT IN (?, ?) AND callee_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]);
-                    }
-                    catch { }
-                    // Delete all other employees except Gagan C B and Chetan TK
-                    await dbConn.query('DELETE FROM employees WHERE id NOT IN (?, ?)', [gaganId, chetanId]);
                     // Ensure Gagan has Super Admin and Store Manager roles in employee_roles
                     await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
              SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'store_manager', 'general_manager', 'executive')`, [gaganId]);
                     await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
-                    console.log(`[startup] Retained Gagan C B (ID: ${gaganId}) and Chetan TK (ID: ${chetanId}) and reset credentials to Workforce@2026.`);
+                    console.log(`[startup] Verified Gagan C B (ID: ${gaganId}) and Chetan TK (ID: ${chetanId}) credentials ready.`);
                 }
                 finally {
                     try {

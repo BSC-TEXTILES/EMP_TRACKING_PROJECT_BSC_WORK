@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { query, queryOne } from '../db/index.js';
 import { EMAIL_TEMPLATES } from '../lib/emailTemplates.js';
-import { emailStats, enqueueEmail, listDeliveries, retryDelivery, sendTestEmail, smtpStatus, } from '../lib/mailer.js';
+import { emailStats, enqueueEmail, listDeliveries, retryAllDeliveries, retryDelivery, sendTestEmail, smtpStatus, } from '../lib/mailer.js';
 /**
  * Bridges domain notifications and the transactional email queue.
  *
@@ -90,6 +90,9 @@ export class EmailService {
     }
     static async retry(id) {
         return retryDelivery(id);
+    }
+    static async retryAll(days) {
+        return retryAllDeliveries(days);
     }
     static async deliveries(options) {
         return listDeliveries(options);

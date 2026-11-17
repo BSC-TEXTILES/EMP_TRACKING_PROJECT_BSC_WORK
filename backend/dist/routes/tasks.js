@@ -77,8 +77,9 @@ tasksRouter.post('/daily/generate', asyncHandler(async (req, res) => {
         const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user);
         res.json(result);
     }
-    catch {
-        res.json({ created: 0, existing: 0 });
+    catch (err) {
+        console.warn('[daily/generate] note:', err?.message || err);
+        res.json({ created: 0, existing: 0, error: err?.message });
     }
 }));
 tasksRouter.get('/daily/dashboard', asyncHandler(async (req, res) => {
@@ -198,14 +199,14 @@ tasksRouter.get('/meta/assignable', requireAny('tasks.assign'), asyncHandler(asy
     if (ids === null) {
         const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
          LEFT JOIN designations dg ON dg.id = e.designation_id
-         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
+         WHERE e.status = 'active'
          ORDER BY e.full_name`);
         res.json({ employees: rows });
         return;
     }
     const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
-       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
+       WHERE e.status = 'active'
          AND e.id IN (${ids.map(() => '?').join(',') || '0'})
        ORDER BY e.full_name`, ids);
     res.json({ employees: rows });

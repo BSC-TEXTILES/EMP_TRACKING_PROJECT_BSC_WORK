@@ -165,13 +165,15 @@ export const config = {
   },
   internalJobSecret: process.env.INTERNAL_JOB_SECRET ?? '',
   smtp: {
-    host: websiteSettings.smtp?.host ?? process.env.SMTP_HOST ?? '',
-    port: websiteSettings.smtp?.port ?? int('SMTP_PORT', 587),
-    secure: websiteSettings.smtp?.secure ?? (process.env.SMTP_SECURE === 'true'),
-    user: websiteSettings.smtp?.user ?? process.env.SMTP_USER ?? '',
-    password: websiteSettings.smtp?.password ?? process.env.SMTP_PASSWORD ?? '',
-    from: websiteSettings.smtp?.from ?? senderHeader(),
-    replyTo: websiteSettings.smtp?.replyTo ?? process.env.SMTP_REPLY_TO ?? '',
+    // `||` (not `??`): a blank value saved by the setup wizard must not hide the
+    // SMTP_* environment variables, or every email is silently "skipped".
+    host: websiteSettings.smtp?.host || process.env.SMTP_HOST?.trim() || '',
+    port: websiteSettings.smtp?.host ? websiteSettings.smtp.port : int('SMTP_PORT', 587),
+    secure: websiteSettings.smtp?.host ? websiteSettings.smtp.secure : process.env.SMTP_SECURE === 'true',
+    user: websiteSettings.smtp?.user || process.env.SMTP_USER?.trim() || '',
+    password: websiteSettings.smtp?.password || process.env.SMTP_PASSWORD || '',
+    from: websiteSettings.smtp?.from || senderHeader(),
+    replyTo: websiteSettings.smtp?.replyTo || process.env.SMTP_REPLY_TO?.trim() || '',
     get configured() {
       return Boolean(this.host);
     },

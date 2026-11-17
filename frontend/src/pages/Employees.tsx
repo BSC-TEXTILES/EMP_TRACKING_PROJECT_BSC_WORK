@@ -104,12 +104,10 @@ export default function Employees() {
   };
 
   const employeesList = useMemo(() => {
-    if (!data?.items) return [];
-    const scopedList = data.items.filter((e) => e.fullName.toLowerCase().includes('gagan') || e.fullName.toLowerCase().includes('chetan'));
-    return scopedList.length > 0 ? scopedList : data.items;
+    return data?.items ?? [];
   }, [data?.items]);
 
-  const pending = employeesList.filter((employee) => employee.status === 'pending_approval');
+  const pending = employeesList.filter((employee) => ['pending_approval', 'pending_verification'].includes(employee.status));
 
   return (
     <div className="space-y-5">
@@ -125,8 +123,13 @@ export default function Employees() {
       />
 
       {pending.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          {pending.length} registration(s) awaiting approval on this page. Open a record to approve or reject it.
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2">
+            <Icon name="clock" size={16} className="text-amber-600 shrink-0" />
+            <span>
+              <strong>{pending.length}</strong> registration(s) awaiting approval or verification. Use the quick <strong>Approve</strong> button in the table or open a record to review and activate.
+            </span>
+          </div>
         </div>
       )}
 
@@ -192,6 +195,49 @@ export default function Employees() {
                       <td><StatusBadge status={employee.status} /></td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1.5">
+                          {['pending_approval', 'pending_verification'].includes(employee.status) && has('employees.approve', 'employees.manage') && (
+                            <>
+                              <button
+                                type="button"
+                                title="Approve registration & activate"
+                                className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 shadow-sm"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  if (!window.confirm(`Approve registration for ${employee.fullName} (${employee.employeeCode})? This will verify and activate their account immediately.`)) return;
+                                  try {
+                                    await api.post(`/employees/${employee.id}/approve`, {});
+                                    toast.success(`Registration approved! ${employee.fullName} is now active.`);
+                                    await load();
+                                  } catch (caught) {
+                                    toast.error(errorMessage(caught));
+                                  }
+                                }}
+                              >
+                                <Icon name="check" size={13} />
+                                <span>Approve</span>
+                              </button>
+                              <button
+                                type="button"
+                                title="Reject registration"
+                                className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const reason = window.prompt(`Reason for rejecting ${employee.fullName}'s registration (min 5 characters):`);
+                                  if (!reason) return;
+                                  try {
+                                    await api.post(`/employees/${employee.id}/reject`, { reason });
+                                    toast.success(`Registration rejected for ${employee.fullName}.`);
+                                    await load();
+                                  } catch (caught) {
+                                    toast.error(errorMessage(caught));
+                                  }
+                                }}
+                              >
+                                <Icon name="x" size={13} />
+                                <span>Reject</span>
+                              </button>
+                            </>
+                          )}
                           <button
                             type="button"
                             title="View full details"
@@ -217,7 +263,7 @@ export default function Employees() {
                 </tbody>
               </table>
             </div>
-            <Pagination page={page} pageSize={25} total={employeesList.length} onPage={setPage} />
+            <Pagination page={page} pageSize={25} total={data?.total ?? employeesList.length} onPage={setPage} />
           </>
         )}
       </Card>
@@ -226,17 +272,17 @@ export default function Employees() {
         footer={detail ? (
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap gap-1.5">
-              {detail.status === 'pending_approval' && has('employees.approve', 'employees.manage') && (
+              {['pending_approval', 'pending_verification'].includes(detail.status) && has('employees.approve', 'employees.manage') && (
                 <>
-                  <button className="btn-primary btn-sm" onClick={async () => {
+                  <button className="btn-primary btn-sm !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 shadow-sm" onClick={async () => {
                     try {
                       await api.post(`/employees/${detail.id}/approve`, {});
-                      toast.success('Registration approved. The employee can now sign in.');
+                      toast.success(`Registration approved for ${detail.fullName}. The employee can now sign in.`);
                       setDetail(null);
                       await load();
                     } catch (caught) { toast.error(errorMessage(caught)); }
                   }}>Approve registration</button>
-                  <button className="btn-secondary btn-sm" onClick={async () => {
+                  <button className="btn-secondary btn-sm !text-rose-700 !border-rose-200 hover:!bg-rose-50" onClick={async () => {
                     const reason = window.prompt('Reason for rejection (min 5 characters):');
                     if (!reason) return;
                     try {
@@ -248,7 +294,7 @@ export default function Employees() {
                   }}>Reject</button>
                 </>
               )}
-              {has('employees.manage') && detail.status !== 'pending_approval' && (
+              {has('employees.manage') && !['pending_approval', 'pending_verification'].includes(detail.status) && (
                 <button className="btn-secondary btn-sm" onClick={() => void (async () => {
                   try {
                     await api.post(`/employees/${detail.id}/status`, { status: detail.status === 'active' ? 'inactive' : 'active' });
@@ -290,6 +336,62 @@ export default function Employees() {
                 {detail.mfaEnabled && <Badge tone="success">MFA</Badge>}
               </div>
             </div>
+
+            {['pending_approval', 'pending_verification'].includes(detail.status) && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-900 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <Icon name="clock" size={16} className="text-amber-700" />
+                    <p className="font-bold text-sm text-amber-900">
+                      Registration Awaiting Administrative Approval
+                    </p>
+                  </div>
+                  <p className="text-xs text-amber-700">
+                    Status: <strong className="uppercase">{titleize(detail.status)}</strong>. Giving approval will verify the employee and activate their account for immediate portal access.
+                  </p>
+                </div>
+                {has('employees.approve', 'employees.manage') && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 shadow-sm inline-flex items-center gap-1.5 font-bold"
+                      onClick={async () => {
+                        try {
+                          await api.post(`/employees/${detail.id}/approve`, {});
+                          toast.success(`Registration approved for ${detail.fullName}. Account is now active.`);
+                          setDetail(null);
+                          await load();
+                        } catch (caught) {
+                          toast.error(errorMessage(caught));
+                        }
+                      }}
+                    >
+                      <Icon name="check" size={15} />
+                      <span>Approve & Activate</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm !text-rose-700 !border-rose-300 hover:!bg-rose-50 inline-flex items-center gap-1.5 font-semibold"
+                      onClick={async () => {
+                        const reason = window.prompt(`Reason for rejecting ${detail.fullName}'s registration (min 5 characters):`);
+                        if (!reason) return;
+                        try {
+                          await api.post(`/employees/${detail.id}/reject`, { reason });
+                          toast.success(`Registration rejected for ${detail.fullName}.`);
+                          setDetail(null);
+                          await load();
+                        } catch (caught) {
+                          toast.error(errorMessage(caught));
+                        }
+                      }}
+                    >
+                      <Icon name="x" size={15} />
+                      <span>Reject</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <Tabs
               tabs={[

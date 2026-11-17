@@ -69,6 +69,7 @@ export default function EmailConfiguration() {
   const [testTo, setTestTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [retrying, setRetrying] = useState<number | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
 
   const load = useCallback(
     async (status = filter) => {
@@ -117,6 +118,21 @@ export default function EmailConfiguration() {
       toast.error(errorMessage(caught));
     } finally {
       setRetrying(null);
+    }
+  };
+
+  const retryAll = async () => {
+    setRetryingAll(true);
+    try {
+      const result = await api.post<{ requeued: number }>('/admin/email/retry-all', { days: 7 });
+      toast.success(result.requeued > 0
+        ? `${result.requeued} message(s) requeued and sending now.`
+        : 'Nothing to resend: no failed or skipped messages in the last 7 days.');
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setRetryingAll(false);
     }
   };
 
@@ -224,8 +240,9 @@ export default function EmailConfiguration() {
           <div className="mt-4 rounded-md border border-ink-200 bg-ink-50 px-3 py-2 text-xs text-ink-600">
             <p className="font-semibold text-ink-700">How to change these settings</p>
             <p className="mt-1 leading-relaxed">
-              Update <code className="font-mono">SMTP_*</code> in <code className="font-mono">.env.production</code> on the server and restart the API.
-              Values are intentionally not editable here so credentials never travel through the browser.
+              Enter the SMTP server in the form above, send the test, then save. It is stored encrypted on the server and
+              takes effect immediately. <code className="font-mono">SMTP_*</code> variables in <code className="font-mono">.env.production</code> are used as a fallback.
+              Then press <strong>Retry all</strong> to resend everything that was skipped.
             </p>
           </div>
         </Card>
@@ -237,7 +254,16 @@ export default function EmailConfiguration() {
             <p className="text-sm font-semibold text-ink-800">Delivery log</p>
             <p className="text-xs text-ink-500">Every queued, sent, retried and skipped message with its failure reason.</p>
           </div>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              className="btn-primary btn-sm mr-2"
+              disabled={retryingAll || !status.configured || ((stats.failed ?? 0) + (stats.skipped ?? 0)) === 0}
+              title={status.configured ? 'Resend every failed or skipped notification from the last 7 days (expired OTP codes are excluded)' : 'Save the SMTP settings first'}
+              onClick={() => void retryAll()}
+            >
+              {retryingAll ? 'Resending…' : `Retry all (${(stats.failed ?? 0) + (stats.skipped ?? 0)})`}
+            </button>
             {FILTERS.map((item) => (
               <button
                 key={item.value}

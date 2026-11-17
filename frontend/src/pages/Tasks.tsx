@@ -596,7 +596,7 @@ export default function Tasks() {
           ) : !data || data.items.length === 0 ? (
             <EmptyState
               title="No tasks found"
-              description="Click 'Generate Today\'s Tasks' to load your daily SOP routines or allocate a custom task."
+              description={"Click \"Generate Today's Tasks\" to load your daily SOP routines or allocate a custom task."}
               action={
                 <div className="flex gap-2">
                   <button className="btn-secondary btn-sm" onClick={handleGenerateDailyTasks}>
