@@ -139,6 +139,7 @@ const EMPLOYEES: {
   status?: string;
 }[] = [
   { code: 'EMP-1001', name: 'Gagan C B', email: 'gagan.cb@bsctextiles.in', mobile: '9876543210', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'BEL', status: 'active' },
+  { code: 'EMP-1002', name: 'Chetan TK', email: 'chetan.tk@bsctextiles.in', mobile: '9876543211', role: 'hr_manager', dept: 'HR', designation: 'HR Manager', manager: 'EMP-1001', location: 'BEL', status: 'active' },
 ];
 
 async function seedReferenceData(): Promise<void> {

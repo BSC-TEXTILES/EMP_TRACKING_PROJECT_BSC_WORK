@@ -198,14 +198,14 @@ tasksRouter.get('/meta/assignable', requireAny('tasks.assign'), asyncHandler(asy
     if (ids === null) {
         const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
          LEFT JOIN designations dg ON dg.id = e.designation_id
-         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
          ORDER BY e.full_name`);
         res.json({ employees: rows });
         return;
     }
     const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
-       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
          AND e.id IN (${ids.map(() => '?').join(',') || '0'})
        ORDER BY e.full_name`, ids);
     res.json({ employees: rows });

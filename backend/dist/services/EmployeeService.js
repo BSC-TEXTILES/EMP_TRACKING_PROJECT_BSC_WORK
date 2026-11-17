@@ -23,7 +23,7 @@ export class EmployeeService {
         const clauses = [
             scope.clause,
             "e.status <> 'rejected'",
-            "(e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))",
+            "(e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))",
         ];
         const params = [...scope.params];
         if (filters.search) {
@@ -430,7 +430,7 @@ export class EmployeeService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Chetan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%' OR full_name LIKE '%Chetan%'))
        ORDER BY e.full_name`, []);
     }
     static async structure() {

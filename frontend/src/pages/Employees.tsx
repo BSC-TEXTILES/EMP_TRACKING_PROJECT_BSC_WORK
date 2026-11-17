@@ -105,8 +105,8 @@ export default function Employees() {
 
   const employeesList = useMemo(() => {
     if (!data?.items) return [];
-    const gaganList = data.items.filter((e) => e.fullName.toLowerCase().includes('gagan'));
-    return gaganList.length > 0 ? gaganList : data.items;
+    const scopedList = data.items.filter((e) => e.fullName.toLowerCase().includes('gagan') || e.fullName.toLowerCase().includes('chetan'));
+    return scopedList.length > 0 ? scopedList : data.items;
   }, [data?.items]);
 
   const pending = employeesList.filter((employee) => employee.status === 'pending_approval');
@@ -548,7 +548,7 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
             <Field label="Reporting manager">
               <select className="input" value={form.managerId} onChange={(event) => setForm({ ...form, managerId: event.target.value })}>
                 <option value="">Select manager</option>
-                {employees.filter((e) => e.fullName.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
+                {employees.filter((e) => e.fullName.toLowerCase().includes('gagan') || e.fullName.toLowerCase().includes('chetan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
               </select>
             </Field>
             <Field label="Location">

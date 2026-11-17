@@ -25,9 +25,9 @@ const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
   },
   {
     role: 'HR Manager',
-    employeeId: 'EMP-1001',
-    name: 'Gagan C B',
-    email: 'hr@bsctextiles.in',
+    employeeId: 'EMP-1002',
+    name: 'Chetan TK',
+    email: 'chetan.tk@bsctextiles.in',
     password: 'Workforce@2026',
   },
   {

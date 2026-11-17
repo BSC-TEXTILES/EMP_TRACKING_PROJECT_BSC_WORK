@@ -203,21 +203,68 @@ async function ensureDatabaseReady(): Promise<void> {
             gaganId = Number(insertRes.insertId);
           }
 
-          // Safe foreign-key nullification and reassignment to Gagan C B
-          try { await dbConn.query('UPDATE employees SET manager_id = NULL'); } catch { }
-          try { await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE projects SET manager_id = ?, created_by = ?', [gaganId, gaganId]); } catch { }
-          try { await dbConn.query('UPDATE tasks SET created_by = ?, manager_id = ?, approved_by = ?', [gaganId, gaganId, gaganId]); } catch { }
-          try { await dbConn.query('UPDATE task_assignments SET assigned_by = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE daily_reports SET reviewed_by = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE tickets SET requester_id = ?, assignee_id = ?', [gaganId, gaganId]); } catch { }
-          try { await dbConn.query('UPDATE conversations SET created_by = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE meetings SET host_id = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE files SET owner_id = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE announcements SET created_by = ?', [gaganId]); } catch { }
-          try { await dbConn.query('UPDATE leave_requests SET reviewed_by = ?, hr_approver_id = ?', [gaganId, gaganId]); } catch { }
+          // Ensure Chetan TK exists as active HR Manager
+          const [chetanRows] = await dbConn.query<any[]>(
+            "SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Chetan%' ORDER BY id DESC LIMIT 1"
+          );
+          let chetanId: number;
+          const [hrRole] = await dbConn.query<any[]>("SELECT id FROM roles WHERE slug = 'hr_manager' LIMIT 1");
+          const hrRoleId = hrRole.length > 0 ? Number(hrRole[0].id) : 4;
+          const [hrDept] = await dbConn.query<any[]>("SELECT id FROM departments WHERE code = 'HR' LIMIT 1");
+          const hrDeptId = hrDept.length > 0 ? Number(hrDept[0].id) : null;
+          const [hrDesig] = await dbConn.query<any[]>("SELECT id FROM designations WHERE title LIKE '%HR Manager%' OR title LIKE '%HR%' LIMIT 1");
+          const hrDesigId = hrDesig.length > 0 ? Number(hrDesig[0].id) : null;
 
-          // Delete all records of non-Gagan employees across all dependent tables
+          if (chetanRows.length > 0) {
+            chetanId = Number(chetanRows[0].id);
+            await dbConn.query(
+              `UPDATE employees 
+               SET full_name = 'Chetan TK',
+                   email = 'chetan.tk@bsctextiles.in',
+                   mobile = '9876543211',
+                   manager_id = ?,
+                   role_id = ?,
+                   department_id = COALESCE(?, department_id),
+                   designation_id = COALESCE(?, designation_id),
+                   status = 'active',
+                   failed_login_attempts = 0,
+                   locked_until = NULL,
+                   password_hash = ?
+               WHERE id = ?`,
+              [gaganId, hrRoleId, hrDeptId, hrDesigId, validHash, chetanId]
+            );
+          } else {
+            const [chetanInsert]: any = await dbConn.query(
+              `INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
+               VALUES ('EMP-1002', 'Chetan TK', 'chetan.tk@bsctextiles.in', '9876543211', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`,
+              [validHash, hrRoleId, hrDeptId, hrDesigId, gaganId]
+            );
+            chetanId = Number(chetanInsert.insertId);
+          }
+
+          // Assign HR Manager role to Chetan TK
+          await dbConn.query(
+            `INSERT IGNORE INTO employee_roles (employee_id, role_id)
+             SELECT ?, id FROM roles WHERE slug IN ('hr_manager', 'manager')`,
+            [chetanId]
+          );
+
+          // Safe foreign-key nullification and reassignment to Gagan C B and Chetan TK
+          try { await dbConn.query('UPDATE employees SET manager_id = ? WHERE id = ?', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE departments SET head_employee_id = ? WHERE code <> "HR"', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE departments SET head_employee_id = ? WHERE code = "HR"', [chetanId]); } catch { }
+          try { await dbConn.query('UPDATE projects SET manager_id = ?, created_by = ?', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('UPDATE tasks SET created_by = ?, manager_id = ?, approved_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE task_assignments SET assigned_by = ? WHERE assigned_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE daily_reports SET reviewed_by = ? WHERE reviewed_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE tickets SET requester_id = ?, assignee_id = ? WHERE requester_id NOT IN (?, ?)', [gaganId, gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE conversations SET created_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE meetings SET host_id = ? WHERE host_id NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE files SET owner_id = ? WHERE owner_id NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE announcements SET created_by = ? WHERE created_by NOT IN (?, ?)', [gaganId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('UPDATE leave_requests SET reviewed_by = ?, hr_approver_id = ? WHERE employee_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]); } catch { }
+
+          // Delete all records of non-Gagan, non-Chetan employees across all dependent tables
           const tablesWithEmpId = [
             'employee_sessions',
             'employee_login_audit',
@@ -266,36 +313,33 @@ async function ensureDatabaseReady(): Promise<void> {
 
           for (const tbl of tablesWithEmpId) {
             try {
-              await dbConn.query(`DELETE FROM \`${tbl}\` WHERE employee_id <> ?`, [gaganId]);
+              await dbConn.query(`DELETE FROM \`${tbl}\` WHERE employee_id NOT IN (?, ?)`, [gaganId, chetanId]);
             } catch {
               // Ignore if table does not exist
             }
           }
 
-          try { await dbConn.query('DELETE FROM task_comments WHERE author_id <> ?', [gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM tasks WHERE created_by <> ? AND NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.employee_id = ?)', [gaganId, gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM ticket_comments WHERE author_id <> ?', [gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM tickets WHERE requester_id <> ?', [gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM messages WHERE sender_id <> ?', [gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM internal_emails WHERE sender_id <> ? AND recipient_id <> ?', [gaganId, gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM activity_audit_logs WHERE actor_id <> ?', [gaganId]); } catch { }
-          try { await dbConn.query('DELETE FROM calls WHERE caller_id <> ? AND callee_id <> ?', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM task_comments WHERE author_id NOT IN (?, ?)', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM tasks WHERE created_by NOT IN (?, ?) AND NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.employee_id IN (?, ?))', [gaganId, chetanId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM ticket_comments WHERE author_id NOT IN (?, ?)', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM tickets WHERE requester_id NOT IN (?, ?)', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM messages WHERE sender_id NOT IN (?, ?)', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM internal_emails WHERE sender_id NOT IN (?, ?) AND recipient_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM activity_audit_logs WHERE actor_id NOT IN (?, ?)', [gaganId, chetanId]); } catch { }
+          try { await dbConn.query('DELETE FROM calls WHERE caller_id NOT IN (?, ?) AND callee_id NOT IN (?, ?)', [gaganId, chetanId, gaganId, chetanId]); } catch { }
 
-          // Delete all other non-Gagan employees
-          await dbConn.query('DELETE FROM employees WHERE id <> ?', [gaganId]);
+          // Delete all other employees except Gagan C B and Chetan TK
+          await dbConn.query('DELETE FROM employees WHERE id NOT IN (?, ?)', [gaganId, chetanId]);
 
-          // Reassign departments head to Gagan C B
-          await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]);
-
-          // Ensure Gagan has Super Admin, HR Manager, Store Manager, and Executive roles in employee_roles
+          // Ensure Gagan has Super Admin and Store Manager roles in employee_roles
           await dbConn.query(
             `INSERT IGNORE INTO employee_roles (employee_id, role_id)
-             SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'hr_manager', 'store_manager', 'general_manager', 'executive')`,
+             SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'store_manager', 'general_manager', 'executive')`,
             [gaganId]
           );
 
           await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
-          console.log(`[startup] Retained Gagan C B (ID: ${gaganId}) as sole primary employee record and reset credentials to Workforce@2026.`);
+          console.log(`[startup] Retained Gagan C B (ID: ${gaganId}) and Chetan TK (ID: ${chetanId}) and reset credentials to Workforce@2026.`);
         } finally {
           try { await dbConn.query('SET FOREIGN_KEY_CHECKS = 1'); } catch { }
           dbConn.release();

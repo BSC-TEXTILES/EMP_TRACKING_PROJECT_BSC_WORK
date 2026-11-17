@@ -29,6 +29,10 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     const email = gagan?.email || 'gagan.cb@bsctextiles.in';
     const name = gagan?.full_name || 'Gagan C B';
     const code = gagan?.employee_code || 'EMP-1001';
+    const chetan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1");
+    const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
+    const hrName = chetan?.full_name || 'Chetan TK';
+    const hrCode = chetan?.employee_code || 'EMP-1002';
     res.json({
         enabled: true,
         environment: config.env,
@@ -42,9 +46,9 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
             },
             {
                 role: 'HR Manager',
-                employeeId: code,
-                name,
-                email: 'hr@bsctextiles.in',
+                employeeId: hrCode,
+                name: hrName,
+                email: hrEmail,
                 password,
             },
             {
