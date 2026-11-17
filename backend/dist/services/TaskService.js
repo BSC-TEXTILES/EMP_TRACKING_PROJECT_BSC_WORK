@@ -207,7 +207,7 @@ export class TaskService {
               (SELECT GROUP_CONCAT(e.full_name SEPARATOR ', ') FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id WHERE ta.task_id = t.id) AS assignee_names,
               (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids
        FROM tasks t
-       JOIN employees c ON c.id = t.created_by
+       LEFT JOIN employees c ON c.id = t.created_by
        LEFT JOIN employees m ON m.id = t.manager_id
        LEFT JOIN departments d ON d.id = t.department_id
        LEFT JOIN projects p ON p.id = t.project_id
@@ -272,7 +272,7 @@ export class TaskService {
               (SELECT GROUP_CONCAT(e.full_name SEPARATOR ', ') FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id WHERE ta.task_id = t.id) AS assignee_names,
               (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids
        FROM tasks t
-       JOIN employees c ON c.id = t.created_by
+       LEFT JOIN employees c ON c.id = t.created_by
        LEFT JOIN employees m ON m.id = t.manager_id
        LEFT JOIN departments d ON d.id = t.department_id
        LEFT JOIN projects p ON p.id = t.project_id

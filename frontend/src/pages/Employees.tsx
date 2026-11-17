@@ -131,7 +131,7 @@ export default function Employees() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Employees in scope" value={employeesList.length || (data?.total ?? '—')} icon={<Icon name="users" size={18} />} />
+        <StatCard label="Employees in scope" value={employeesList.length} icon={<Icon name="users" size={18} />} />
         <StatCard label="Pending approval" value={pending.length} tone="warning" icon={<Icon name="clock" size={18} />} />
         <StatCard label="Departments" value={structure?.departments.length ?? '—'} tone="neutral" icon={<Icon name="building" size={18} />} />
       </div>
@@ -217,7 +217,7 @@ export default function Employees() {
                 </tbody>
               </table>
             </div>
-            <Pagination page={page} pageSize={25} total={data.total} onPage={setPage} />
+            <Pagination page={page} pageSize={25} total={employeesList.length} onPage={setPage} />
           </>
         )}
       </Card>
