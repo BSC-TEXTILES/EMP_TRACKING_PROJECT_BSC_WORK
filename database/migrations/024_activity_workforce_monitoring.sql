@@ -29,14 +29,14 @@ INSERT INTO application_catalog (name, process_pattern, category, is_approved) V
 ('Microsoft Edge', '%msedge%', 'Browser', 1),
 ('Mozilla Firefox', '%firefox%', 'Browser', 1),
 ('WhatsApp Desktop', '%whatsapp%', 'Communication', 1),
-('BSC HRMS & Web Portal', '%chrome%emptrack%', 'Business Operations', 1),
+('BSC HRMS & Web Portal', '%chrome%emptrack%', 'Office Productivity', 1),
 ('Visual Studio Code', '%code%', 'Development', 1),
 ('Notepad & Editor', '%notepad%', 'Office Productivity', 1),
 ('Windows Calculator', '%calc%', 'Office Productivity', 1),
 ('File Explorer', '%explorer%', 'Administration', 1),
-('Retail POS & Billing Software', '%pos%', 'Business Operations', 1),
+('Retail POS & Billing Software', '%pos%', 'Office Productivity', 1),
 ('Tally Accounting', '%tally%', 'Data Analytics', 1),
-('Inventory & Stock ERP', '%inventory%', 'Business Operations', 1),
+('Inventory & Stock ERP', '%inventory%', 'Office Productivity', 1),
 ('Antigravity IDE', '%antigravity%', 'Development', 1)
 ON DUPLICATE KEY UPDATE name = VALUES(name);
 

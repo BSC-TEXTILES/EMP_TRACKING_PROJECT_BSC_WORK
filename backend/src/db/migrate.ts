@@ -29,7 +29,7 @@ export function assertNonDestructive(file: string, sql: string): void {
     || /^DROP\s+(TABLE|DATABASE|SCHEMA)\b/i.test(statement)
     || (/^DELETE\s+FROM\b/i.test(statement) && (!/\bWHERE\b/i.test(statement) || tautology.test(statement))));
   if (offending.length === 0) return;
-  if (file === '020_clear_old_data.sql' || file === '021_clear_all_legacy_data.sql' || process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
+  if (process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
     console.warn(`[migrate] ${file}: running ${offending.length} cleanup statement(s) as requested`);
     return;
   }
@@ -84,7 +84,7 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
 
     const [appliedRows] = await connection.query<mysql.RowDataPacket[]>('SELECT filename FROM schema_migrations');
     const applied = new Set(appliedRows.map((r) => String(r.filename)));
-    const freshInstall = applied.size === 0;
+
 
     const files = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
     for (const file of files) {
@@ -93,8 +93,12 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
         continue;
       }
       const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
-      // A brand-new database has no data to lose, so a first install is never blocked.
-      if (!freshInstall) assertNonDestructive(file, sql);
+      // Retired cleanup scripts are never part of installation or upgrades.
+      if (['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql'].includes(file)) {
+        console.log(`[migrate] skip retired destructive migration ${file}`);
+        continue;
+      }
+      assertNonDestructive(file, sql);
       console.log(`[migrate] applying ${file}`);
       await connection.query(sql);
       await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);

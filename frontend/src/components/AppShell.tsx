@@ -26,6 +26,13 @@ export function AppShell() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [search, setSearch] = useState('');
+  const [notificationError, setNotificationError] = useState('');
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [now, setNow] = useState(() => new Date().toISOString());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date().toISOString()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [profileOpen, setProfileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('wfm_sidebar_collapsed') === '1');
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -197,12 +204,16 @@ export function AppShell() {
   }, [location.pathname]);
 
   const loadNotifications = async () => {
+    setNotificationsLoading(true);
+    setNotificationError('');
     try {
       const result = await api.get<{ items: NotificationItem[]; unread: number }>('/notifications?limit=12');
       setNotifications(result.items);
       setUnreadNotifications(result.unread);
-    } catch {
-      /* keep previous list */
+    } catch (error) {
+      setNotificationError(errorMessage(error));
+    } finally {
+      setNotificationsLoading(false);
     }
   };
 
@@ -402,7 +413,14 @@ export function AppShell() {
                       </button>
                     </div>
                     <div className="max-h-80 scroll-area">
-                      {notifications.length === 0 ? (
+                      {notificationError ? (
+                        <div role="alert" className="p-4 text-sm text-red-600">
+                          {notificationError}
+                          <button type="button" className="btn-secondary mt-2" onClick={() => void loadNotifications()}>Retry</button>
+                        </div>
+                      ) : notificationsLoading ? (
+                        <p role="status" className="p-4 text-sm text-ink-500">Loading notifications…</p>
+                      ) : notifications.length === 0 ? (
                         <EmptyState compact title="No notifications yet" description="Activity assigned to you will appear here." />
                       ) : (
                         notifications.map((item) => (
@@ -444,7 +462,7 @@ export function AppShell() {
                   <Avatar name={user.fullName} src={user.photoUrl} size={32} />
                   <span className="hidden text-left sm:block">
                     <span className="block max-w-[120px] truncate text-xs font-semibold text-ink-800">{user.fullName}</span>
-                    <span className="block text-[11px] text-ink-400">{formatTime(new Date().toISOString())}</span>
+                    <span className="block text-[11px] text-ink-400">{formatTime(now)}</span>
                   </span>
                 </button>
                 {profileOpen && (

@@ -34,6 +34,7 @@ interface Policy {
   allowedDomains: string[];
   policyText: string;
   retentionDays: number;
+  idleThresholdMinutes?: number;
   screenshotEnabled: boolean;
 }
 
@@ -121,7 +122,9 @@ async function writeEncrypted(file: string, value: unknown, token: string): Prom
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv('aes-256-gcm', keyFromToken(token), iv);
   const data = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]);
-  await fs.writeFile(file, Buffer.concat([iv, cipher.getAuthTag(), data]), { mode: 0o600 });
+  const temporary = `${file}.tmp`;
+  await fs.writeFile(temporary, Buffer.concat([iv, cipher.getAuthTag(), data]), { mode: 0o600 });
+  await fs.rename(temporary, file);
 }
 
 async function readEncrypted<T>(file: string, token: string, fallback: T): Promise<T> {
@@ -142,7 +145,7 @@ async function api(pathname: string, init: RequestInit = {}, auth: { cookie?: st
   if (auth.cookie) headers.set('Cookie', auth.cookie);
   if (auth.deviceToken) headers.set('X-Device-Token', auth.deviceToken);
   headers.set('Origin', SERVER);
-  return fetch(`${SERVER}/api${pathname}`, { ...init, headers });
+  return fetch(`${SERVER}/api${pathname}`, { ...init, headers, redirect: 'error', signal: AbortSignal.timeout(15_000) });
 }
 
 async function login(): Promise<string> {
@@ -338,7 +341,7 @@ async function main(): Promise<void> {
   let syncFailures = 0;
   let lastNetworkErrorAt = 0;
   const seenErrors = new Set<number>();
-  const idleThresholdSeconds = (policy.retentionDays ? 5 : 5) * 60;
+  const idleThresholdSeconds = (policy.idleThresholdMinutes ?? 5) * 60;
 
   const flushQueue = async (): Promise<void> => {
     if (queue.length === 0) return;
@@ -346,20 +349,20 @@ async function main(): Promise<void> {
     try {
       const response = await api('/activity/agent/events', { method: 'POST', body: JSON.stringify({ events: batch }) }, { deviceToken: token });
       if (response.ok) {
+        const acknowledgement = await response.json() as { rejected: number; accepted: number; duplicates: number };
+        if (acknowledgement.rejected || acknowledgement.accepted + acknowledgement.duplicates !== batch.length) {
+          log('Batch not fully acknowledged; retained for recovery.');
+          return;
+        }
         syncFailures = 0;
         queue.splice(0, batch.length);
         await writeEncrypted(queueFile, queue, token);
         log(`Uploaded ${batch.length} event(s); ${queue.length} remain queued.`);
         return;
       }
-      if (response.status === 400) {
-        // The server rejected this batch (for example the work session ended while
-        // offline). Dropping it avoids an endless retry loop.
-        await response.text();
-        queue.splice(0, batch.length);
-        await writeEncrypted(queueFile, queue, token);
-        log(`Server rejected ${batch.length} event(s); they were discarded.`);
-      }
+      // Keep rejected data for recovery; a server rejection is not an acknowledgement.
+      log(`Upload deferred (${response.status}); encrypted events retained.`);
+
     } catch {
       syncFailures += 1;
       if (syncFailures >= 3 && Date.now() - lastNetworkErrorAt > 10 * 60 * 1000) {
@@ -396,6 +399,8 @@ async function main(): Promise<void> {
         const isIdle = activeSnapshot.idleSeconds >= idleThresholdSeconds;
         queue.push({
           type: isIdle ? 'work' : 'app',
+          title: isIdle ? 'Idle period' : undefined,
+          occurredAt: isIdle ? new Date(activeSince).toISOString() : undefined,
           clientEventId: crypto.randomUUID(),
           appName: isIdle ? 'Idle Time' : activeSnapshot.appName,
           appCategory: isIdle ? 'Administration' : activeSnapshot.appCategory,
@@ -411,11 +416,18 @@ async function main(): Promise<void> {
     activeSince = now;
   };
 
+  let tickRunning = false;
   const tick = async (): Promise<void> => {
-    if (stopped) return;
+    if (stopped || tickRunning) return;
+    tickRunning = true;
     try {
       const status = await api('/activity/sessions/current', {}, { cookie });
-      const current = await status.json() as { session: unknown };
+      if (!status.ok) throw new Error('Session status unavailable');
+      const current = await status.json() as { session: { status: string } | null };
+      if (current.session?.status === 'paused') {
+        activeSnapshot = null; activeSince = Date.now();
+        return;
+      }
       if (!current.session) {
         log('Session was not active. Attempting to reactivate session...');
         const restartRes = await api('/activity/sessions/start', { method: 'POST', body: JSON.stringify({ deviceId }) }, { cookie });
@@ -442,9 +454,9 @@ async function main(): Promise<void> {
       }, { deviceToken: token });
 
       const procChanged = (fg?.procName ?? null) !== (activeSnapshot?.procName ?? null);
-      if (procChanged) {
-        recordTransition(fg);
-      }
+      // Persist bounded samples even when the foreground application never changes.
+      if (procChanged || Date.now() - activeSince >= INTERVAL_MS) recordTransition(fg);
+      await writeEncrypted(queueFile, queue, token);
 
       if (ticks++ % 10 === 0) {
         for (const error of await recentWindowsErrors()) {
@@ -464,8 +476,9 @@ async function main(): Promise<void> {
       }
       await flushQueue();
     } catch {
-      log('Sync failed; continuing offline with the encrypted queue.');
-    }
+      activeSnapshot = null; activeSince = Date.now();
+      log('Connection unavailable; collection paused and queued events retained.');
+    } finally { tickRunning = false; }
   };
 
   const shutdown = async (endSession = true): Promise<void> => {

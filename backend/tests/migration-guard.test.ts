@@ -8,6 +8,7 @@ describe('migration safety guard', () => {
     expect(() => assertNonDestructive('x.sql', 'DELETE FROM messages;')).toThrow(/destructive/);
     expect(() => assertNonDestructive('x.sql', 'SET FOREIGN_KEY_CHECKS = 0;\nTRUNCATE tickets;')).toThrow(/destructive/);
     expect(() => assertNonDestructive('x.sql', 'DROP TABLE employees;')).toThrow(/destructive/);
+    expect(() => assertNonDestructive('021_clear_all_legacy_data.sql', 'DELETE FROM employees;')).toThrow(/destructive/);
     // Always-true conditions are full deletes in disguise.
     expect(() => assertNonDestructive('x.sql', 'DELETE FROM messages WHERE id > 0;')).toThrow(/destructive/);
     expect(() => assertNonDestructive('x.sql', 'DELETE FROM files WHERE 1 = 1;')).toThrow(/destructive/);
@@ -33,7 +34,7 @@ describe('migration safety guard', () => {
 
   it('accepts every additive migration (the opt-in data wipe 020 excepted)', () => {
     const dir = path.resolve(__dirname, '../../database/migrations');
-    for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.sql') && name !== '020_clear_old_data.sql')) {
+    for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.sql') && !['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql'].includes(name))) {
       expect(() => assertNonDestructive(file, fs.readFileSync(path.join(dir, file), 'utf8')), file).not.toThrow();
     }
   });
