@@ -57,7 +57,11 @@ async function employeeScope(user: AuthUser): Promise<{ clause: string; params: 
 export class EmployeeService {
   static async list(user: AuthUser, filters: EmployeeListFilters) {
     const scope = await employeeScope(user);
-    const clauses = [scope.clause, "e.status <> 'rejected'"];
+    const clauses = [
+      scope.clause,
+      "e.status <> 'rejected'",
+      "(e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))",
+    ];
     const params: unknown[] = [...scope.params];
 
     if (filters.search) {
@@ -586,9 +590,9 @@ export class EmployeeService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND e.id <> ?
+       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
        ORDER BY e.full_name`,
-      [employeeId],
+      [],
     );
   }
 

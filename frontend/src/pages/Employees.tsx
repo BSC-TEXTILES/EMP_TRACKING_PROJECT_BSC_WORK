@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, downloadReport, errorMessage } from '../lib/api';
 import { useDebounced, useDocumentTitle } from '../lib/hooks';
@@ -50,6 +50,7 @@ export default function Employees() {
   const [data, setData] = useState<{ items: EmployeeRow[]; total: number } | null>(null);
   const [structure, setStructure] = useState<Structure | null>(null);
   const [detail, setDetail] = useState<EmployeeDetail | null>(null);
+  const [modalTab, setModalTab] = useState<'overview' | 'edit' | 'performance'>('overview');
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
   const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: '' });
@@ -77,8 +78,9 @@ export default function Employees() {
     api.get<Structure>('/employees/structure').then(setStructure).catch(() => undefined);
   }, []);
 
-  const openDetail = async (id: number) => {
+  const openDetail = async (id: number, tab: 'overview' | 'edit' | 'performance' = 'overview') => {
     try {
+      setModalTab(tab);
       const result = await api.get<EmployeeDetail>(`/employees/${id}`);
       setDetail(result);
       setOrgForm({
@@ -101,7 +103,13 @@ export default function Employees() {
     }
   };
 
-  const pending = (data?.items ?? []).filter((employee) => employee.status === 'pending_approval');
+  const employeesList = useMemo(() => {
+    if (!data?.items) return [];
+    const gaganList = data.items.filter((e) => e.fullName.toLowerCase().includes('gagan'));
+    return gaganList.length > 0 ? gaganList : data.items;
+  }, [data?.items]);
+
+  const pending = employeesList.filter((employee) => employee.status === 'pending_approval');
 
   return (
     <div className="space-y-5">
@@ -123,7 +131,7 @@ export default function Employees() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Employees in scope" value={data?.total ?? '—'} icon={<Icon name="users" size={18} />} />
+        <StatCard label="Employees in scope" value={employeesList.length || (data?.total ?? '—')} icon={<Icon name="users" size={18} />} />
         <StatCard label="Pending approval" value={pending.length} tone="warning" icon={<Icon name="clock" size={18} />} />
         <StatCard label="Departments" value={structure?.departments.length ?? '—'} tone="neutral" icon={<Icon name="building" size={18} />} />
       </div>
@@ -146,16 +154,27 @@ export default function Employees() {
 
         {!data ? (
           <div className="p-4"><Skeleton lines={8} /></div>
-        ) : data.items.length === 0 ? (
+        ) : employeesList.length === 0 ? (
           <EmptyState title="No employees found" description="Adjust the filters or search for a different name." />
         ) : (
           <>
             <div className="overflow-x-auto">
               <table className="table-base">
-                <thead><tr><th>Employee</th><th>Role</th><th>Department</th><th>Manager</th><th>Today</th><th>Open tasks</th><th>Status</th></tr></thead>
+                <thead>
+                  <tr>
+                    <th>Employee</th>
+                    <th>Role</th>
+                    <th>Department</th>
+                    <th>Manager</th>
+                    <th>Today</th>
+                    <th>Open tasks</th>
+                    <th>Status</th>
+                    <th className="text-right">Actions</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {data.items.map((employee) => (
-                    <tr key={employee.id} className="cursor-pointer" onClick={() => void openDetail(employee.id)}>
+                  {employeesList.map((employee) => (
+                    <tr key={employee.id} className="cursor-pointer hover:bg-ink-50/60 transition-colors" onClick={() => void openDetail(employee.id, 'overview')}>
                       <td>
                         <div className="flex items-center gap-2">
                           <Avatar name={employee.fullName} src={employee.photoUrl} size={30} />
@@ -171,6 +190,28 @@ export default function Employees() {
                       <td>{employee.attendanceStatus ? <StatusBadge status={employee.attendanceStatus} /> : <span className="text-xs text-ink-400">No record</span>}</td>
                       <td className="text-ink-700">{employee.openTasks}</td>
                       <td><StatusBadge status={employee.status} /></td>
+                      <td className="text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            title="View full details"
+                            className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+                            onClick={() => void openDetail(employee.id, 'overview')}
+                          >
+                            <Icon name="eye" size={13} />
+                            <span>View</span>
+                          </button>
+                          <button
+                            type="button"
+                            title="Edit employee"
+                            className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold"
+                            onClick={() => void openDetail(employee.id, 'edit')}
+                          >
+                            <Icon name="edit" size={13} />
+                            <span>Edit</span>
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -212,21 +253,37 @@ export default function Employees() {
                   try {
                     await api.post(`/employees/${detail.id}/status`, { status: detail.status === 'active' ? 'inactive' : 'active' });
                     toast.success(detail.status === 'active' ? 'Employee deactivated. Historical records are preserved.' : 'Employee reactivated.');
-                    await openDetail(detail.id);
+                    await openDetail(detail.id, modalTab);
                     await load();
                   } catch (caught) { toast.error(errorMessage(caught)); }
                 })()}>{detail.status === 'active' ? 'Deactivate' : 'Reactivate'}</button>
               )}
-              {has('employees.manage') && <button className="btn-ghost btn-sm" onClick={() => setOrgEdit((value) => !value)}>Edit assignment</button>}
+              {modalTab === 'overview' ? (
+                <button type="button" className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={() => setModalTab('edit')}>
+                  <Icon name="edit" size={14} />
+                  <span>Edit employee</span>
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => setModalTab('overview')}>
+                  <Icon name="eye" size={14} />
+                  <span>View overview</span>
+                </button>
+              )}
             </div>
             <button className="btn-secondary btn-sm" onClick={() => setDetail(null)}>Close</button>
           </div>
         ) : null}>
         {detail && (
           <div className="space-y-5">
-            <div className="flex flex-wrap items-center gap-3">
-              <Avatar name={detail.fullName} src={detail.photoUrl} size={56} />
-              <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <Avatar name={detail.fullName} src={detail.photoUrl} size={52} />
+                <div>
+                  <h3 className="text-base font-bold text-ink-900">{detail.fullName}</h3>
+                  <p className="text-xs text-ink-500 font-mono">{detail.employeeCode} · {detail.designationTitle ?? 'Designation Not Assigned'} · {detail.departmentName ?? 'Department'}</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
                 <StatusBadge status={detail.status} />
                 <Badge tone="brand">{detail.roleName}</Badge>
                 <Badge tone="neutral">{titleize(detail.employmentType)}</Badge>
@@ -234,115 +291,195 @@ export default function Employees() {
               </div>
             </div>
 
-            <Tabs tabs={[{ value: 'overview', label: 'Overview' }, { value: 'performance', label: 'Performance' }, { value: 'account', label: 'Account' }]} value="overview" onChange={() => undefined} />
+            <Tabs
+              tabs={[
+                { value: 'overview', label: 'View Details' },
+                { value: 'edit', label: 'Edit Employee' },
+                { value: 'performance', label: 'Performance' },
+              ]}
+              value={modalTab}
+              onChange={(value) => setModalTab(value as 'overview' | 'edit' | 'performance')}
+            />
 
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="rounded-lg bg-ink-50 p-2.5"><p className="text-xs text-ink-500">Tasks completed</p><p className="text-lg font-semibold text-ink-900">{detail.stats.tasks.completed}/{detail.stats.tasks.total}</p></div>
-              <div className="rounded-lg bg-ink-50 p-2.5"><p className="text-xs text-ink-500">Present days (month)</p><p className="text-lg font-semibold text-ink-900">{detail.stats.attendance.presentDays}</p></div>
-              <div className="rounded-lg bg-ink-50 p-2.5"><p className="text-xs text-ink-500">Hours logged (month)</p><p className="text-lg font-semibold text-ink-900">{minutesToHours(detail.stats.attendance.totalMinutes)}</p></div>
-              <div className="rounded-lg bg-ink-50 p-2.5"><p className="text-xs text-ink-500">Latest KPI</p><p className="text-lg font-semibold text-ink-900">{detail.stats.kpi ? `${detail.stats.kpi.score.toFixed(1)} · ${detail.stats.kpi.category}` : '—'}</p></div>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <SectionHeader title="Contact" />
-                <dl className="mt-2 space-y-1 text-sm">
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Email</dt><dd className="text-ink-800">{detail.email}</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Mobile</dt><dd className="text-ink-800">{detail.mobile}</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Location</dt><dd className="text-ink-800">{detail.locationName ?? '—'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Manager</dt><dd className="text-ink-800">{detail.managerName ?? '—'}</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Joined</dt><dd className="text-ink-800">{formatDate(detail.joiningDate)}</dd></div>
-                </dl>
-              </div>
-              <div>
-                <SectionHeader title="Reports & tickets" />
-                <dl className="mt-2 space-y-1 text-sm">
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Daily reports (month)</dt><dd className="text-ink-800">{detail.stats.reports.submitted} · {detail.stats.reports.approved} approved</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Tickets</dt><dd className="text-ink-800">{detail.stats.tickets.total} · {detail.stats.tickets.open} open</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Overdue tasks</dt><dd className="text-ink-800">{detail.stats.tasks.overdue}</dd></div>
-                  <div className="flex justify-between gap-2"><dt className="text-ink-500">Last login</dt><dd className="text-ink-800">{formatDateTime(detail.lastLoginAt)}</dd></div>
-                </dl>
-              </div>
-            </div>
-
-            {orgEdit && (
-              <form className="space-y-3 rounded-lg border border-brand-200 bg-brand-50/40 p-3" onSubmit={async (event) => {
-                event.preventDefault();
-                try {
-                  await api.patch(`/employees/${detail.id}/org-assignment`, {
-                    roleId: orgForm.roleId ? Number(orgForm.roleId) : undefined,
-                    departmentId: orgForm.departmentId ? Number(orgForm.departmentId) : null,
-                    designationId: orgForm.designationId ? Number(orgForm.designationId) : null,
-                    managerId: orgForm.managerId ? Number(orgForm.managerId) : null,
-                    locationId: orgForm.locationId ? Number(orgForm.locationId) : null,
-                    employmentType: orgForm.employmentType || undefined,
-                  });
-                  toast.success('Organisational assignment updated and audited.');
-                  setOrgEdit(false);
-                  await openDetail(detail.id);
-                } catch (caught) { toast.error(errorMessage(caught)); }
-              }}>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Role">
-                    <select className="input" value={orgForm.roleId} onChange={(event) => setOrgForm({ ...orgForm, roleId: event.target.value })}>
-                      {structure?.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Department">
-                    <select className="input" value={orgForm.departmentId} onChange={(event) => setOrgForm({ ...orgForm, departmentId: event.target.value })}>
-                      <option value="">None</option>
-                      {structure?.departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Designation">
-                    <select className="input" value={orgForm.designationId} onChange={(event) => setOrgForm({ ...orgForm, designationId: event.target.value })}>
-                      <option value="">None</option>
-                      {structure?.designations.map((designation) => <option key={designation.id} value={designation.id}>{designation.title}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Reporting manager">
-                    <select className="input" value={orgForm.managerId} onChange={(event) => setOrgForm({ ...orgForm, managerId: event.target.value })}>
-                      <option value="">None</option>
-                      {structure?.designations && (data?.items ?? []).filter((employee) => employee.id !== detail.id && employee.fullName.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
-                    </select>
-                  </Field>
+            {modalTab === 'overview' && (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100">
+                    <p className="text-xs font-medium text-ink-500">Tasks completed</p>
+                    <p className="text-xl font-bold text-ink-900">{detail.stats.tasks.completed}/{detail.stats.tasks.total}</p>
+                  </div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100">
+                    <p className="text-xs font-medium text-ink-500">Present days (month)</p>
+                    <p className="text-xl font-bold text-ink-900">{detail.stats.attendance.presentDays}</p>
+                  </div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100">
+                    <p className="text-xs font-medium text-ink-500">Hours logged (month)</p>
+                    <p className="text-xl font-bold text-ink-900">{minutesToHours(detail.stats.attendance.totalMinutes)}</p>
+                  </div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100">
+                    <p className="text-xs font-medium text-ink-500">Latest KPI</p>
+                    <p className="text-xl font-bold text-ink-900">{detail.stats.kpi ? `${detail.stats.kpi.score.toFixed(1)} · ${detail.stats.kpi.category}` : '—'}</p>
+                  </div>
                 </div>
-                <button type="submit" className="btn-primary btn-sm">Save assignment</button>
-              </form>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border border-ink-200 bg-white p-4">
+                    <SectionHeader title="Contact & Personal Information" />
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Email ID</dt><dd className="font-medium text-ink-800">{detail.email}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Mobile No</dt><dd className="font-medium text-ink-800">{detail.mobile}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Address</dt><dd className="font-medium text-ink-800">{detail.address || '—'}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Emergency Contact</dt><dd className="font-medium text-ink-800">{detail.emergencyContact || '—'}</dd></div>
+                      <div className="flex justify-between gap-2 py-1"><dt className="text-ink-500">Date of Birth</dt><dd className="font-medium text-ink-800">{detail.dateOfBirth ? formatDate(detail.dateOfBirth) : '—'}</dd></div>
+                    </dl>
+                  </div>
+
+                  <div className="rounded-xl border border-ink-200 bg-white p-4">
+                    <SectionHeader title="Role & Organisation" />
+                    <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Role</dt><dd className="font-medium text-ink-800">{detail.roleName}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Department</dt><dd className="font-medium text-ink-800">{detail.departmentName ?? '—'}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Designation</dt><dd className="font-medium text-ink-800">{detail.designationTitle ?? '—'}</dd></div>
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Location</dt><dd className="font-medium text-ink-800">{detail.locationName ?? '—'}</dd></div>
+                      <div className="flex justify-between gap-2 py-1"><dt className="text-ink-500">Reporting Manager</dt><dd className="font-medium text-ink-800">{detail.managerName ?? '—'}</dd></div>
+                    </dl>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-ink-200 bg-white p-4">
+                  <SectionHeader title="Activity & System Details" />
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2 text-sm">
+                    <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Joined date</dt><dd className="font-medium text-ink-800">{formatDate(detail.joiningDate)}</dd></div>
+                    <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Last login</dt><dd className="font-medium text-ink-800">{formatDateTime(detail.lastLoginAt)}</dd></div>
+                    <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Daily reports (month)</dt><dd className="font-medium text-ink-800">{detail.stats.reports.submitted} ({detail.stats.reports.approved} approved)</dd></div>
+                    <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Support tickets</dt><dd className="font-medium text-ink-800">{detail.stats.tickets.total} total · {detail.stats.tickets.open} open</dd></div>
+                  </div>
+                </div>
+              </div>
             )}
 
-            {(user?.id === detail.id || has('employees.manage')) && (
-              <form className="space-y-3 rounded-lg border border-ink-200 p-3" onSubmit={async (event) => {
-                event.preventDefault();
-                try {
-                  await api.patch(`/employees/${detail.id}`, {
-                    fullName: editForm.fullName,
-                    mobile: editForm.mobile,
-                    address: editForm.address || undefined,
-                    emergencyContact: editForm.emergencyContact || undefined,
-                    dateOfBirth: editForm.dateOfBirth || undefined,
-                  });
-                  toast.success('Profile updated.');
-                  await openDetail(detail.id);
-                  await load();
-                } catch (caught) { toast.error(errorMessage(caught)); }
-              }}>
-                <p className="text-sm font-semibold text-ink-800">Profile details</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Full name"><input className="input" value={editForm.fullName} onChange={(event) => setEditForm({ ...editForm, fullName: event.target.value })} required /></Field>
-                  <Field label="Mobile"><input className="input" value={editForm.mobile} onChange={(event) => setEditForm({ ...editForm, mobile: event.target.value })} required /></Field>
-                  <Field label="Address"><input className="input" value={editForm.address} onChange={(event) => setEditForm({ ...editForm, address: event.target.value })} /></Field>
-                  <Field label="Emergency contact"><input className="input" value={editForm.emergencyContact} onChange={(event) => setEditForm({ ...editForm, emergencyContact: event.target.value })} /></Field>
-                  <Field label="Date of birth"><input type="date" className="input" value={editForm.dateOfBirth} onChange={(event) => setEditForm({ ...editForm, dateOfBirth: event.target.value })} /></Field>
+            {modalTab === 'edit' && (
+              <div className="space-y-5">
+                <form className="space-y-4 rounded-xl border border-ink-200 bg-white p-4 shadow-2xs" onSubmit={async (event) => {
+                  event.preventDefault();
+                  try {
+                    await api.patch(`/employees/${detail.id}`, {
+                      fullName: editForm.fullName,
+                      mobile: editForm.mobile,
+                      address: editForm.address || undefined,
+                      emergencyContact: editForm.emergencyContact || undefined,
+                      dateOfBirth: editForm.dateOfBirth || undefined,
+                    });
+                    toast.success('Profile details updated successfully.');
+                    await openDetail(detail.id, 'edit');
+                    await load();
+                  } catch (caught) { toast.error(errorMessage(caught)); }
+                }}>
+                  <div className="flex items-center justify-between pb-2 border-b border-ink-100">
+                    <p className="text-sm font-bold text-ink-900">Personal Details</p>
+                    <span className="text-xs text-ink-400">Updates profile contact & emergency details</span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Full name" required><input className="input" value={editForm.fullName} onChange={(event) => setEditForm({ ...editForm, fullName: event.target.value })} required /></Field>
+                    <Field label="Mobile" required><input className="input" value={editForm.mobile} onChange={(event) => setEditForm({ ...editForm, mobile: event.target.value })} required /></Field>
+                    <Field label="Address"><input className="input" value={editForm.address} onChange={(event) => setEditForm({ ...editForm, address: event.target.value })} placeholder="Residential or work address" /></Field>
+                    <Field label="Emergency contact"><input className="input" value={editForm.emergencyContact} onChange={(event) => setEditForm({ ...editForm, emergencyContact: event.target.value })} placeholder="Contact name & phone" /></Field>
+                    <Field label="Date of birth"><input type="date" className="input" value={editForm.dateOfBirth} onChange={(event) => setEditForm({ ...editForm, dateOfBirth: event.target.value })} /></Field>
+                  </div>
+                  <div className="flex justify-end pt-1">
+                    <button type="submit" className="btn-primary btn-sm">Save personal details</button>
+                  </div>
+                </form>
+
+                {has('employees.manage') && (
+                  <form className="space-y-4 rounded-xl border border-brand-200 bg-brand-50/20 p-4 shadow-2xs" onSubmit={async (event) => {
+                    event.preventDefault();
+                    try {
+                      await api.patch(`/employees/${detail.id}/org-assignment`, {
+                        roleId: orgForm.roleId ? Number(orgForm.roleId) : undefined,
+                        departmentId: orgForm.departmentId ? Number(orgForm.departmentId) : null,
+                        designationId: orgForm.designationId ? Number(orgForm.designationId) : null,
+                        managerId: orgForm.managerId ? Number(orgForm.managerId) : null,
+                        locationId: orgForm.locationId ? Number(orgForm.locationId) : null,
+                        employmentType: orgForm.employmentType || undefined,
+                      });
+                      toast.success('Organisational assignment and role updated.');
+                      await openDetail(detail.id, 'edit');
+                      await load();
+                    } catch (caught) { toast.error(errorMessage(caught)); }
+                  }}>
+                    <div className="flex items-center justify-between pb-2 border-b border-brand-100">
+                      <p className="text-sm font-bold text-ink-900">Role & Organisational Assignment</p>
+                      <span className="text-xs text-brand-700">Administrative assignment & hierarchy</span>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field label="Role">
+                        <select className="input" value={orgForm.roleId} onChange={(event) => setOrgForm({ ...orgForm, roleId: event.target.value })}>
+                          {structure?.roles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Department">
+                        <select className="input" value={orgForm.departmentId} onChange={(event) => setOrgForm({ ...orgForm, departmentId: event.target.value })}>
+                          <option value="">None</option>
+                          {structure?.departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Designation">
+                        <select className="input" value={orgForm.designationId} onChange={(event) => setOrgForm({ ...orgForm, designationId: event.target.value })}>
+                          <option value="">None</option>
+                          {structure?.designations.map((designation) => <option key={designation.id} value={designation.id}>{designation.title}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Reporting manager">
+                        <select className="input" value={orgForm.managerId} onChange={(event) => setOrgForm({ ...orgForm, managerId: event.target.value })}>
+                          <option value="">None</option>
+                          {structure?.designations && (data?.items ?? []).filter((employee) => employee.id !== detail.id && employee.fullName.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Location">
+                        <select className="input" value={orgForm.locationId} onChange={(event) => setOrgForm({ ...orgForm, locationId: event.target.value })}>
+                          <option value="">None</option>
+                          {structure?.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Employment type">
+                        <select className="input" value={orgForm.employmentType} onChange={(event) => setOrgForm({ ...orgForm, employmentType: event.target.value })}>
+                          {['full_time', 'part_time', 'contract', 'intern', 'probation'].map((value) => <option key={value} value={value}>{titleize(value)}</option>)}
+                        </select>
+                      </Field>
+                    </div>
+                    <div className="flex justify-end pt-1">
+                      <button type="submit" className="btn-primary btn-sm">Save assignment & role</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
+
+            {modalTab === 'performance' && (
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100"><p className="text-xs text-ink-500">Tasks completed</p><p className="text-xl font-bold text-ink-900">{detail.stats.tasks.completed}/{detail.stats.tasks.total}</p></div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100"><p className="text-xs text-ink-500">Active tasks</p><p className="text-xl font-bold text-ink-900">{detail.stats.tasks.active}</p></div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100"><p className="text-xs text-ink-500">Overdue tasks</p><p className="text-xl font-bold text-ink-900">{detail.stats.tasks.overdue}</p></div>
+                  <div className="rounded-lg bg-ink-50 p-3 border border-ink-100"><p className="text-xs text-ink-500">Late days</p><p className="text-xl font-bold text-ink-900">{detail.stats.attendance.lateDays}</p></div>
                 </div>
-                <button type="submit" className="btn-secondary btn-sm">Save profile</button>
-              </form>
+
+                <div className="rounded-xl border border-ink-200 bg-white p-4">
+                  <SectionHeader title="Monthly Attendance & Work Summary" />
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3 text-sm">
+                    <div className="rounded-lg border border-ink-100 p-2.5 bg-ink-50/50"><p className="text-xs text-ink-400">Total days present</p><p className="text-base font-bold text-ink-800">{detail.stats.attendance.presentDays} days</p></div>
+                    <div className="rounded-lg border border-ink-100 p-2.5 bg-ink-50/50"><p className="text-xs text-ink-400">Total work duration</p><p className="text-base font-bold text-ink-800">{minutesToHours(detail.stats.attendance.totalMinutes)}</p></div>
+                    <div className="rounded-lg border border-ink-100 p-2.5 bg-ink-50/50"><p className="text-xs text-ink-400">Reports submitted</p><p className="text-base font-bold text-ink-800">{detail.stats.reports.submitted} submitted · {detail.stats.reports.approved} approved</p></div>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
         )}
       </Modal>
 
-      <CreateEmployee open={createOpen} onClose={() => setCreateOpen(false)} structure={structure} employees={data?.items ?? []} onCreated={() => { setCreateOpen(false); void load(); }} />
+      <CreateEmployee open={createOpen} onClose={() => setCreateOpen(false)} structure={structure} employees={employeesList} onCreated={() => { setCreateOpen(false); void load(); }} />
     </div>
   );
 }

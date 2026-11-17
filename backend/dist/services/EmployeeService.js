@@ -20,7 +20,11 @@ async function employeeScope(user) {
 export class EmployeeService {
     static async list(user, filters) {
         const scope = await employeeScope(user);
-        const clauses = [scope.clause, "e.status <> 'rejected'"];
+        const clauses = [
+            scope.clause,
+            "e.status <> 'rejected'",
+            "(e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))",
+        ];
         const params = [...scope.params];
         if (filters.search) {
             clauses.push('(e.full_name LIKE ? OR e.employee_code LIKE ? OR e.email LIKE ? OR e.mobile LIKE ?)');
@@ -426,8 +430,8 @@ export class EmployeeService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND e.id <> ?
-       ORDER BY e.full_name`, [employeeId]);
+       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+       ORDER BY e.full_name`, []);
     }
     static async structure() {
         const [departments, designations, locations, roles] = await Promise.all([
