@@ -4,6 +4,7 @@ import { asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { TaskService } from '../services/TaskService.js';
 import { ProjectService } from '../services/ProjectService.js';
+import { DailyTaskService } from '../services/DailyTaskService.js';
 import { visibleEmployeeIds } from '../lib/scope.js';
 import { query } from '../db/index.js';
 export const tasksRouter = Router();
@@ -16,6 +17,7 @@ tasksRouter.get('/', requireAny('tasks.view.own', 'tasks.view.team', 'tasks.view
     const result = await TaskService.list(user, {
         status: req.query.status ? String(req.query.status) : undefined,
         priority: req.query.priority ? String(req.query.priority) : undefined,
+        timeSlot: req.query.timeSlot ? String(req.query.timeSlot) : undefined,
         assigneeId: req.query.assigneeId ? intParam(String(req.query.assigneeId), 'assigneeId') : undefined,
         departmentId: req.query.departmentId ? intParam(String(req.query.departmentId), 'departmentId') : undefined,
         projectId: req.query.projectId ? intParam(String(req.query.projectId), 'projectId') : undefined,
@@ -57,6 +59,44 @@ tasksRouter.post('/', requireAny('tasks.create'), asyncHandler(async (req, res) 
     });
     res.status(201).json(created);
 }));
+tasksRouter.post('/daily/generate', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({ employeeId: z.number().int().positive().optional() }), req.body);
+    const targetEmployeeId = body.employeeId ?? user.id;
+    const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user);
+    res.json(result);
+}));
+tasksRouter.get('/daily/dashboard', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const storeId = req.query.storeId ? intParam(String(req.query.storeId), 'storeId') : undefined;
+    const data = await DailyTaskService.getOperationalDashboard(user, storeId);
+    res.json(data);
+}));
+tasksRouter.get('/timeline', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    const date = req.query.date ? String(req.query.date) : undefined;
+    const checkpoints = await DailyTaskService.getTimelineCheckpoints(employeeId, date);
+    res.json({ checkpoints });
+}));
+tasksRouter.post('/timeline', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        timeSlot: z.string().min(2).max(32),
+        summary: z.string().min(3).max(4000),
+        issues: z.string().max(2000).optional(),
+        escalatedTo: z.number().int().positive().optional(),
+    }), req.body);
+    await DailyTaskService.submitTimelineCheckpoint(user.id, body);
+    res.json({ ok: true });
+}));
+tasksRouter.get('/performance', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    const date = req.query.date ? String(req.query.date) : undefined;
+    const score = await DailyTaskService.calculateDailyScore(employeeId, date);
+    res.json(score);
+}));
 tasksRouter.get('/:id', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     res.json(await TaskService.detail(id, currentUser(req)));
@@ -77,11 +117,17 @@ tasksRouter.post('/:id/action', asyncHandler(async (req, res) => {
             'reassign',
             'cancel',
             'reopen',
+            'verify',
+            'reject',
+            'escalate',
         ]),
         note: z.string().max(2000).optional(),
         progress: z.number().int().min(0).max(100).optional(),
         assigneeId: z.number().int().positive().optional(),
         completionNote: z.string().max(4000).optional(),
+        evidenceFileId: z.number().int().positive().optional(),
+        metricValue: z.number().optional(),
+        rejectionReason: z.string().max(2000).optional(),
     }), req.body);
     await TaskService.applyAction(id, body.action, user, body, {
         ip: clientIp(req),

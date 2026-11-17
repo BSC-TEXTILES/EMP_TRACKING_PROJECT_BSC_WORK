@@ -19,6 +19,7 @@ export const TASK_STATUSES = [
   'rejected',
   'overdue',
   'cancelled',
+  'escalated',
 ] as const;
 
 export const TASK_ACTIONS = [
@@ -33,6 +34,9 @@ export const TASK_ACTIONS = [
   'reassign',
   'cancel',
   'reopen',
+  'verify',
+  'reject',
+  'escalate',
 ] as const;
 
 export interface CreateTaskInput {
@@ -54,6 +58,12 @@ export interface CreateTaskInput {
   subtasks?: string[];
   attachmentIds?: number[];
   parentTaskId?: number | null;
+  timeSlot?: 'morning' | 'operations' | 'evening' | 'closing';
+  requiresEvidence?: boolean;
+  evidenceType?: string | null;
+  requiresMetric?: boolean;
+  metricLabel?: string | null;
+  metricUnit?: string | null;
 }
 
 interface TaskRow {
@@ -91,6 +101,15 @@ interface TaskRow {
   project_name?: string | null;
   assignee_names?: string | null;
   assignee_ids?: string | null;
+  time_slot?: string | null;
+  requires_evidence?: number | null;
+  evidence_type?: string | null;
+  evidence_file_id?: number | null;
+  requires_metric?: number | null;
+  metric_label?: string | null;
+  metric_value?: number | null;
+  metric_unit?: string | null;
+  verification_status?: string | null;
 }
 
 async function taskAccessClause(user: AuthUser): Promise<{ clause: string; params: unknown[] }> {
@@ -223,6 +242,7 @@ export class TaskService {
       dueFrom?: string;
       dueTo?: string;
       overdueOnly?: boolean;
+      timeSlot?: string;
       page?: number;
       pageSize?: number;
       view?: 'mine' | 'allocated' | 'all';
@@ -249,6 +269,10 @@ export class TaskService {
     if (filters.priority) {
       clauses.push('t.priority = ?');
       params.push(filters.priority);
+    }
+    if (filters.timeSlot) {
+      clauses.push('t.time_slot = ?');
+      params.push(filters.timeSlot);
     }
     if (filters.assigneeId) {
       clauses.push('EXISTS (SELECT 1 FROM task_assignments ta3 WHERE ta3.task_id = t.id AND ta3.employee_id = ?)');
@@ -338,6 +362,15 @@ export class TaskService {
       approvedAt: toIso(r.approved_at),
       rejectionReason: r.rejection_reason,
       createdAt: toIso(r.created_at),
+      timeSlot: r.time_slot ?? null,
+      requiresEvidence: Boolean(r.requires_evidence),
+      evidenceType: r.evidence_type ?? null,
+      evidenceFileId: r.evidence_file_id ? Number(r.evidence_file_id) : null,
+      requiresMetric: Boolean(r.requires_metric),
+      metricLabel: r.metric_label ?? null,
+      metricValue: r.metric_value !== null && r.metric_value !== undefined ? Number(r.metric_value) : null,
+      metricUnit: r.metric_unit ?? null,
+      verificationStatus: r.verification_status ?? 'unverified',
       isOverdue:
         Boolean(r.due_date) &&
         String(r.due_date) < today() &&
@@ -452,7 +485,15 @@ export class TaskService {
     taskId: number,
     action: string,
     user: AuthUser,
-    payload: { note?: string; progress?: number; assigneeId?: number; completionNote?: string },
+    payload: {
+      note?: string;
+      progress?: number;
+      assigneeId?: number;
+      completionNote?: string;
+      evidenceFileId?: number;
+      metricValue?: number;
+      rejectionReason?: string;
+    },
     context: { ip?: string; userAgent?: string },
   ): Promise<void> {
     const task = await TaskService.loadForAction(taskId);
@@ -568,9 +609,22 @@ export class TaskService {
             [payload.completionNote!.trim(), assignment!.id],
           );
           await conn.query(
-            "UPDATE tasks SET status = 'pending_approval', submitted_at = NOW(3), progress = 100, rejection_reason = NULL WHERE id = ?",
-            [taskId],
+            `UPDATE tasks SET 
+              status = 'pending_approval', 
+              submitted_at = NOW(3), 
+              progress = 100, 
+              rejection_reason = NULL,
+              evidence_file_id = COALESCE(?, evidence_file_id),
+              metric_value = COALESCE(?, metric_value)
+             WHERE id = ?`,
+            [payload.evidenceFileId ?? null, payload.metricValue ?? null, taskId],
           );
+          if (payload.evidenceFileId) {
+            await conn.query(
+              'INSERT IGNORE INTO task_attachments (task_id, file_id, uploaded_by) VALUES (?, ?, ?)',
+              [taskId, payload.evidenceFileId, user.id],
+            );
+          }
         });
         await NotificationService.notify({
           employeeIds: [Number(task.created_by), ...(task.manager_id ? [Number(task.manager_id)] : [])],
@@ -583,12 +637,15 @@ export class TaskService {
         });
         break;
       }
+      case 'verify':
       case 'approve': {
-        if (!isManager) throw ApiError.forbidden('Only the allocating manager can approve this task.');
-        if (task.status !== 'pending_approval') throw ApiError.badRequest('Only submitted tasks can be approved.');
+        if (!isManager) throw ApiError.forbidden('Only the allocating manager or supervisor can approve/verify this task.');
+        if (!['pending_approval', 'in_progress', 'completed'].includes(task.status)) {
+          throw ApiError.badRequest('Only submitted or in-progress tasks can be approved.');
+        }
         await transaction(async (conn) => {
           await conn.query(
-            "UPDATE tasks SET status = 'completed', progress = 100, completed_at = NOW(3), approved_at = NOW(3), approved_by = ? WHERE id = ?",
+            "UPDATE tasks SET status = 'completed', verification_status = 'verified', progress = 100, completed_at = COALESCE(completed_at, NOW(3)), approved_at = NOW(3), approved_by = ? WHERE id = ?",
             [user.id, taskId],
           );
           await conn.query("UPDATE task_assignments SET status = 'completed', completed_at = COALESCE(completed_at, NOW(3)) WHERE task_id = ?", [taskId]);
@@ -598,12 +655,65 @@ export class TaskService {
         await NotificationService.notify({
           employeeIds: assignees.map((a) => Number(a.employee_id)),
           type: 'task_update',
-          title: 'Task approved',
-          body: `Your work on "${task.title}" was approved.`,
+          title: 'Task verified & approved',
+          body: `Your work on "${task.title}" was verified and approved.`,
           link: `/tasks?task=${taskId}`,
           actorId: user.id,
         });
         await TaskService.createNextRecurrence(task, user);
+        break;
+      }
+      case 'reject': {
+        if (!isManager) throw ApiError.forbidden('Only the allocating manager or supervisor can reject this task.');
+        const reason = (payload.rejectionReason || payload.note || '').trim();
+        if (reason.length < 3) throw ApiError.badRequest('A rejection reason must be provided.');
+        await transaction(async (conn) => {
+          await conn.query(
+            "UPDATE tasks SET status = 'rejected', verification_status = 'rejected', rejection_reason = ?, submitted_at = NULL, progress = 50 WHERE id = ?",
+            [reason, taskId],
+          );
+          await conn.query("UPDATE task_assignments SET status = 'rejected' WHERE task_id = ?", [taskId]);
+          await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
+            taskId,
+            user.id,
+            `Task Rejected: ${reason}`,
+          ]);
+        });
+        const assignees = await query<{ employee_id: number }>('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
+        await NotificationService.notify({
+          employeeIds: assignees.map((a) => Number(a.employee_id)),
+          type: 'task_update',
+          title: 'Task rejected - correction needed',
+          body: `"${task.title}" was rejected: ${reason}`,
+          link: `/tasks?task=${taskId}`,
+          priority: 'high',
+          actorId: user.id,
+        });
+        break;
+      }
+      case 'escalate': {
+        const escalationNote = (payload.note || 'Task escalated for immediate supervisor resolution.').trim();
+        await transaction(async (conn) => {
+          await conn.query(
+            "UPDATE tasks SET status = 'escalated', verification_status = 'escalated', priority = 'critical' WHERE id = ?",
+            [taskId],
+          );
+          await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
+            taskId,
+            user.id,
+            `CRITICAL ESCALATION: ${escalationNote}`,
+          ]);
+        });
+        const managerIds = [Number(task.created_by), ...(task.manager_id ? [Number(task.manager_id)] : [])];
+        await NotificationService.notify({
+          employeeIds: managerIds,
+          type: 'task_update',
+          title: 'CRITICAL: Task Escalated',
+          body: `"${task.title}" was escalated by ${user.fullName}: ${escalationNote}`,
+          link: `/tasks?task=${taskId}`,
+          priority: 'critical',
+          actorId: user.id,
+        });
         break;
       }
       case 'request_changes': {

@@ -16,6 +16,7 @@ export const TASK_STATUSES = [
     'rejected',
     'overdue',
     'cancelled',
+    'escalated',
 ];
 export const TASK_ACTIONS = [
     'accept',
@@ -29,6 +30,9 @@ export const TASK_ACTIONS = [
     'reassign',
     'cancel',
     'reopen',
+    'verify',
+    'reject',
+    'escalate',
 ];
 async function taskAccessClause(user) {
     if (user.permissions.includes('tasks.view.all')) {
@@ -163,6 +167,10 @@ export class TaskService {
             clauses.push('t.priority = ?');
             params.push(filters.priority);
         }
+        if (filters.timeSlot) {
+            clauses.push('t.time_slot = ?');
+            params.push(filters.timeSlot);
+        }
         if (filters.assigneeId) {
             clauses.push('EXISTS (SELECT 1 FROM task_assignments ta3 WHERE ta3.task_id = t.id AND ta3.employee_id = ?)');
             params.push(filters.assigneeId);
@@ -244,6 +252,15 @@ export class TaskService {
             approvedAt: toIso(r.approved_at),
             rejectionReason: r.rejection_reason,
             createdAt: toIso(r.created_at),
+            timeSlot: r.time_slot ?? null,
+            requiresEvidence: Boolean(r.requires_evidence),
+            evidenceType: r.evidence_type ?? null,
+            evidenceFileId: r.evidence_file_id ? Number(r.evidence_file_id) : null,
+            requiresMetric: Boolean(r.requires_metric),
+            metricLabel: r.metric_label ?? null,
+            metricValue: r.metric_value !== null && r.metric_value !== undefined ? Number(r.metric_value) : null,
+            metricUnit: r.metric_unit ?? null,
+            verificationStatus: r.verification_status ?? 'unverified',
             isOverdue: Boolean(r.due_date) &&
                 String(r.due_date) < today() &&
                 !['completed', 'cancelled', 'rejected'].includes(r.status),
@@ -423,7 +440,17 @@ export class TaskService {
                 await transaction(async (conn) => {
                     await closeOpenLog(conn, user.id);
                     await conn.query(`UPDATE task_assignments SET status = 'pending_approval', completed_at = NOW(3), completion_note = ? WHERE id = ?`, [payload.completionNote.trim(), assignment.id]);
-                    await conn.query("UPDATE tasks SET status = 'pending_approval', submitted_at = NOW(3), progress = 100, rejection_reason = NULL WHERE id = ?", [taskId]);
+                    await conn.query(`UPDATE tasks SET 
+              status = 'pending_approval', 
+              submitted_at = NOW(3), 
+              progress = 100, 
+              rejection_reason = NULL,
+              evidence_file_id = COALESCE(?, evidence_file_id),
+              metric_value = COALESCE(?, metric_value)
+             WHERE id = ?`, [payload.evidenceFileId ?? null, payload.metricValue ?? null, taskId]);
+                    if (payload.evidenceFileId) {
+                        await conn.query('INSERT IGNORE INTO task_attachments (task_id, file_id, uploaded_by) VALUES (?, ?, ?)', [taskId, payload.evidenceFileId, user.id]);
+                    }
                 });
                 await NotificationService.notify({
                     employeeIds: [Number(task.created_by), ...(task.manager_id ? [Number(task.manager_id)] : [])],
@@ -436,13 +463,15 @@ export class TaskService {
                 });
                 break;
             }
+            case 'verify':
             case 'approve': {
                 if (!isManager)
-                    throw ApiError.forbidden('Only the allocating manager can approve this task.');
-                if (task.status !== 'pending_approval')
-                    throw ApiError.badRequest('Only submitted tasks can be approved.');
+                    throw ApiError.forbidden('Only the allocating manager or supervisor can approve/verify this task.');
+                if (!['pending_approval', 'in_progress', 'completed'].includes(task.status)) {
+                    throw ApiError.badRequest('Only submitted or in-progress tasks can be approved.');
+                }
                 await transaction(async (conn) => {
-                    await conn.query("UPDATE tasks SET status = 'completed', progress = 100, completed_at = NOW(3), approved_at = NOW(3), approved_by = ? WHERE id = ?", [user.id, taskId]);
+                    await conn.query("UPDATE tasks SET status = 'completed', verification_status = 'verified', progress = 100, completed_at = COALESCE(completed_at, NOW(3)), approved_at = NOW(3), approved_by = ? WHERE id = ?", [user.id, taskId]);
                     await conn.query("UPDATE task_assignments SET status = 'completed', completed_at = COALESCE(completed_at, NOW(3)) WHERE task_id = ?", [taskId]);
                     await closeOpenLog(conn, user.id);
                 });
@@ -450,12 +479,61 @@ export class TaskService {
                 await NotificationService.notify({
                     employeeIds: assignees.map((a) => Number(a.employee_id)),
                     type: 'task_update',
-                    title: 'Task approved',
-                    body: `Your work on "${task.title}" was approved.`,
+                    title: 'Task verified & approved',
+                    body: `Your work on "${task.title}" was verified and approved.`,
                     link: `/tasks?task=${taskId}`,
                     actorId: user.id,
                 });
                 await TaskService.createNextRecurrence(task, user);
+                break;
+            }
+            case 'reject': {
+                if (!isManager)
+                    throw ApiError.forbidden('Only the allocating manager or supervisor can reject this task.');
+                const reason = (payload.rejectionReason || payload.note || '').trim();
+                if (reason.length < 3)
+                    throw ApiError.badRequest('A rejection reason must be provided.');
+                await transaction(async (conn) => {
+                    await conn.query("UPDATE tasks SET status = 'rejected', verification_status = 'rejected', rejection_reason = ?, submitted_at = NULL, progress = 50 WHERE id = ?", [reason, taskId]);
+                    await conn.query("UPDATE task_assignments SET status = 'rejected' WHERE task_id = ?", [taskId]);
+                    await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
+                        taskId,
+                        user.id,
+                        `Task Rejected: ${reason}`,
+                    ]);
+                });
+                const assignees = await query('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
+                await NotificationService.notify({
+                    employeeIds: assignees.map((a) => Number(a.employee_id)),
+                    type: 'task_update',
+                    title: 'Task rejected - correction needed',
+                    body: `"${task.title}" was rejected: ${reason}`,
+                    link: `/tasks?task=${taskId}`,
+                    priority: 'high',
+                    actorId: user.id,
+                });
+                break;
+            }
+            case 'escalate': {
+                const escalationNote = (payload.note || 'Task escalated for immediate supervisor resolution.').trim();
+                await transaction(async (conn) => {
+                    await conn.query("UPDATE tasks SET status = 'escalated', verification_status = 'escalated', priority = 'critical' WHERE id = ?", [taskId]);
+                    await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
+                        taskId,
+                        user.id,
+                        `CRITICAL ESCALATION: ${escalationNote}`,
+                    ]);
+                });
+                const managerIds = [Number(task.created_by), ...(task.manager_id ? [Number(task.manager_id)] : [])];
+                await NotificationService.notify({
+                    employeeIds: managerIds,
+                    type: 'task_update',
+                    title: 'CRITICAL: Task Escalated',
+                    body: `"${task.title}" was escalated by ${user.fullName}: ${escalationNote}`,
+                    link: `/tasks?task=${taskId}`,
+                    priority: 'critical',
+                    actorId: user.id,
+                });
                 break;
             }
             case 'request_changes': {

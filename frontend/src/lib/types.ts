@@ -83,6 +83,15 @@ export interface TaskSummary {
   totalLoggedMinutes?: number;
   instructions?: string | null;
   remarks?: string | null;
+  timeSlot?: 'morning' | 'operations' | 'evening' | 'closing' | null;
+  requiresEvidence?: boolean;
+  evidenceType?: string | null;
+  evidenceFileId?: number | null;
+  requiresMetric?: boolean;
+  metricLabel?: string | null;
+  metricValue?: number | null;
+  metricUnit?: string | null;
+  verificationStatus?: string | null;
   assignments?: {
     id: number;
     employeeId: number;
