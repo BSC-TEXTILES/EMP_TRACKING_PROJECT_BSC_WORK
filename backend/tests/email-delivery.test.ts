@@ -121,6 +121,8 @@ describe('mailbox email delivery', () => {
     const message = captured[0];
     expect(message.to.join(' ')).toContain(recipientEmail);
     expect(message.data).toContain(subject);
+    // The real content must arrive, not an empty template (regression: JSON payload was dropped).
+    expect(message.data).toContain('Please find the figures attached.');
     expect(message.data).toMatch(/filename="?figures\.csv/);
     expect(message.data).not.toContain('spoofed.exe');
 

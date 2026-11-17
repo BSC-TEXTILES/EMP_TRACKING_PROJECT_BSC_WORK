@@ -148,7 +148,10 @@ async function deliver(row: {
 
   let data: EmailTemplateData = {};
   try {
-    data = row.payload ? (JSON.parse(row.payload) as EmailTemplateData) : {};
+    // payload is a JSON column: mysql2 usually returns it already parsed. Parsing
+    // an object threw here and silently emptied every queued email's content.
+    const raw = row.payload as unknown;
+    data = raw == null ? {} : typeof raw === 'string' ? (JSON.parse(raw) as EmailTemplateData) : (raw as EmailTemplateData);
   } catch {
     data = {};
   }

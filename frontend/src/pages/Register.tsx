@@ -197,16 +197,6 @@ export default function Register() {
                     ))}
                   </select>
                 </Field>
-                <Field label="Employment type">
-                  <select className="input" value={form.employmentType} onChange={(event) => setForm({ ...form, employmentType: event.target.value })}>
-                    <option value="full_time">Full time</option>
-                    <option value="part_time">Part time</option>
-                    <option value="contract">Contract</option>
-                    <option value="intern">Intern</option>
-                    <option value="probation">Probation</option>
-                  </select>
-                </Field>
-                <div className="hidden sm:block" />
                 <Field label="Password" hint="At least 10 characters with upper, lower, number and symbol." required>
                   <input
                     className="input"
