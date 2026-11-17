@@ -204,18 +204,18 @@ async function ensureDatabaseReady(): Promise<void> {
           }
 
           // Safe foreign-key nullification and reassignment to Gagan C B
-          try { await dbConn.query('UPDATE employees SET manager_id = NULL'); } catch {}
-          try { await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE projects SET manager_id = ?, created_by = ?', [gaganId, gaganId]); } catch {}
-          try { await dbConn.query('UPDATE tasks SET created_by = ?, manager_id = ?, approved_by = ?', [gaganId, gaganId, gaganId]); } catch {}
-          try { await dbConn.query('UPDATE task_assignments SET assigned_by = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE daily_reports SET reviewed_by = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE tickets SET requester_id = ?, assignee_id = ?', [gaganId, gaganId]); } catch {}
-          try { await dbConn.query('UPDATE conversations SET created_by = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE meetings SET host_id = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE files SET owner_id = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE announcements SET created_by = ?', [gaganId]); } catch {}
-          try { await dbConn.query('UPDATE leave_requests SET reviewed_by = ?, hr_approver_id = ?', [gaganId, gaganId]); } catch {}
+          try { await dbConn.query('UPDATE employees SET manager_id = NULL'); } catch { }
+          try { await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE projects SET manager_id = ?, created_by = ?', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('UPDATE tasks SET created_by = ?, manager_id = ?, approved_by = ?', [gaganId, gaganId, gaganId]); } catch { }
+          try { await dbConn.query('UPDATE task_assignments SET assigned_by = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE daily_reports SET reviewed_by = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE tickets SET requester_id = ?, assignee_id = ?', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('UPDATE conversations SET created_by = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE meetings SET host_id = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE files SET owner_id = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE announcements SET created_by = ?', [gaganId]); } catch { }
+          try { await dbConn.query('UPDATE leave_requests SET reviewed_by = ?, hr_approver_id = ?', [gaganId, gaganId]); } catch { }
 
           // Delete all records of non-Gagan employees across all dependent tables
           const tablesWithEmpId = [
@@ -272,14 +272,14 @@ async function ensureDatabaseReady(): Promise<void> {
             }
           }
 
-          try { await dbConn.query('DELETE FROM task_comments WHERE author_id <> ?', [gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM tasks WHERE created_by <> ? AND NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.employee_id = ?)', [gaganId, gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM ticket_comments WHERE author_id <> ?', [gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM tickets WHERE requester_id <> ?', [gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM messages WHERE sender_id <> ?', [gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM internal_emails WHERE sender_id <> ? AND recipient_id <> ?', [gaganId, gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM activity_audit_logs WHERE actor_id <> ?', [gaganId]); } catch {}
-          try { await dbConn.query('DELETE FROM calls WHERE caller_id <> ? AND callee_id <> ?', [gaganId, gaganId]); } catch {}
+          try { await dbConn.query('DELETE FROM task_comments WHERE author_id <> ?', [gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM tasks WHERE created_by <> ? AND NOT EXISTS (SELECT 1 FROM task_assignments ta WHERE ta.task_id = tasks.id AND ta.employee_id = ?)', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM ticket_comments WHERE author_id <> ?', [gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM tickets WHERE requester_id <> ?', [gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM messages WHERE sender_id <> ?', [gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM internal_emails WHERE sender_id <> ? AND recipient_id <> ?', [gaganId, gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM activity_audit_logs WHERE actor_id <> ?', [gaganId]); } catch { }
+          try { await dbConn.query('DELETE FROM calls WHERE caller_id <> ? AND callee_id <> ?', [gaganId, gaganId]); } catch { }
 
           // Delete all other non-Gagan employees
           await dbConn.query('DELETE FROM employees WHERE id <> ?', [gaganId]);
