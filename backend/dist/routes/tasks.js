@@ -187,13 +187,17 @@ tasksRouter.get('/meta/assignable', requireAny('tasks.assign'), asyncHandler(asy
     const ids = await visibleEmployeeIds(user, 'tasks');
     if (ids === null) {
         const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
-         LEFT JOIN designations dg ON dg.id = e.designation_id WHERE e.status = 'active' ORDER BY e.full_name`);
+         LEFT JOIN designations dg ON dg.id = e.designation_id
+         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+         ORDER BY e.full_name`);
         res.json({ employees: rows });
         return;
     }
     const rows = await query(`SELECT e.id, e.full_name, dg.title AS designation_title, e.manager_id FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
-       WHERE e.status = 'active' AND e.id IN (${ids.map(() => '?').join(',') || '0'}) ORDER BY e.full_name`, ids);
+       WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+         AND e.id IN (${ids.map(() => '?').join(',') || '0'})
+       ORDER BY e.full_name`, ids);
     res.json({ employees: rows });
 }));
 //# sourceMappingURL=tasks.js.map

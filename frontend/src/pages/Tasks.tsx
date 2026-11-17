@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, downloadReport, errorMessage, fileUrl } from '../lib/api';
 import { useApi, useDebounced, useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
-import { Badge, Card, EmptyState, Field, Modal, PageHeader, Pagination, PriorityBadge, ProgressBar, SectionHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
+import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, Pagination, PriorityBadge, ProgressBar, SectionHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, minutesToHours, titleize } from '../lib/format';
 import type { PickerEmployee, ProjectSummary, TaskSummary } from '../lib/types';
@@ -1236,14 +1236,33 @@ function CreateTaskModal({
   const [assigneeSearch, setAssigneeSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Retain only Gagan C B in authorized assignees
+  const gaganAssignees = useMemo(() => {
+    const list = assignees.filter((e) => e.full_name.toLowerCase().includes('gagan'));
+    return list.length > 0 ? list : assignees;
+  }, [assignees]);
+
+  // Pre-select Gagan C B and initialize today's date on open
+  useEffect(() => {
+    if (open) {
+      if (!form.dueDate) {
+        setForm((prev) => ({ ...prev, dueDate: new Date().toISOString().slice(0, 10) }));
+      }
+      if (selected.length === 0 && gaganAssignees.length > 0) {
+        setSelected([gaganAssignees[0].id]);
+      }
+    }
+  }, [open, gaganAssignees, form.dueDate, selected.length]);
+
   const term = assigneeSearch.trim().toLowerCase();
   const filteredAssignees = term
-    ? assignees.filter((employee) =>
+    ? gaganAssignees.filter((employee) =>
         [employee.full_name, employee.employee_code, employee.designation_title, employee.department_name]
           .filter(Boolean)
           .some((value) => String(value).toLowerCase().includes(term)),
       )
-    : assignees;
+    : gaganAssignees;
+
   const allFilteredSelected = filteredAssignees.length > 0 && filteredAssignees.every((employee) => selected.includes(employee.id));
   const toggleFiltered = () => {
     const ids = filteredAssignees.map((employee) => employee.id);
@@ -1255,7 +1274,7 @@ function CreateTaskModal({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected.length === 0) {
-      toast.error('Select at least one employee to allocate this task to.');
+      toast.error('Select at least one authorized employee to allocate this task to.');
       return;
     }
     setSubmitting(true);
@@ -1278,7 +1297,7 @@ function CreateTaskModal({
           .map((line) => line.trim())
           .filter(Boolean),
       });
-      toast.success('Task allocated and assignees notified.');
+      toast.success('Task allocated and assignee notified.');
       setForm({ ...form, title: '', description: '', instructions: '', subtasks: '' });
       setSelected([]);
       setAssigneeSearch('');
@@ -1290,113 +1309,279 @@ function CreateTaskModal({
     }
   };
 
+  const timeSlots = [
+    { id: 'morning', label: 'Morning Slot', hours: '09:30 - 11:00 AM', icon: '🌅', desc: 'Opening, counter setup & cash float' },
+    { id: 'operations', label: 'Store Operations', hours: '11:00 AM - 05:00 PM', icon: '🏬', desc: 'Active floor, customer service & sales' },
+    { id: 'evening', label: 'Evening Slot', hours: '05:00 - 08:00 PM', icon: '🌇', desc: 'Peak footfall, restock & register' },
+    { id: 'closing', label: 'Night Closing', hours: '08:00 - 09:30 PM', icon: '🔒', desc: 'Day-end tally, security & closing' },
+  ];
+
+  const priorities = [
+    { id: 'low', label: 'Low', badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+    { id: 'medium', label: 'Medium', badgeClass: 'bg-amber-50 text-amber-700 border-amber-200' },
+    { id: 'high', label: 'High', badgeClass: 'bg-orange-50 text-orange-700 border-orange-200' },
+    { id: 'critical', label: 'Urgent', badgeClass: 'bg-rose-50 text-rose-700 border-rose-200' },
+  ];
+
+  const durationPresets = [30, 60, 120, 180, 240];
+
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="Allocate a task"
-      description="Assignees receive a notification immediately and appear in their task list."
-      size="lg"
+      title="Allocate Work Session Task"
+      description="Create, schedule and allocate workforce tasks directly to authorized personnel."
+      size="xl"
       footer={
-        <>
-          <button type="button" className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" form="create-task-form" className="btn-primary" disabled={submitting}>
-            {submitting ? 'Allocating…' : 'Allocate task'}
-          </button>
-        </>
+        <div className="flex w-full items-center justify-between gap-3">
+          <div className="text-xs text-ink-500">
+            {selected.length === 1 ? '1 team member assigned' : `${selected.length} team members assigned`}
+          </div>
+          <div className="flex items-center gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={submitting}>
+              Cancel
+            </button>
+            <button type="submit" form="create-task-form" className="btn-primary inline-flex items-center gap-2" disabled={submitting}>
+              <Icon name="check" size={16} />
+              <span>{submitting ? 'Allocating task…' : 'Allocate task'}</span>
+            </button>
+          </div>
+        </div>
       }
     >
-      <form id="create-task-form" onSubmit={submit} className="space-y-4">
-        <Field label="Task title" required>
-          <input className="input" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} minLength={3} required />
-        </Field>
-        <Field label="Description">
-          <textarea className="input min-h-[80px]" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="SOP Time Slot">
-            <select className="input" value={form.timeSlot} onChange={(event) => setForm({ ...form, timeSlot: event.target.value })}>
-              <option value="morning">Morning (09:30 - 11:00 AM)</option>
-              <option value="operations">Store Operations (11:00 AM - 05:00 PM)</option>
-              <option value="evening">Evening (05:00 - 08:00 PM)</option>
-              <option value="closing">Night Closing (08:00 - 09:30 PM)</option>
-            </select>
-          </Field>
-          <Field label="Priority">
-            <select className="input" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })}>
-              {['low', 'medium', 'high', 'critical'].map((value) => (
-                <option key={value} value={value}>
-                  {titleize(value)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Category">
-            <input className="input" value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })} />
-          </Field>
-          <Field label="Start / due date" required>
+      <form id="create-task-form" onSubmit={submit} className="space-y-5">
+        {/* Card 1: Task Information */}
+        <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-2xs space-y-4">
+          <div className="flex items-center justify-between border-b border-ink-100 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">1</span>
+              <p className="text-sm font-bold text-ink-900">Task Information & Deliverables</p>
+            </div>
+            <span className="text-xs text-ink-400">Core requirements</span>
+          </div>
+
+          <Field label="Task title" hint="Clear, actionable title for the employee" required>
             <input
-              type="date"
-              className="input"
-              value={form.dueDate}
-              onChange={(event) => setForm({ ...form, dueDate: event.target.value })}
+              className="input font-medium text-ink-900"
+              placeholder="e.g. Daily Store Opening Checklist & Register Setup"
+              value={form.title}
+              onChange={(event) => setForm({ ...form, title: event.target.value })}
+              minLength={3}
               required
             />
           </Field>
-          <Field label="Due time">
-            <input type="time" className="input" value={form.dueTime} onChange={(event) => setForm({ ...form, dueTime: event.target.value })} />
-          </Field>
-          <Field label="Estimated duration (minutes)">
-            <input
-              type="number"
-              min={15}
-              step={15}
-              className="input"
-              value={form.estimatedMinutes}
-              onChange={(event) => setForm({ ...form, estimatedMinutes: Number(event.target.value) })}
+
+          <Field label="Description">
+            <textarea
+              className="input min-h-[74px] text-sm"
+              placeholder="Specify the background, required standards, and key objectives for this work session..."
+              value={form.description}
+              onChange={(event) => setForm({ ...form, description: event.target.value })}
             />
           </Field>
-          <Field label="Project">
-            <select className="input" value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value })}>
-              <option value="">No project</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Recurrence">
-            <select className="input" value={form.recurrence} onChange={(event) => setForm({ ...form, recurrence: event.target.value })}>
-              <option value="none">One-off task</option>
-              <option value="daily">Repeat daily</option>
-              <option value="weekly">Repeat weekly</option>
-              <option value="monthly">Repeat monthly</option>
-            </select>
+
+          <Field label="Action Checklist / Subtasks" hint="Optional: enter checklist milestones (one per line)">
+            <textarea
+              className="input font-mono text-xs min-h-[64px]"
+              placeholder="Inspect storefront visual displays&#10;Verify cash float reconciliation&#10;Submit opening checkpoint report"
+              value={form.subtasks}
+              onChange={(event) => setForm({ ...form, subtasks: event.target.value })}
+            />
           </Field>
         </div>
 
-        <div>
-          <div className="flex items-end justify-between gap-2">
-            <span className="label mb-0">Assign to (reporting structure only) *</span>
-            <span className="text-xs font-medium text-ink-500">{selected.length} selected</span>
+        {/* Card 2: SOP Timing, Priority & Duration */}
+        <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-2xs space-y-4">
+          <div className="flex items-center justify-between border-b border-ink-100 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">2</span>
+              <p className="text-sm font-bold text-ink-900">SOP Time Slot & Priority</p>
+            </div>
+            <span className="text-xs text-ink-400">Schedule & timing</span>
           </div>
 
-          <div className="relative mt-1.5">
+          <div>
+            <label className="label mb-2">Select SOP Time Slot</label>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {timeSlots.map((slot) => {
+                const isSelected = form.timeSlot === slot.id;
+                return (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, timeSlot: slot.id })}
+                    className={`flex flex-col rounded-lg border p-3 text-left transition-all ${
+                      isSelected
+                        ? 'border-brand-600 bg-brand-50/70 shadow-xs ring-1 ring-brand-600'
+                        : 'border-ink-200 bg-white hover:border-brand-300 hover:bg-brand-50/20'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-lg">{slot.icon}</span>
+                      {isSelected && (
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand-600 text-white">
+                          <Icon name="check" size={10} />
+                        </span>
+                      )}
+                    </div>
+                    <p className={`mt-1.5 text-xs font-bold ${isSelected ? 'text-brand-900' : 'text-ink-800'}`}>
+                      {slot.label}
+                    </p>
+                    <p className="text-[11px] font-medium text-ink-500 font-mono">{slot.hours}</p>
+                    <p className="mt-1 text-[10px] text-ink-400 line-clamp-1">{slot.desc}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="label mb-2">Priority Level</label>
+            <div className="flex flex-wrap gap-2">
+              {priorities.map((p) => {
+                const isSelected = form.priority === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, priority: p.id })}
+                    className={`flex items-center gap-1.5 rounded-full border px-3.5 py-1 text-xs font-semibold transition-all ${
+                      isSelected
+                        ? `${p.badgeClass} ring-2 ring-brand-500 ring-offset-1 shadow-2xs`
+                        : 'border-ink-200 bg-white text-ink-600 hover:border-ink-300'
+                    }`}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${isSelected ? 'bg-current' : 'bg-ink-300'}`} />
+                    <span>{p.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Due date" required>
+              <input
+                type="date"
+                className="input"
+                value={form.dueDate}
+                onChange={(event) => setForm({ ...form, dueDate: event.target.value })}
+                required
+              />
+            </Field>
+
+            <Field label="Due time">
+              <input
+                type="time"
+                className="input"
+                value={form.dueTime}
+                onChange={(event) => setForm({ ...form, dueTime: event.target.value })}
+              />
+            </Field>
+
+            <div>
+              <Field label="Estimated duration (minutes)">
+                <input
+                  type="number"
+                  min={15}
+                  step={15}
+                  className="input"
+                  value={form.estimatedMinutes}
+                  onChange={(event) => setForm({ ...form, estimatedMinutes: Number(event.target.value) })}
+                />
+              </Field>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {durationPresets.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setForm({ ...form, estimatedMinutes: m })}
+                    className={`rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                      form.estimatedMinutes === m ? 'bg-brand-600 text-white' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
+                    }`}
+                  >
+                    {m}m
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Project & Classification */}
+        <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-2xs space-y-4">
+          <div className="flex items-center justify-between border-b border-ink-100 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">3</span>
+              <p className="text-sm font-bold text-ink-900">Project, Category & Recurrence</p>
+            </div>
+            <span className="text-xs text-ink-400">Classification</span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Category">
+              <input
+                className="input"
+                value={form.category}
+                onChange={(event) => setForm({ ...form, category: event.target.value })}
+                placeholder="Retail Store Ops"
+              />
+            </Field>
+
+            <Field label="Linked Project">
+              <select className="input" value={form.projectId} onChange={(event) => setForm({ ...form, projectId: event.target.value })}>
+                <option value="">No linked project</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Recurrence">
+              <select className="input" value={form.recurrence} onChange={(event) => setForm({ ...form, recurrence: event.target.value })}>
+                <option value="none">One-off task</option>
+                <option value="daily">Repeat daily</option>
+                <option value="weekly">Repeat weekly</option>
+                <option value="monthly">Repeat monthly</option>
+              </select>
+            </Field>
+          </div>
+        </div>
+
+        {/* Card 4: Assignee Allocation */}
+        <div className="rounded-xl border border-brand-200 bg-white p-4 shadow-2xs space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-brand-100 pb-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-600 text-xs font-bold text-white">4</span>
+              <p className="text-sm font-bold text-ink-900">Authorized Assignee</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-semibold text-brand-700 border border-brand-200">
+                {selected.length} employee selected
+              </span>
+              {filteredAssignees.length > 1 && (
+                <button type="button" className="text-xs font-medium text-brand-700 hover:underline" onClick={toggleFiltered}>
+                  {allFilteredSelected ? 'Unselect all' : 'Select all'}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="relative">
             <Icon name="search" size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
             <input
-              className="input py-1.5 pl-9 pr-9 text-sm"
+              className="input py-2 pl-9 pr-9 text-sm"
               value={assigneeSearch}
               onChange={(event) => setAssigneeSearch(event.target.value)}
-              placeholder="Search by name, employee ID, designation or department…"
+              placeholder="Search employee by name, ID or role…"
               aria-label="Search assignees"
             />
             {assigneeSearch && (
               <button
                 type="button"
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
                 onClick={() => setAssigneeSearch('')}
                 aria-label="Clear assignee search"
               >
@@ -1405,62 +1590,78 @@ function CreateTaskModal({
             )}
           </div>
 
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-ink-500">
-            <span>
-              {filteredAssignees.length} of {assignees.length} shown
-            </span>
-            <div className="flex items-center gap-2">
-              {filteredAssignees.length > 0 && (
-                <button type="button" className="font-medium text-brand-700 hover:underline" onClick={toggleFiltered}>
-                  {allFilteredSelected ? 'Unselect shown' : 'Select all shown'}
-                </button>
-              )}
-              {selected.length > 0 && (
-                <button type="button" className="font-medium text-ink-500 hover:underline" onClick={() => setSelected([])}>
-                  Clear selection
-                </button>
-              )}
-            </div>
-          </div>
+          <div className="space-y-2">
+            {filteredAssignees.length === 0 ? (
+              <p className="p-3 text-center text-xs text-ink-500">No matching employee found.</p>
+            ) : (
+              filteredAssignees.map((employee) => {
+                const isChecked = selected.includes(employee.id);
+                return (
+                  <button
+                    key={employee.id}
+                    type="button"
+                    onClick={() => {
+                      setSelected((prev) =>
+                        isChecked ? prev.filter((id) => id !== employee.id) : [...prev, employee.id],
+                      );
+                    }}
+                    className={`flex w-full items-center justify-between rounded-xl border p-3 text-left transition-all ${
+                      isChecked
+                        ? 'border-brand-600 bg-brand-50/60 shadow-2xs ring-1 ring-brand-500'
+                        : 'border-ink-200 bg-white hover:border-brand-300 hover:bg-ink-50/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Avatar name={employee.full_name} size={40} />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-ink-900">{employee.full_name}</p>
+                          {employee.employee_code && (
+                            <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-mono font-medium text-ink-600">
+                              {employee.employee_code}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-ink-500">
+                          {employee.designation_title ?? 'Store Manager'}
+                          {employee.department_name ? ` · ${employee.department_name}` : ''}
+                        </p>
+                      </div>
+                    </div>
 
-          <div className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border border-ink-300 p-2">
-            {assignees.length === 0 && <p className="p-2 text-sm text-ink-500">No employees available in your reporting structure.</p>}
-            {assignees.length > 0 && filteredAssignees.length === 0 && (
-              <p className="p-2 text-sm text-ink-500">No one in your reporting structure matches “{assigneeSearch.trim()}”.</p>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`flex h-5 w-5 items-center justify-center rounded-md border transition-colors ${
+                          isChecked ? 'border-brand-600 bg-brand-600 text-white' : 'border-ink-300 bg-white'
+                        }`}
+                      >
+                        {isChecked && <Icon name="check" size={13} />}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })
             )}
-            {filteredAssignees.map((employee) => (
-              <label key={employee.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-ink-50">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4"
-                  checked={selected.includes(employee.id)}
-                  onChange={(event) =>
-                    setSelected((prev) => (event.target.checked ? [...prev, employee.id] : prev.filter((id) => id !== employee.id)))
-                  }
-                />
-                <span className="min-w-0 flex-1 truncate text-ink-800">
-                  {employee.full_name}
-                  {employee.employee_code && <span className="ml-1.5 text-xs text-ink-400">{employee.employee_code}</span>}
-                </span>
-                <span className="max-w-[45%] truncate text-xs text-ink-400">{employee.designation_title ?? employee.department_name ?? ''}</span>
-              </label>
-            ))}
           </div>
 
           {selected.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Selected assignees">
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-xs text-ink-500">Allocated to:</span>
               {selected.map((id) => {
-                const employee = assignees.find((item) => item.id === id);
+                const employee = gaganAssignees.find((item) => item.id === id);
                 return (
-                  <span key={id} className="inline-flex items-center gap-1 rounded-full bg-brand-50 py-0.5 pl-2.5 pr-1 text-xs font-medium text-brand-800">
-                    {employee?.full_name ?? `Employee #${id}`}
+                  <span
+                    key={id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-brand-200 bg-brand-50 px-2.5 py-0.5 text-xs font-semibold text-brand-800 shadow-2xs"
+                  >
+                    <span>{employee?.full_name ?? `Employee #${id}`}</span>
                     <button
                       type="button"
-                      className="rounded-full p-0.5 hover:bg-brand-100"
+                      className="rounded-full p-0.5 hover:bg-brand-200/60"
                       onClick={() => setSelected((prev) => prev.filter((value) => value !== id))}
-                      aria-label={`Remove ${employee?.full_name ?? id}`}
+                      aria-label="Remove"
                     >
-                      <Icon name="close" size={12} />
+                      <Icon name="close" size={11} />
                     </button>
                   </span>
                 );
@@ -1469,12 +1670,17 @@ function CreateTaskModal({
           )}
         </div>
 
-        <Field label="Instructions">
-          <textarea className="input min-h-[70px]" value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} />
-        </Field>
-        <Field label="Checklist" hint="One item per line">
-          <textarea className="input min-h-[70px]" value={form.subtasks} onChange={(event) => setForm({ ...form, subtasks: event.target.value })} />
-        </Field>
+        {/* Card 5: Operational Instructions */}
+        <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-2xs">
+          <Field label="Special Operational Instructions" hint="Optional compliance notes, SOP safety guidelines, or manager remarks">
+            <textarea
+              className="input min-h-[64px] text-sm"
+              placeholder="e.g. Ensure physical verification of high-value garments before closing the checkout counter..."
+              value={form.instructions}
+              onChange={(event) => setForm({ ...form, instructions: event.target.value })}
+            />
+          </Field>
+        </div>
       </form>
     </Modal>
   );
