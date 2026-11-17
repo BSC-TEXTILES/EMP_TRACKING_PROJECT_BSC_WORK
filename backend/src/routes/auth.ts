@@ -50,6 +50,13 @@ authRouter.get(
           password,
         },
         {
+          role: 'HR Manager',
+          employeeId: code,
+          name,
+          email: 'hr@bsctextiles.in',
+          password,
+        },
+        {
           role: 'Store Manager',
           employeeId: code,
           name,

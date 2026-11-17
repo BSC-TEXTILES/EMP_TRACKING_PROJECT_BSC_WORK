@@ -41,6 +41,13 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
                 password,
             },
             {
+                role: 'HR Manager',
+                employeeId: code,
+                name,
+                email: 'hr@bsctextiles.in',
+                password,
+            },
+            {
                 role: 'Store Manager',
                 employeeId: code,
                 name,

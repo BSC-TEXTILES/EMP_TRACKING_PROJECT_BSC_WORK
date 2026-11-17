@@ -364,8 +364,8 @@ export default function Mailbox() {
                             activeEmail.deliveryStatus === 'accepted' || activeEmail.deliveryStatus === 'delivered'
                               ? 'bg-emerald-100 text-emerald-800'
                               : activeEmail.deliveryStatus === 'failed'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-amber-100 text-amber-800',
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-amber-100 text-amber-800',
                           )}
                         >
                           {activeEmail.deliveryStatus === 'accepted' ? 'Accepted by SMTP' : activeEmail.deliveryStatus}

@@ -320,9 +320,9 @@ async function ensureDatabaseReady() {
                     await dbConn.query('DELETE FROM employees WHERE id <> ?', [gaganId]);
                     // Reassign departments head to Gagan C B
                     await dbConn.query('UPDATE departments SET head_employee_id = ?', [gaganId]);
-                    // Ensure Gagan has Super Admin and Admin roles in employee_roles
+                    // Ensure Gagan has Super Admin, HR Manager, Store Manager, and Executive roles in employee_roles
                     await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
-             SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'store_manager', 'general_manager', 'executive')`, [gaganId]);
+             SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'hr_manager', 'store_manager', 'general_manager', 'executive')`, [gaganId]);
                     await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
                     console.log(`[startup] Retained Gagan C B (ID: ${gaganId}) as sole primary employee record and reset credentials to Workforce@2026.`);
                 }
