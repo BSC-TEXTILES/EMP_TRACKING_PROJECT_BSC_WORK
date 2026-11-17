@@ -33,6 +33,36 @@ function deviceFromUserAgent(ua) {
         return 'Linux';
     return 'Unknown';
 }
+export function browserFromUserAgent(ua) {
+    if (/edg\//i.test(ua))
+        return 'Microsoft Edge';
+    if (/opr\/|opera/i.test(ua))
+        return 'Opera';
+    if (/chrome|crios/i.test(ua) && !/edg\//i.test(ua))
+        return 'Google Chrome';
+    if (/firefox|fxios/i.test(ua))
+        return 'Mozilla Firefox';
+    if (/safari/i.test(ua) && !/chrome/i.test(ua))
+        return 'Apple Safari';
+    if (/brave/i.test(ua))
+        return 'Brave';
+    return 'Web Browser';
+}
+export function osFromUserAgent(ua) {
+    if (/windows nt 10/i.test(ua))
+        return 'Windows 10/11';
+    if (/windows/i.test(ua))
+        return 'Windows';
+    if (/macintosh|mac os x/i.test(ua))
+        return 'macOS';
+    if (/android/i.test(ua))
+        return 'Android';
+    if (/iphone|ipad|ipod/i.test(ua))
+        return 'iOS';
+    if (/linux/i.test(ua))
+        return 'Linux';
+    return 'Desktop / Mobile';
+}
 function normalizeIdentifier(raw) {
     return raw.trim().slice(0, 190);
 }
@@ -297,11 +327,24 @@ export class AuthService {
     static async createSession(employeeId, ip, userAgent, _remember) {
         const sid = randomToken(32);
         const refreshToken = randomToken(48);
+        const browser = browserFromUserAgent(userAgent);
+        const os = osFromUserAgent(userAgent);
         await transaction(async (conn) => {
-            const [result] = await conn.query(`INSERT INTO employee_sessions (employee_id, token_hash, user_agent, ip, device, expires_at)
-         VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(3), INTERVAL ? DAY))`, [employeeId, sha256(sid), userAgent.slice(0, 250), ip.slice(0, 60), deviceFromUserAgent(userAgent), config.sessionTtlDays]);
-            await conn.query('INSERT INTO session_refresh_tokens (token_hash, session_id, access_sid) VALUES (?, ?, ?)', [sha256(refreshToken), result.insertId, sid]);
+            const [result] = await conn.query(`INSERT INTO employee_sessions (employee_id, token_hash, user_agent, browser, os, ip, device, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(3), INTERVAL ? DAY))`, [employeeId, sha256(sid), userAgent.slice(0, 250), browser, os, ip.slice(0, 60), deviceFromUserAgent(userAgent), config.sessionTtlDays]);
+            const sessionId = Number(result.insertId);
+            await conn.query('INSERT INTO session_refresh_tokens (token_hash, session_id, access_sid) VALUES (?, ?, ?)', [sha256(refreshToken), sessionId, sid]);
             await conn.query('UPDATE employees SET last_login_at = NOW(3), failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [employeeId]);
+            // Record in permanent employee_login_audit table
+            await conn.query(`INSERT INTO employee_login_audit (
+           session_id, employee_id, employee_code, full_name, location_name,
+           login_at, ip, user_agent, browser, os, login_status, termination_status
+         )
+         SELECT ?, e.id, e.employee_code, e.full_name, COALESCE(l.name, 'Head Office'),
+                NOW(3), ?, ?, ?, ?, 'success', 'active'
+         FROM employees e
+         LEFT JOIN locations l ON l.id = e.location_id
+         WHERE e.id = ?`, [sessionId, ip.slice(0, 60), userAgent.slice(0, 250), browser, os, employeeId]);
         }, { retryDeadlocks: true });
         return { token: AuthService.accessToken(employeeId, sid), refreshToken };
     }
@@ -379,7 +422,22 @@ export class AuthService {
         try {
             const payload = jwt.verify(token, config.jwtSecret);
             if (payload?.sid) {
-                await execute('UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = ? WHERE token_hash = ? AND revoked_at IS NULL', ['logout', sha256(payload.sid)]);
+                const hash = sha256(payload.sid);
+                const session = await queryOne('SELECT id, employee_id, created_at FROM employee_sessions WHERE token_hash = ? AND revoked_at IS NULL', [hash]);
+                await execute(`UPDATE employee_sessions 
+           SET revoked_at = NOW(3), 
+               revoked_reason = 'explicit_logout',
+               duration_minutes = TIMESTAMPDIFF(MINUTE, created_at, NOW(3)),
+               termination_status = 'normal'
+           WHERE token_hash = ? AND revoked_at IS NULL`, [hash]);
+                if (session) {
+                    await execute(`UPDATE employee_login_audit 
+             SET logout_at = NOW(3), 
+                 logout_reason = 'explicit_logout',
+                 duration_minutes = TIMESTAMPDIFF(MINUTE, login_at, NOW(3)),
+                 termination_status = 'normal'
+             WHERE session_id = ? OR (employee_id = ? AND logout_at IS NULL)`, [session.id, session.employee_id]);
+                }
             }
         }
         catch {
@@ -391,7 +449,18 @@ export class AuthService {
        FROM employee_sessions WHERE employee_id = ? ORDER BY created_at DESC LIMIT 40`, [employeeId]);
     }
     static async revokeSession(employeeId, sessionId, reason = 'user_revoked') {
-        await execute('UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = ? WHERE id = ? AND employee_id = ? AND revoked_at IS NULL', [reason, sessionId, employeeId]);
+        await execute(`UPDATE employee_sessions 
+       SET revoked_at = NOW(3), 
+           revoked_reason = ?,
+           duration_minutes = TIMESTAMPDIFF(MINUTE, created_at, NOW(3)),
+           termination_status = 'normal'
+       WHERE id = ? AND employee_id = ? AND revoked_at IS NULL`, [reason, sessionId, employeeId]);
+        await execute(`UPDATE employee_login_audit 
+       SET logout_at = NOW(3), 
+           logout_reason = ?,
+           duration_minutes = TIMESTAMPDIFF(MINUTE, login_at, NOW(3)),
+           termination_status = 'normal'
+       WHERE session_id = ?`, [reason, sessionId]);
     }
     static async revokeOtherSessions(employeeId, keepSessionId) {
         await execute('UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = ? WHERE employee_id = ? AND id <> ? AND revoked_at IS NULL', ['revoked_other_devices', employeeId, keepSessionId]);

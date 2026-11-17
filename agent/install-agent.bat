@@ -24,8 +24,9 @@ echo [2/3] Building agent...
 if not exist "agent-data" mkdir "agent-data"
 
 echo.
-echo [3/3] Creating desktop launcher...
+echo [3/3] Creating desktop launcher and registering automatic startup...
 set "LAUNCH_BAT=%~dp0start-agent.bat"
+call "%~dp0register-startup.bat"
 
 echo ======================================================================
 echo Installation completed successfully!

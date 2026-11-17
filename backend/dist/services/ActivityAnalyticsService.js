@@ -276,26 +276,71 @@ export class ActivityAnalyticsService {
         }
         return ActivityAnalyticsService.generateDaily(user.id, date);
     }
-    /** Chronological work timeline (applications, approved websites, platform modules). */
+    /** Chronological work timeline (applications, logins, meetings, breaks, tasks, attendance). */
     static async timeline(user, employeeId, date) {
         await ActivityAnalyticsService.assertAccess(user, employeeId);
         const rows = await query(`SELECT * FROM (
-         SELECT 'app' AS kind, id, app_name AS label, app_category AS category, started_at, ended_at, active_seconds FROM application_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) = ?
+         SELECT 'login' AS kind, id, CONCAT('HRMS Web Login (', COALESCE(browser, 'Browser'), ')') AS label, 'Access' AS category,
+                login_at AS started_at, COALESCE(logout_at, NOW(3)) AS ended_at, duration_minutes * 60 AS active_seconds
+         FROM employee_login_audit WHERE employee_id = ? AND DATE(login_at) = ?
          UNION ALL
-         SELECT 'browser', id, domain, category, started_at, ended_at, active_seconds FROM browser_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) = ?
+         SELECT 'logout' AS kind, id, CONCAT('HRMS Logout (', COALESCE(logout_reason, 'normal'), ')') AS label, 'Access' AS category,
+                logout_at AS started_at, logout_at AS ended_at, 0 AS active_seconds
+         FROM employee_login_audit WHERE employee_id = ? AND DATE(logout_at) = ? AND logout_at IS NOT NULL
          UNION ALL
-         SELECT 'module', id, module, 'Platform', entered_at, exited_at, active_seconds FROM internal_module_activity
-         WHERE employee_id = ? AND DATE(entered_at) = ?
-       ) segments ORDER BY started_at DESC LIMIT 300`, [employeeId, date, employeeId, date, employeeId, date]);
+         SELECT 'attendance' AS kind, id, 'Store Attendance Check-In' AS label, 'Attendance' AS category,
+                check_in_at AS started_at, COALESCE(check_out_at, NOW(3)) AS ended_at, total_minutes * 60 AS active_seconds
+         FROM attendance WHERE employee_id = ? AND work_date = ? AND check_in_at IS NOT NULL
+         UNION ALL
+         SELECT 'break' AS kind, b.id, 'Employee Break' AS label, 'Attendance' AS category,
+                b.started_at, COALESCE(b.ended_at, NOW(3)) AS ended_at,
+                TIMESTAMPDIFF(SECOND, b.started_at, COALESCE(b.ended_at, NOW(3))) AS active_seconds
+         FROM attendance_breaks b JOIN attendance a ON a.id = b.attendance_id
+         WHERE a.employee_id = ? AND a.work_date = ?
+         UNION ALL
+         SELECT 'meeting' AS kind, m.id, CONCAT('Meeting: ', m.title) AS label, 'Collaboration' AS category,
+                COALESCE(mp.joined_at, m.start_at) AS started_at, COALESCE(mp.left_at, m.end_at) AS ended_at,
+                TIMESTAMPDIFF(SECOND, COALESCE(mp.joined_at, m.start_at), COALESCE(mp.left_at, m.end_at, NOW(3))) AS active_seconds
+         FROM meetings m JOIN meeting_participants mp ON mp.meeting_id = m.id
+         WHERE mp.employee_id = ? AND DATE(m.start_at) = ?
+         UNION ALL
+         SELECT 'task' AS kind, t.id, CONCAT('Task Completed: ', t.title) AS label, 'Tasks' AS category,
+                t.completed_at AS started_at, t.completed_at AS ended_at, 0 AS active_seconds
+         FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND DATE(t.completed_at) = ?
+         UNION ALL
+         SELECT 'session' AS kind, id, CONCAT('Monitoring Session (', status, ')') AS label, 'System' AS category,
+                started_at, COALESCE(ended_at, NOW(3)) AS ended_at,
+                TIMESTAMPDIFF(SECOND, started_at, COALESCE(ended_at, NOW(3))) AS active_seconds
+         FROM monitoring_sessions WHERE employee_id = ? AND work_date = ?
+         UNION ALL
+         SELECT 'app' AS kind, id, app_name AS label, app_category AS category, started_at, ended_at, active_seconds
+         FROM application_usage_logs WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'browser' AS kind, id, domain AS label, category, started_at, ended_at, active_seconds
+         FROM browser_usage_logs WHERE employee_id = ? AND DATE(started_at) = ?
+         UNION ALL
+         SELECT 'module' AS kind, id, module AS label, 'Platform' AS category, entered_at AS started_at, exited_at AS ended_at, active_seconds
+         FROM internal_module_activity WHERE employee_id = ? AND DATE(entered_at) = ?
+       ) segments ORDER BY started_at ASC LIMIT 400`, [
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+            employeeId, date,
+        ]);
         return rows.map((row) => ({
-            kind: row.kind,
+            kind: String(row.kind),
             id: Number(row.id),
-            label: row.label,
-            category: row.category,
-            startedAt: row.started_at,
-            endedAt: row.ended_at,
+            label: String(row.label),
+            category: String(row.category),
+            startedAt: String(row.started_at),
+            endedAt: String(row.ended_at),
             seconds: number(row.active_seconds),
         }));
     }
@@ -648,11 +693,30 @@ export class ActivityAnalyticsService {
          WHERE w.week_start = (SELECT MAX(week_start) FROM weekly_performance_reports x WHERE x.employee_id = w.employee_id)
            AND w.employee_id IN (${placeholders})`, ids),
         ]);
-        const [overdueRows, issueRows] = await Promise.all([
+        const [overdueRows, issueRows, loginRows, leaveRows, meetingRows, attendanceRows] = await Promise.all([
             query(`SELECT ta.employee_id, COUNT(*) AS total FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
          WHERE t.status NOT IN ('completed','approved','cancelled','rejected') AND t.due_date < ? AND ta.employee_id IN (${placeholders}) GROUP BY ta.employee_id`, [date, ...ids]),
             query(`SELECT e.employee_id, COUNT(DISTINCT e.incident_id) AS total FROM system_error_events e JOIN error_incidents i ON i.id = e.incident_id
          WHERE i.status IN ('open','suggested','ticket_created') AND e.employee_id IN (${placeholders}) GROUP BY e.employee_id`, ids),
+            query(`SELECT employee_id, login_at, logout_at, duration_minutes, termination_status, browser, os, last_heartbeat_at
+         FROM employee_login_audit
+         WHERE employee_id IN (${placeholders}) AND DATE(login_at) = ?
+         ORDER BY login_at DESC`, [...ids, date]),
+            query(`SELECT lr.employee_id, lt.name AS leave_type, lr.start_date, lr.end_date, lr.status, m.full_name AS approver_name
+         FROM leave_requests lr
+         JOIN leave_types lt ON lt.id = lr.leave_type_id
+         LEFT JOIN employees m ON m.id = lr.manager_id
+         WHERE lr.employee_id IN (${placeholders}) AND lr.status = 'approved' AND ? BETWEEN lr.start_date AND lr.end_date`, [...ids, date]),
+            query(`SELECT mp.employee_id, m.id AS meeting_id, m.title, m.start_at, m.end_at, m.status, mp.joined_at, mp.left_at
+         FROM meetings m
+         JOIN meeting_participants mp ON mp.meeting_id = m.id
+         WHERE mp.employee_id IN (${placeholders})
+           AND DATE(m.start_at) = ?
+           AND (m.status = 'ongoing' OR (m.status = 'scheduled' AND NOW(3) BETWEEN m.start_at AND m.end_at))`, [...ids, date]),
+            query(`SELECT a.employee_id, a.check_in_at, a.check_out_at, a.total_minutes, a.break_minutes,
+                (SELECT COUNT(*) FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.ended_at IS NULL) AS on_break
+         FROM attendance a
+         WHERE a.employee_id IN (${placeholders}) AND a.work_date = ?`, [...ids, date]),
         ]);
         const overdueMap = new Map(overdueRows.map((row) => [Number(row.employee_id), number(row.total)]));
         const issueMap = new Map(issueRows.map((row) => [Number(row.employee_id), number(row.total)]));
@@ -660,32 +724,84 @@ export class ActivityAnalyticsService {
         const taskMap = new Map(taskTotals.map((row) => [Number(row.employee_id), number(row.completed)]));
         const summaryMap = new Map(summaries.map((row) => [Number(row.employee_id), row]));
         const weekMap = new Map(weeks.map((row) => [Number(row.employee_id), row]));
+        const loginMap = new Map();
+        for (const r of loginRows) {
+            const eid = Number(r.employee_id);
+            if (!loginMap.has(eid))
+                loginMap.set(eid, r);
+        }
+        const leaveMap = new Map(leaveRows.map((r) => [Number(r.employee_id), r]));
+        const meetingMap = new Map(meetingRows.map((r) => [Number(r.employee_id), r]));
+        const attMap = new Map(attendanceRows.map((r) => [Number(r.employee_id), r]));
         const rows = employees.map((employee) => {
-            const summary = summaryMap.get(Number(employee.id));
-            const week = weekMap.get(Number(employee.id));
+            const eid = Number(employee.id);
+            const summary = summaryMap.get(eid);
+            const week = weekMap.get(eid);
+            const login = loginMap.get(eid);
+            const leave = leaveMap.get(eid);
+            const meeting = meetingMap.get(eid);
+            const att = attMap.get(eid);
+            const isMonitoring = Boolean(employee.session_id);
+            const isIdle = (employee.idle_seconds ? Number(employee.idle_seconds) : 0) >= 300;
+            const onLeave = Boolean(leave);
+            const inMeeting = Boolean(meeting);
+            const onBreak = Number(att?.on_break ?? 0) > 0;
+            const isLoggedIn = Boolean(login && !login.logout_at);
+            let liveStatus = 'Offline';
+            if (onLeave)
+                liveStatus = 'On approved leave';
+            else if (inMeeting)
+                liveStatus = 'In a meeting';
+            else if (onBreak)
+                liveStatus = 'On break';
+            else if (isMonitoring && !isIdle)
+                liveStatus = 'Working';
+            else if (isMonitoring && isIdle)
+                liveStatus = 'Idle';
+            else if (isLoggedIn)
+                liveStatus = 'Logged in (Agent Idle)';
+            else if (att?.check_in_at && !att?.check_out_at)
+                liveStatus = 'Checked In';
             return {
-                id: Number(employee.id),
-                name: employee.full_name,
-                employeeCode: employee.employee_code,
+                id: eid,
+                name: String(employee.full_name),
+                employeeCode: String(employee.employee_code),
                 photoUrl: employee.photo_url,
                 department: employee.department_name,
                 designation: employee.designation_title,
                 location: employee.location_name ?? null,
-                active: Boolean(employee.session_id),
+                active: isMonitoring,
+                liveStatus,
                 sessionStartedAt: employee.session_started_at,
-                lastHeartbeatAt: employee.last_heartbeat_at,
-                currentApp: employee.current_app ?? (Boolean(employee.session_id) ? 'Working session' : null),
+                lastHeartbeatAt: employee.last_heartbeat_at || login?.last_heartbeat_at || null,
+                currentApp: employee.current_app ?? (isMonitoring ? 'Working session' : (inMeeting ? 'Meeting' : (onLeave ? 'On leave' : null))),
                 currentCategory: employee.current_category ?? null,
                 idleSeconds: employee.idle_seconds ? Number(employee.idle_seconds) : 0,
-                activeMinutes: appMap.get(Number(employee.id)) ?? 0,
-                tasksCompleted: taskMap.get(Number(employee.id)) ?? 0,
+                activeMinutes: appMap.get(eid) ?? 0,
+                tasksCompleted: taskMap.get(eid) ?? 0,
+                attendanceMinutes: number(att?.total_minutes),
+                loginAt: login?.login_at ?? null,
+                logoutAt: login?.logout_at ?? null,
+                sessionDurationMinutes: login ? (login.logout_at ? number(login.duration_minutes) : Math.max(0, Math.floor((Date.now() - new Date(String(login.login_at)).getTime()) / 60000))) : 0,
+                browser: login?.browser ?? null,
+                leaveInfo: leave ? {
+                    leaveType: String(leave.leave_type),
+                    startDate: String(leave.start_date),
+                    endDate: String(leave.end_date),
+                    approver: leave.approver_name,
+                } : null,
+                meetingInfo: meeting ? {
+                    title: String(meeting.title),
+                    startAt: String(meeting.start_at),
+                    endAt: String(meeting.end_at),
+                } : null,
                 dailyStatus: summary?.status ?? null,
                 keyActivities: parseJson(summary?.key_activities, []),
                 weeklyScore: week ? number(week.score) : null,
                 weeklyGrade: week?.grade ?? null,
-                overdueTasks: overdueMap.get(Number(employee.id)) ?? 0,
-                openIssues: issueMap.get(Number(employee.id)) ?? 0,
-                needsAssistance: (week ? number(week.score) < 60 : false) || (overdueMap.get(Number(employee.id)) ?? 0) >= 3 || (issueMap.get(Number(employee.id)) ?? 0) > 0 || summary?.status === 'returned',
+                overdueTasks: overdueMap.get(eid) ?? 0,
+                openIssues: issueMap.get(eid) ?? 0,
+                needsAssistance: (week ? number(week.score) < 60 : false) || (overdueMap.get(eid) ?? 0) >= 3 || (issueMap.get(eid) ?? 0) > 0 || summary?.status === 'returned',
             };
         });
         return {
@@ -695,6 +811,12 @@ export class ActivityAnalyticsService {
             totals: {
                 employees: rows.length,
                 activeNow: rows.filter((row) => row.active).length,
+                loggedIn: rows.filter((row) => row.loginAt && !row.logoutAt).length,
+                working: rows.filter((row) => row.liveStatus === 'Working').length,
+                inMeetings: rows.filter((row) => row.liveStatus === 'In a meeting').length,
+                onApprovedLeave: rows.filter((row) => row.liveStatus === 'On approved leave').length,
+                onBreaks: rows.filter((row) => row.liveStatus === 'On break').length,
+                offline: rows.filter((row) => row.liveStatus === 'Offline').length,
                 activeMinutes: rows.reduce((sum, row) => sum + row.activeMinutes, 0),
                 tasksCompleted: rows.reduce((sum, row) => sum + row.tasksCompleted, 0),
                 pendingReviews: rows.filter((row) => row.dailyStatus === 'submitted').length,
@@ -703,7 +825,7 @@ export class ActivityAnalyticsService {
         };
     }
     static async adminOverview(user, date) {
-        const [counts, departments, appTotals, incidents, devices, health, weekly, sessions] = await Promise.all([
+        const [counts, departments, appTotals, incidents, devices, health, weekly, sessions, team] = await Promise.all([
             queryOne(`SELECT (SELECT COUNT(*) FROM employee_devices WHERE status = 'active') AS devices,
                 (SELECT COUNT(*) FROM monitoring_sessions WHERE status = 'active') AS active_sessions,
                 (SELECT COUNT(*) FROM monitoring_sessions WHERE work_date = ?) AS sessions_today,
@@ -726,11 +848,14 @@ export class ActivityAnalyticsService {
             query(`SELECT s.id, s.started_at, s.last_heartbeat_at, e.full_name, d.device_name FROM monitoring_sessions s
          JOIN employees e ON e.id = s.employee_id JOIN employee_devices d ON d.id = s.device_id
          WHERE s.status = 'active' ORDER BY s.started_at DESC LIMIT 20`),
+            ActivityAnalyticsService.teamOverview(user, date),
         ]);
         return {
             scope: 'all',
             date,
+            employees: team.employees,
             totals: {
+                ...team.totals,
                 devices: number(counts?.devices),
                 activeSessions: number(counts?.active_sessions),
                 sessionsToday: number(counts?.sessions_today),
@@ -746,6 +871,209 @@ export class ActivityAnalyticsService {
             health,
             activeSessions: sessions,
         };
+    }
+    /** Complete login and logout history across store computers and web sessions. */
+    static async loginHistory(user, options = {}) {
+        const visible = await visibleEmployeeIds(user, 'activity');
+        const clauses = [];
+        const params = [];
+        if (visible && visible.length > 0) {
+            clauses.push(`a.employee_id IN (${visible.map(() => '?').join(',')})`);
+            params.push(...visible);
+        }
+        else if (visible && visible.length === 0) {
+            return { total: 0, items: [], summary: { total: 0, active: 0, ended: 0, avgDurationMinutes: 0 } };
+        }
+        if (options.employeeId) {
+            clauses.push('a.employee_id = ?');
+            params.push(options.employeeId);
+        }
+        if (options.date) {
+            clauses.push('DATE(a.login_at) = ?');
+            params.push(options.date);
+        }
+        else {
+            if (options.from) {
+                clauses.push('DATE(a.login_at) >= ?');
+                params.push(options.from);
+            }
+            if (options.to) {
+                clauses.push('DATE(a.login_at) <= ?');
+                params.push(options.to);
+            }
+        }
+        if (options.location && options.location !== 'ALL') {
+            const loc = options.location.toLowerCase();
+            if (loc === 'dav')
+                clauses.push("(LOWER(a.location_name) LIKE '%davanagere%' OR LOWER(a.location_name) LIKE '%dav%')");
+            else if (loc === 'shi')
+                clauses.push("(LOWER(a.location_name) LIKE '%shivamogga%' OR LOWER(a.location_name) LIKE '%shi%')");
+            else if (loc === 'bel')
+                clauses.push("(LOWER(a.location_name) LIKE '%belagavi%' OR LOWER(a.location_name) LIKE '%bel%')");
+            else if (loc === 'hq')
+                clauses.push("(LOWER(a.location_name) LIKE '%head%' OR LOWER(a.location_name) LIKE '%main%' OR LOWER(a.location_name) LIKE '%hq%')");
+            else {
+                clauses.push('a.location_name = ?');
+                params.push(options.location);
+            }
+        }
+        if (options.status && options.status !== 'all') {
+            if (options.status === 'active') {
+                clauses.push('a.logout_at IS NULL AND a.termination_status = "active"');
+            }
+            else {
+                clauses.push('(a.termination_status = ? OR a.logout_reason = ?)');
+                params.push(options.status, options.status);
+            }
+        }
+        if (options.search?.trim()) {
+            const q = `%${options.search.trim().toLowerCase()}%`;
+            clauses.push('(LOWER(a.full_name) LIKE ? OR LOWER(a.employee_code) LIKE ? OR LOWER(a.browser) LIKE ?)');
+            params.push(q, q, q);
+        }
+        const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+        const limit = Math.min(300, Math.max(1, options.limit ?? 50));
+        const offset = Math.max(0, options.offset ?? 0);
+        const countRow = await queryOne(`SELECT COUNT(*) AS total,
+              SUM(IF(logout_at IS NULL AND termination_status = 'active', 1, 0)) AS active,
+              SUM(IF(logout_at IS NOT NULL, 1, 0)) AS ended,
+              AVG(duration_minutes) AS avg_dur
+       FROM employee_login_audit a ${whereClause}`, params);
+        const rows = await query(`SELECT a.id, a.session_id, a.employee_id, a.employee_code, a.full_name, a.location_name,
+              a.login_at, a.logout_at, a.last_heartbeat_at, a.duration_minutes,
+              a.ip, a.user_agent, a.browser, a.os, a.device_id,
+              a.login_status, a.logout_reason, a.termination_status
+       FROM employee_login_audit a
+       ${whereClause}
+       ORDER BY a.login_at DESC
+       LIMIT ? OFFSET ?`, [...params, limit, offset]);
+        return {
+            total: number(countRow?.total),
+            summary: {
+                total: number(countRow?.total),
+                active: number(countRow?.active),
+                ended: number(countRow?.ended),
+                avgDurationMinutes: Math.round(number(countRow?.avg_dur) || 0),
+            },
+            items: rows.map((r) => {
+                const isLive = !r.logout_at && r.termination_status === 'active';
+                const dur = isLive
+                    ? Math.max(0, Math.floor((Date.now() - new Date(String(r.login_at)).getTime()) / 60000))
+                    : number(r.duration_minutes);
+                return {
+                    id: Number(r.id),
+                    sessionId: r.session_id ? Number(r.session_id) : null,
+                    employeeId: Number(r.employee_id),
+                    employeeCode: String(r.employee_code ?? ''),
+                    employeeName: String(r.full_name ?? 'Employee'),
+                    location: r.location_name ?? 'Head Office',
+                    loginAt: String(r.login_at),
+                    logoutAt: r.logout_at ? String(r.logout_at) : null,
+                    lastHeartbeatAt: String(r.last_heartbeat_at),
+                    durationMinutes: dur,
+                    browser: String(r.browser ?? 'Web Browser'),
+                    os: String(r.os ?? 'Windows'),
+                    ip: r.ip ? String(r.ip) : null,
+                    loginStatus: String(r.login_status ?? 'success'),
+                    logoutReason: r.logout_reason ?? (isLive ? 'Still active' : 'Normal session end'),
+                    terminationStatus: isLive ? 'active' : String(r.termination_status ?? 'normal'),
+                };
+            }),
+        };
+    }
+    /** Overview of leaves for availability section. */
+    static async leavesOverview(user, date, location) {
+        const visible = await visibleEmployeeIds(user, 'activity');
+        const clauses = ['? BETWEEN lr.start_date AND lr.end_date'];
+        const params = [date];
+        if (visible && visible.length > 0) {
+            clauses.push(`lr.employee_id IN (${visible.map(() => '?').join(',')})`);
+            params.push(...visible);
+        }
+        if (location && location !== 'ALL') {
+            const loc = location.toLowerCase();
+            if (loc === 'dav')
+                clauses.push("(LOWER(l.name) LIKE '%davanagere%' OR LOWER(l.name) LIKE '%dav%')");
+            else if (loc === 'shi')
+                clauses.push("(LOWER(l.name) LIKE '%shivamogga%' OR LOWER(l.name) LIKE '%shi%')");
+            else if (loc === 'bel')
+                clauses.push("(LOWER(l.name) LIKE '%belagavi%' OR LOWER(l.name) LIKE '%bel%')");
+            else if (loc === 'hq')
+                clauses.push("(LOWER(l.name) LIKE '%head%' OR LOWER(l.name) LIKE '%main%' OR LOWER(l.name) LIKE '%hq%')");
+        }
+        const rows = await query(`SELECT lr.id, lr.employee_id, lr.start_date, lr.end_date, lr.days, lr.status, lr.reason,
+              lr.decision_note, lt.name AS leave_type_name,
+              e.full_name, e.employee_code, e.photo_url, d.name AS department_name, dg.title AS designation_title,
+              l.name AS location_name, m.full_name AS approver_name
+       FROM leave_requests lr
+       JOIN employees e ON e.id = lr.employee_id
+       JOIN leave_types lt ON lt.id = lr.leave_type_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN employees m ON m.id = lr.manager_id
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY lr.start_date DESC`, params);
+        return rows.map((r) => ({
+            id: Number(r.id),
+            employeeId: Number(r.employee_id),
+            employeeName: String(r.full_name),
+            employeeCode: String(r.employee_code),
+            photoUrl: r.photo_url,
+            department: r.department_name,
+            designation: r.designation_title,
+            location: r.location_name,
+            leaveType: String(r.leave_type_name),
+            startDate: String(r.start_date),
+            endDate: String(r.end_date),
+            days: Number(r.days),
+            status: String(r.status),
+            reason: String(r.reason ?? ''),
+            approverName: r.approver_name,
+            decisionNote: r.decision_note,
+        }));
+    }
+    /** Overview of meetings for calendar & availability section. */
+    static async meetingsOverview(user, date) {
+        const visible = await visibleEmployeeIds(user, 'activity');
+        const clauses = ['DATE(m.start_at) = ?'];
+        const params = [date];
+        if (visible && visible.length > 0) {
+            clauses.push(`m.id IN (SELECT meeting_id FROM meeting_participants WHERE employee_id IN (${visible.map(() => '?').join(',')}))`);
+            params.push(...visible);
+        }
+        const rows = await query(`SELECT m.id, m.title, m.description, m.agenda, m.location_type, m.room_name,
+              m.start_at, m.end_at, m.status, m.meeting_code,
+              o.full_name AS organizer_name, d.name AS department_name,
+              (SELECT COUNT(*) FROM meeting_participants mp WHERE mp.meeting_id = m.id) AS total_participants,
+              (SELECT COUNT(*) FROM meeting_participants mp WHERE mp.meeting_id = m.id AND mp.attended = 1) AS attended_count
+       FROM meetings m
+       JOIN employees o ON o.id = m.organizer_id
+       LEFT JOIN departments d ON d.id = m.department_id
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY m.start_at ASC`, params);
+        return rows.map((r) => {
+            const start = new Date(String(r.start_at)).getTime();
+            const end = new Date(String(r.end_at)).getTime();
+            const durationMinutes = Math.max(0, Math.round((end - start) / 60000));
+            return {
+                id: Number(r.id),
+                title: String(r.title),
+                description: r.description,
+                agenda: r.agenda,
+                locationType: String(r.location_type),
+                roomName: r.room_name,
+                startAt: String(r.start_at),
+                endAt: String(r.end_at),
+                durationMinutes,
+                status: String(r.status),
+                meetingCode: String(r.meeting_code),
+                organizerName: String(r.organizer_name),
+                department: r.department_name,
+                totalParticipants: number(r.total_participants),
+                attendedCount: number(r.attended_count),
+            };
+        });
     }
     /** Automatic monthly activity report, derived from the same daily, task and KPI records. */
     static async monthly(user, employeeId, month) {

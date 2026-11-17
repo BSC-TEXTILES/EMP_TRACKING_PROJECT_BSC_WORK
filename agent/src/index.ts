@@ -288,10 +288,24 @@ async function main(): Promise<void> {
   log('Policy acknowledged. Monitoring stays on only while the authorised work session is active.');
   log(`Screenshot evidence: ${policy.screenshotEnabled ? 'authorised but not captured by this build' : 'disabled'} · Retention: ${policy.retentionDays} days`);
 
-  const attendance = await api('/attendance/today', {}, { cookie });
-  const attendanceState = await attendance.json() as { checkInAt: string | null; checkOutAt: string | null };
-  if (!attendanceState.checkInAt) throw new Error('Start office attendance in the web app before running the agent.');
-  if (attendanceState.checkOutAt) throw new Error('Attendance for today is already closed. Monitoring will not start.');
+  let attendance = await api('/attendance/today', {}, { cookie });
+  let attendanceState = (await attendance.json().catch(() => ({}))) as { checkInAt: string | null; checkOutAt: string | null };
+  if (!attendanceState.checkInAt) {
+    log('Attendance not yet checked in. Initiating automatic check-in from desktop agent...');
+    try {
+      const checkInRes = await api('/attendance/check-in', {
+        method: 'POST',
+        body: JSON.stringify({ source: 'desktop_agent', deviceId }),
+      }, { cookie });
+      if (checkInRes.ok) {
+        log('Attendance automatically checked in.');
+      } else {
+        log('Automatic check-in skipped; proceeding with monitoring session.');
+      }
+    } catch {
+      log('Could not perform automatic check-in; continuing.');
+    }
+  }
 
   if (!deviceId) {
     const devices = await api('/activity/devices', {}, { cookie }).then((response) => response.json()) as { devices: { id: number; status: string }[] };
@@ -299,8 +313,19 @@ async function main(): Promise<void> {
   }
   if (!deviceId) throw new Error('No registered device found.');
 
-  const start = await api('/activity/sessions/start', { method: 'POST', body: JSON.stringify({ deviceId }) }, { cookie });
-  if (!start.ok) throw new Error(`Unable to start monitoring: ${await start.text()}`);
+  // Check if session is already active; if not, start it
+  const currentSessionRes = await api('/activity/sessions/current', {}, { cookie });
+  const currentSessionData = (await currentSessionRes.json().catch(() => ({}))) as { session?: { id: number } };
+  if (!currentSessionData.session) {
+    const start = await api('/activity/sessions/start', { method: 'POST', body: JSON.stringify({ deviceId }) }, { cookie });
+    if (!start.ok) {
+      log(`Note on starting session: ${await start.text()}`);
+    } else {
+      log(`Work session started automatically on device #${deviceId}.`);
+    }
+  } else {
+    log(`Attached to existing active work session #${currentSessionData.session.id}.`);
+  }
   log(`Monitoring active on device #${deviceId}. Press Ctrl+C to stop.`);
 
   const queue = await readEncrypted<QueueEvent[]>(queueFile, token, []);
@@ -392,9 +417,14 @@ async function main(): Promise<void> {
       const status = await api('/activity/sessions/current', {}, { cookie });
       const current = await status.json() as { session: unknown };
       if (!current.session) {
-        log('Work session ended. Monitoring stopped.');
-        await shutdown(false);
-        return;
+        log('Session was not active. Attempting to reactivate session...');
+        const restartRes = await api('/activity/sessions/start', { method: 'POST', body: JSON.stringify({ deviceId }) }, { cookie });
+        if (!restartRes.ok) {
+          log('Session currently paused or employee checked out.');
+          await shutdown(false);
+          return;
+        }
+        log('Session reactivated successfully.');
       }
       const fg = await foregroundProcess();
       const isIdle = fg ? fg.idleSeconds >= idleThresholdSeconds : false;

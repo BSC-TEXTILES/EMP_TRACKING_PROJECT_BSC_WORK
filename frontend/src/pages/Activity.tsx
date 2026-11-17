@@ -135,6 +135,42 @@ interface TeamOverview {
   activeSessions?: { id: number; full_name: string; device_name: string; started_at: string; last_heartbeat_at: string | null }[];
 }
 
+interface LoginAuditItem {
+  id: number;
+  sessionId: number | null;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  location: string;
+  loginAt: string;
+  logoutAt: string | null;
+  durationMinutes: number;
+  browser: string;
+  os: string;
+  ip: string | null;
+  loginStatus: string;
+  logoutReason: string;
+  terminationStatus: string;
+}
+
+interface LoginHistoryResponse {
+  total: number;
+  summary: { total: number; active: number; ended: number; avgDurationMinutes: number };
+  items: LoginAuditItem[];
+}
+
+interface TimelineSegment {
+  id: string;
+  type: string;
+  title: string;
+  subtitle?: string;
+  startedAt: string;
+  endedAt?: string | null;
+  durationMinutes?: number;
+  category?: string;
+  status?: string;
+}
+
 function minutes(value: number): string {
   const hours = Math.floor(value / 60);
   const rest = Math.round(value % 60);
@@ -156,7 +192,7 @@ export default function Activity() {
   const { user, has, canAny } = useAuth();
   const toast = useToast();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [tab, setTab] = useState<'today' | 'weekly' | 'monthly' | 'team' | 'admin' | 'policy'>('today');
+  const [tab, setTab] = useState<'today' | 'login_history' | 'timeline' | 'weekly' | 'monthly' | 'team' | 'admin' | 'policy'>('today');
   const [self, setSelf] = useState<SelfDashboard | null>(null);
   const [team, setTeam] = useState<TeamOverview | null>(null);
   const [monthly, setMonthly] = useState<MonthlyDashboard | null>(null);
@@ -169,6 +205,18 @@ export default function Activity() {
   const [detail, setDetail] = useState<{ employeeId: number; daily: DailySummary; weekly: WeeklyReport[]; name: string } | null>(null);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [policyForm, setPolicyForm] = useState({ retentionDays: 90, screenshotEnabled: false, allowedDomains: '' });
+
+  // Login History State
+  const [loginHistory, setLoginHistory] = useState<LoginHistoryResponse | null>(null);
+  const [loginLocation, setLoginLocation] = useState<string>('ALL');
+  const [loginStatus, setLoginStatus] = useState<string>('all');
+  const [loginSearch, setLoginSearch] = useState<string>('');
+  const [loginDate, setLoginDate] = useState<string>('');
+
+  // Activity Timeline State
+  const [timelineSegments, setTimelineSegments] = useState<TimelineSegment[]>([]);
+  const [timelineRange, setTimelineRange] = useState<'today' | 'yesterday' | '7days' | '30days' | 'custom'>('today');
+  const [customTimelineDate, setCustomTimelineDate] = useState<string>(new Date().toISOString().slice(0, 10));
 
   const canTeam = canAny('activity.view.team', 'activity.view.all');
   const canAdmin = has('activity.view.all');
@@ -184,6 +232,20 @@ export default function Activity() {
         setTeam(await api.get<TeamOverview>(`/activity/admin?date=${date}`));
       } else if (tab === 'monthly') {
         setMonthly(await api.get<MonthlyDashboard>(`/activity/monthly?month=${month}`));
+      } else if (tab === 'login_history') {
+        const queryParams = new URLSearchParams();
+        if (loginDate) queryParams.set('date', loginDate);
+        if (loginLocation !== 'ALL') queryParams.set('location', loginLocation);
+        if (loginStatus !== 'all') queryParams.set('status', loginStatus);
+        if (loginSearch.trim()) queryParams.set('search', loginSearch.trim());
+        const res = await api.get<LoginHistoryResponse>(`/activity/login-history?${queryParams.toString()}`);
+        setLoginHistory(res);
+      } else if (tab === 'timeline') {
+        const queryDate = timelineRange === 'today' ? new Date().toISOString().slice(0, 10)
+          : timelineRange === 'yesterday' ? new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+          : customTimelineDate;
+        const res = await api.get<{ segments: TimelineSegment[] }>(`/activity/timeline?date=${queryDate}`);
+        setTimelineSegments(res.segments ?? []);
       } else if (tab === 'today' || tab === 'weekly' || tab === 'policy') {
         const result = await api.get<SelfDashboard>(`/activity/dashboard?date=${date}`);
         setSelf(result);
@@ -206,7 +268,7 @@ export default function Activity() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, date, month]);
+  }, [tab, date, month, loginDate, loginLocation, loginStatus, timelineRange, customTimelineDate]);
 
   const [locationFilter, setLocationFilter] = useState<string>('ALL');
   const [liveSearch, setLiveSearch] = useState('');
@@ -309,10 +371,12 @@ export default function Activity() {
   const maxAppSeconds = useMemo(() => Math.max(1, ...(self?.daily?.appBreakdown ?? []).map((item) => item.seconds)), [self]);
   const tabs = useMemo(() => [
     { value: 'today', label: 'Today' },
+    { value: 'login_history', label: 'Login & Logout History' },
+    { value: 'timeline', label: 'Activity Timeline' },
     { value: 'weekly', label: 'Weekly performance' },
     { value: 'monthly', label: 'Monthly report' },
-    ...(canTeam ? [{ value: 'team', label: 'Team activity' }] : []),
-    ...(canAdmin ? [{ value: 'admin', label: 'Organisation' }] : []),
+    ...(canTeam ? [{ value: 'team', label: 'Store Team Activity' }] : []),
+    ...(canAdmin ? [{ value: 'admin', label: 'Live Store Monitoring' }] : []),
     { value: 'policy', label: 'Monitoring policy' },
   ], [canTeam, canAdmin]);
 
@@ -518,6 +582,236 @@ export default function Activity() {
                 )}
               </Card>
             </div>
+          </div>
+        )
+      )}
+
+      {tab === 'login_history' && (
+        loading && !loginHistory ? <Skeleton lines={8} /> : (
+          <div className="space-y-5">
+            {/* KPI Cards */}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard label="Total Logins Recorded" value={loginHistory?.summary?.total ?? 0} tone="brand" />
+              <StatCard label="Currently Active" value={loginHistory?.summary?.active ?? 0} tone="success" />
+              <StatCard label="Sessions Logged Out" value={loginHistory?.summary?.ended ?? 0} tone="neutral" />
+              <StatCard label="Average Duration" value={`${loginHistory?.summary?.avgDurationMinutes ?? 0} mins`} tone="brand" />
+            </div>
+
+            {/* Filter Bar */}
+            <Card className="card-pad">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-ink-500">Store:</span>
+                  {[
+                    { key: 'ALL', label: 'All' },
+                    { key: 'DAV', label: 'Davanagere' },
+                    { key: 'SHI', label: 'Shivamogga' },
+                    { key: 'BEL', label: 'Belagavi' },
+                    { key: 'HQ', label: 'Head Office' },
+                  ].map((s) => (
+                    <button
+                      key={s.key}
+                      type="button"
+                      onClick={() => setLoginLocation(s.key)}
+                      className={cx('rounded-lg px-2.5 py-1 text-xs font-medium transition-colors', loginLocation === s.key ? 'bg-brand-600 text-white shadow-xs' : 'bg-ink-100 text-ink-700 hover:bg-ink-200')}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+
+                  <span className="text-xs font-semibold text-ink-500 ml-2">Status:</span>
+                  {[
+                    { key: 'all', label: 'All' },
+                    { key: 'active', label: 'Active Now' },
+                    { key: 'normal', label: 'Normal Logout' },
+                  ].map((st) => (
+                    <button
+                      key={st.key}
+                      type="button"
+                      onClick={() => setLoginStatus(st.key)}
+                      className={cx('rounded-lg px-2 py-1 text-xs font-medium transition-colors', loginStatus === st.key ? 'bg-brand-600 text-white shadow-xs' : 'bg-ink-100 text-ink-600 hover:bg-ink-200')}
+                    >
+                      {st.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="date"
+                    value={loginDate}
+                    onChange={(e) => setLoginDate(e.target.value)}
+                    className="input py-1 text-xs"
+                    title="Filter by exact date"
+                  />
+                  {loginDate && (
+                    <button type="button" onClick={() => setLoginDate('')} className="text-xs text-ink-500 hover:text-ink-800">Clear date</button>
+                  )}
+                  <input
+                    type="text"
+                    placeholder="Search name, code, browser..."
+                    value={loginSearch}
+                    onChange={(e) => setLoginSearch(e.target.value)}
+                    className="input py-1 text-xs min-w-[180px]"
+                  />
+                  <a
+                    href={`/api/activity/login-history/export?location=${loginLocation}${loginDate ? `&date=${loginDate}` : ''}`}
+                    download
+                    className="btn-secondary btn-sm"
+                  >
+                    <Icon name="download" size={14} />
+                    <span>Export CSV</span>
+                  </a>
+                </div>
+              </div>
+            </Card>
+
+            {/* Audit Table */}
+            <Card>
+              <div className="card-pad pb-0 flex items-center justify-between">
+                <SectionHeader
+                  title="Employee Login & Logout Records"
+                  description="Complete immutable audit trail of work sessions, login/logout timestamps, duration, and IP/device details."
+                />
+              </div>
+              {!loginHistory?.items?.length ? (
+                <div className="p-6">
+                  <EmptyState compact title="No login records found" description="No login/logout records match your selected filters." />
+                </div>
+              ) : (
+                <div className="overflow-x-auto mt-2">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Store Location</th>
+                        <th>Login Time</th>
+                        <th>Logout Time</th>
+                        <th>Session Duration</th>
+                        <th>Browser & OS</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {loginHistory.items.map((item) => {
+                        const isLive = item.terminationStatus === 'active' && !item.logoutAt;
+                        return (
+                          <tr key={item.id} className={isLive ? 'bg-emerald-50/30' : undefined}>
+                            <td>
+                              <div>
+                                <p className="font-semibold text-ink-900">{item.employeeName}</p>
+                                <p className="text-xs text-ink-500 font-mono">{item.employeeCode}</p>
+                              </div>
+                            </td>
+                            <td>
+                              <Badge tone="neutral">{item.location || 'Head Office'}</Badge>
+                            </td>
+                            <td>
+                              <span className="text-xs font-mono text-ink-800">{formatDateTime(item.loginAt)}</span>
+                            </td>
+                            <td>
+                              {isLive ? (
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-600 animate-pulse" />
+                                  Active now
+                                </span>
+                              ) : (
+                                <span className="text-xs font-mono text-ink-800">{item.logoutAt ? formatDateTime(item.logoutAt) : '—'}</span>
+                              )}
+                            </td>
+                            <td>
+                              <span className="text-xs font-semibold text-ink-800">{item.durationMinutes ? `${item.durationMinutes} mins` : isLive ? 'Live' : '—'}</span>
+                            </td>
+                            <td>
+                              <p className="text-xs text-ink-700">{item.browser}</p>
+                              <p className="text-[11px] text-ink-400">{item.os}{item.ip ? ` · ${item.ip}` : ''}</p>
+                            </td>
+                            <td>
+                              <Badge tone={isLive ? 'success' : item.terminationStatus === 'normal' ? 'neutral' : 'warning'}>
+                                {isLive ? 'Active' : titleize(item.terminationStatus)}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        )
+      )}
+
+      {tab === 'timeline' && (
+        loading && timelineSegments.length === 0 ? <Skeleton lines={8} /> : (
+          <div className="space-y-5">
+            <Card className="card-pad">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold text-ink-500">Date Range:</span>
+                  {[
+                    { key: 'today', label: 'Today' },
+                    { key: 'yesterday', label: 'Yesterday' },
+                    { key: '7days', label: 'Last 7 Days' },
+                    { key: '30days', label: 'Last 30 Days' },
+                    { key: 'custom', label: 'Custom' },
+                  ].map((r) => (
+                    <button
+                      key={r.key}
+                      type="button"
+                      onClick={() => setTimelineRange(r.key as any)}
+                      className={cx('rounded-lg px-2.5 py-1 text-xs font-medium transition-colors', timelineRange === r.key ? 'bg-brand-600 text-white shadow-xs' : 'bg-ink-100 text-ink-700 hover:bg-ink-200')}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                  {timelineRange === 'custom' && (
+                    <input
+                      type="date"
+                      value={customTimelineDate}
+                      onChange={(e) => setCustomTimelineDate(e.target.value)}
+                      className="input py-1 text-xs"
+                    />
+                  )}
+                </div>
+                <button type="button" className="btn-secondary btn-sm" onClick={() => void load()}>
+                  <Icon name="refresh" size={14} />
+                  <span>Refresh Timeline</span>
+                </button>
+              </div>
+            </Card>
+
+            <Card className="card-pad">
+              <SectionHeader
+                title="Unified Activity Timeline"
+                description="Chronological stream of logins, attendance, monitored applications, breaks, meetings and logout events."
+              />
+              {timelineSegments.length === 0 ? (
+                <EmptyState compact title="No activity recorded for this period" description="No timeline events were captured on this date." />
+              ) : (
+                <div className="relative mt-6 pl-6 space-y-6 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-ink-200">
+                  {timelineSegments.map((seg) => (
+                    <div key={seg.id} className="relative flex items-start gap-3">
+                      <div className="absolute -left-6 top-1 h-4 w-4 rounded-full border-2 border-white bg-brand-600 shadow-xs" />
+                      <div className="flex-1 rounded-xl border border-ink-200 bg-white p-3 shadow-xs">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="font-semibold text-sm text-ink-900">{seg.title}</p>
+                          <span className="text-xs font-mono text-ink-400">{formatDateTime(seg.startedAt)}</span>
+                        </div>
+                        {seg.subtitle && <p className="text-xs text-ink-600 mt-0.5">{seg.subtitle}</p>}
+                        {seg.category && (
+                          <div className="mt-2 flex items-center gap-2 text-xs">
+                            <Badge tone="neutral">{seg.category}</Badge>
+                            {seg.durationMinutes ? <span className="text-ink-500 font-medium">{seg.durationMinutes} mins</span> : null}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
           </div>
         )
       )}

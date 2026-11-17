@@ -281,4 +281,62 @@ activityRouter.get('/access-history', asyncHandler(async (req, res) => {
 activityRouter.get('/devices/all', asyncHandler(async (req, res) => {
     res.json({ devices: await ActivityService.allDevices(currentUser(req)) });
 }));
+// ---------------------- Master Activity & Workforce Routes ------------------
+activityRouter.get('/login-history', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
+    const from = typeof req.query.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : undefined;
+    const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : undefined;
+    const location = typeof req.query.location === 'string' ? req.query.location : undefined;
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const employeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    const offset = req.query.offset ? Number(req.query.offset) : 0;
+    res.json(await ActivityAnalyticsService.loginHistory(user, {
+        date,
+        from,
+        to,
+        location,
+        status,
+        search,
+        employeeId,
+        limit,
+        offset,
+    }));
+}));
+activityRouter.get('/login-history/export', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const date = typeof req.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date) ? req.query.date : undefined;
+    const location = typeof req.query.location === 'string' ? req.query.location : undefined;
+    const history = await ActivityAnalyticsService.loginHistory(user, { date, location, limit: 1000 });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="bsc-login-history-${date || 'all'}.csv"`);
+    const header = 'ID,Employee Code,Full Name,Location,Login Time,Logout Time,Duration (Mins),Status,Browser,OS,IP\n';
+    const rows = history.items.map((i) => [
+        i.id,
+        `"${i.employeeCode}"`,
+        `"${i.employeeName.replace(/"/g, '""')}"`,
+        `"${(i.location || 'Main Store').replace(/"/g, '""')}"`,
+        `"${i.loginAt || ''}"`,
+        `"${i.logoutAt || (i.terminationStatus === 'active' ? 'Active' : '')}"`,
+        i.durationMinutes,
+        `"${i.terminationStatus}"`,
+        `"${i.browser || ''}"`,
+        `"${i.os || ''}"`,
+        `"${i.ip || ''}"`,
+    ].join(',')).join('\n');
+    res.send(header + rows);
+}));
+activityRouter.get('/leaves-overview', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const date = dateParam(req.query.date);
+    const location = typeof req.query.location === 'string' ? req.query.location : undefined;
+    res.json(await ActivityAnalyticsService.leavesOverview(user, date, location));
+}));
+activityRouter.get('/meetings-overview', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const date = dateParam(req.query.date);
+    res.json(await ActivityAnalyticsService.meetingsOverview(user, date));
+}));
 //# sourceMappingURL=activity.js.map
