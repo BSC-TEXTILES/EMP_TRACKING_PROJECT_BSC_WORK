@@ -165,6 +165,63 @@ async function ensureDatabaseReady() {
                     await execute('SET FOREIGN_KEY_CHECKS = 1');
                     console.log('[startup] Retained Gagan C B as sole primary employee record and removed demo IDs.');
                 }
+                // Ensure task management tables exist
+                await execute(`CREATE TABLE IF NOT EXISTS store_daily_checkpoints (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          employee_id BIGINT UNSIGNED NOT NULL,
+          store_id BIGINT UNSIGNED NULL,
+          checkpoint_date DATE NOT NULL,
+          time_slot VARCHAR(32) NOT NULL,
+          status VARCHAR(24) NOT NULL DEFAULT 'pending',
+          summary TEXT NULL,
+          issues_identified TEXT NULL,
+          escalated_to BIGINT UNSIGNED NULL,
+          submitted_at DATETIME(3) NULL,
+          verified_at DATETIME(3) NULL,
+          verified_by BIGINT UNSIGNED NULL,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_store_checkpoint_emp (employee_id, checkpoint_date, time_slot),
+          KEY idx_store_checkpoint_date (checkpoint_date, status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+                await execute(`CREATE TABLE IF NOT EXISTS employee_daily_performance (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          employee_id BIGINT UNSIGNED NOT NULL,
+          evaluation_date DATE NOT NULL,
+          task_completion_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          timely_completion_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          quality_accuracy_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          reporting_doc_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          attendance_punctuality_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          team_coordination_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          escalation_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          total_score DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          rating VARCHAR(32) NOT NULL DEFAULT 'Good',
+          evaluated_by BIGINT UNSIGNED NULL,
+          remarks TEXT NULL,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          UNIQUE KEY uq_emp_daily_perf (employee_id, evaluation_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+                await execute(`CREATE TABLE IF NOT EXISTS task_templates (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          designation_title VARCHAR(100) NOT NULL,
+          role_level INT NOT NULL DEFAULT 1,
+          time_slot VARCHAR(32) NOT NULL DEFAULT 'operations',
+          task_order INT NOT NULL DEFAULT 1,
+          title VARCHAR(200) NOT NULL,
+          description TEXT NULL,
+          priority VARCHAR(16) NOT NULL DEFAULT 'medium',
+          requires_evidence TINYINT(1) NOT NULL DEFAULT 0,
+          evidence_type VARCHAR(64) NULL,
+          requires_metric TINYINT(1) NOT NULL DEFAULT 0,
+          metric_label VARCHAR(64) NULL,
+          metric_unit VARCHAR(24) NULL,
+          is_active TINYINT(1) NOT NULL DEFAULT 1,
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
             }
             catch (schemaErr) {
                 console.warn('[startup] Schema readiness note:', schemaErr);

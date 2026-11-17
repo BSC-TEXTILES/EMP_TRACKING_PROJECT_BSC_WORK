@@ -175,11 +175,29 @@ filesRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
-    const file = await FileService.getForUser(id, user);
+    let file;
+    try {
+      file = await FileService.getForUser(id, user);
+    } catch {
+      if (req.query.v || req.headers.accept?.includes('image/')) {
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="#e2e8f0"/><circle cx="32" cy="24" r="12" fill="#94a3b8"/><path d="M16 52 C16 40 48 40 48 52 Z" fill="#94a3b8"/></svg>');
+        return;
+      }
+      throw ApiError.notFound('File not found');
+    }
+
     const absolute = FileService.absolutePath(file.storage_key);
     try {
       await fs.access(absolute);
     } catch {
+      if (file.mime_type.startsWith('image/') || req.query.v) {
+        res.setHeader('Content-Type', 'image/svg+xml');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.send('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" fill="#e2e8f0"/><circle cx="32" cy="24" r="12" fill="#94a3b8"/><path d="M16 52 C16 40 48 40 48 52 Z" fill="#94a3b8"/></svg>');
+        return;
+      }
       throw ApiError.notFound('File is no longer available on disk');
     }
     const inlineImage = file.mime_type.startsWith('image/') && req.query.download !== '1';
