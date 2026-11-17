@@ -192,7 +192,7 @@ export class FileService {
     if (Number(file.is_private) === 0) return file;
     if (Number(file.owner_id) === user.id) return file;
 
-    const [taskLink, reportLink, ticketLink, messageLink] = await Promise.all([
+    const [taskLink, reportLink, ticketLink, messageLink, mailLink] = await Promise.all([
       queryOne<{ id: number }>(
         `SELECT ta.id FROM task_attachments ta JOIN tasks t ON t.id = ta.task_id
          WHERE ta.file_id = ? AND (t.created_by = ? OR t.manager_id = ?
@@ -215,8 +215,15 @@ export class FileService {
          WHERE x.file_id = ? LIMIT 1`,
         [user.id, fileId],
       ),
+      // Files attached to an internal (mailbox) email: its sender and recipient may download them.
+      queryOne<{ id: number }>(
+        `SELECT e.id FROM internal_emails e
+         WHERE (e.sender_id = ? OR e.recipient_id = ?) AND e.attachments IS NOT NULL
+           AND JSON_CONTAINS(e.attachments, JSON_OBJECT('fileId', ?)) LIMIT 1`,
+        [user.id, user.id, fileId],
+      ).catch(() => null),
     ]);
-    if (taskLink || reportLink || ticketLink || messageLink) return file;
+    if (taskLink || reportLink || ticketLink || messageLink || mailLink) return file;
     throw ApiError.forbidden('You do not have access to this file.');
   }
 

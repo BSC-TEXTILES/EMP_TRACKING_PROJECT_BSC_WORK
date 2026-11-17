@@ -145,7 +145,7 @@ export class FileService {
             return file;
         if (Number(file.owner_id) === user.id)
             return file;
-        const [taskLink, reportLink, ticketLink, messageLink] = await Promise.all([
+        const [taskLink, reportLink, ticketLink, messageLink, mailLink] = await Promise.all([
             queryOne(`SELECT ta.id FROM task_attachments ta JOIN tasks t ON t.id = ta.task_id
          WHERE ta.file_id = ? AND (t.created_by = ? OR t.manager_id = ?
            OR EXISTS (SELECT 1 FROM task_assignments x WHERE x.task_id = t.id AND x.employee_id = ?)) LIMIT 1`, [fileId, user.id, user.id, user.id]),
@@ -156,8 +156,12 @@ export class FileService {
             queryOne(`SELECT x.id FROM message_attachments x JOIN messages m ON m.id = x.message_id
          JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.employee_id = ?
          WHERE x.file_id = ? LIMIT 1`, [user.id, fileId]),
+            // Files attached to an internal (mailbox) email: its sender and recipient may download them.
+            queryOne(`SELECT e.id FROM internal_emails e
+         WHERE (e.sender_id = ? OR e.recipient_id = ?) AND e.attachments IS NOT NULL
+           AND JSON_CONTAINS(e.attachments, JSON_OBJECT('fileId', ?)) LIMIT 1`, [user.id, user.id, fileId]).catch(() => null),
         ]);
-        if (taskLink || reportLink || ticketLink || messageLink)
+        if (taskLink || reportLink || ticketLink || messageLink || mailLink)
             return file;
         throw ApiError.forbidden('You do not have access to this file.');
     }

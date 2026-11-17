@@ -57,7 +57,8 @@ function shell(options) {
 </html>`;
 }
 function paragraph(text) {
-    return `<p style="margin:0 0 14px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.6;color:#334155">${esc(text)}</p>`;
+    // pre-wrap keeps the sender's line breaks and paragraphs in Gmail/Outlook.
+    return `<p style="margin:0 0 14px;font-family:Segoe UI,Arial,sans-serif;font-size:14px;line-height:1.6;color:#334155;white-space:pre-wrap">${esc(text)}</p>`;
 }
 function metaTable(meta) {
     if (!meta || meta.length === 0)
@@ -179,6 +180,15 @@ export const EMAIL_TEMPLATES = {
         label: 'Performance published',
         description: 'Monthly KPI evaluation published to the employee.',
         render: (data) => generic(data, data.appName ?? 'Workforce', 'Monthly performance published', greeting(data.name)),
+    },
+    internal_email: {
+        label: 'Mailbox email',
+        description: 'A message an employee sent from the Workforce mailbox.',
+        render: (data) => {
+            const appName = data.appName ?? 'Workforce';
+            const rendered = generic({ ...data, meta: [...(data.meta ?? []), ...(data.attachments?.length ? [{ label: 'Attachments', value: data.attachments.map((file) => file.name).join(', ') }] : [])] }, appName, data.title ?? 'New message', `${data.senderName ?? 'A colleague'} sent you a message through ${appName}.`);
+            return { ...rendered, subject: data.title ?? `Message from ${data.senderName ?? appName}` };
+        },
     },
     announcement: {
         label: 'Announcement',

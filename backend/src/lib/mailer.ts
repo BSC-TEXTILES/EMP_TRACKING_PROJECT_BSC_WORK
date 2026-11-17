@@ -155,20 +155,26 @@ async function deliver(row: {
   const rendered = renderEmail(row.template, { ...data, appName: config.appName, appUrl: config.appUrl });
 
   try {
+    const attachments = await loadAttachments(data.attachments);
     const info = await transport.sendMail({
       from: config.smtp.from,
       replyTo: config.smtp.replyTo || undefined,
-      to: row.recipient_name ? `"${row.recipient_name}" <${row.recipient_email}>` : row.recipient_email,
+      to: row.recipient_name ? `"${row.recipient_name.replace(/"/g, '')}" <${row.recipient_email}>` : row.recipient_email,
       subject: row.subject || rendered.subject,
       text: rendered.text,
       html: rendered.html,
+      attachments,
     });
+    // Only an address the provider accepted counts as sent.
+    if (Array.isArray(info.rejected) && info.rejected.length > 0 && (!info.accepted || info.accepted.length === 0)) {
+      throw Object.assign(new Error('Recipient rejected'), { code: 'EENVELOPE' });
+    }
     await execute(
       "UPDATE email_deliveries SET status = 'sent', sent_at = NOW(3), message_id = ?, last_error = NULL WHERE id = ?",
       [String(info.messageId ?? '').slice(0, 190) || null, row.id],
     );
   } catch (error) {
-    const message = 'SMTP delivery failed';
+    const message = describeSmtpError(error);
     const current = await queryOne<{ attempts: number; max_attempts: number }>(
       'SELECT attempts, max_attempts FROM email_deliveries WHERE id = ?',
       [row.id],
@@ -186,6 +192,67 @@ async function deliver(row: {
     }
     console.error(`[mail] delivery failed for ${row.recipient_email}: ${message}`);
   }
+}
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Loads attachment bytes from permanent storage. Files that are missing or that
+ * would push the email over 20 MB (most providers' limit) are left out; the
+ * email still links to the message, where they can be downloaded.
+ */
+async function loadAttachments(list: EmailTemplateData['attachments']): Promise<{ filename: string; content: Buffer; contentType: string }[]> {
+  if (!list?.length) return [];
+  const { FileService } = await import('../services/FileService.js');
+  const fs = await import('node:fs/promises');
+  const result: { filename: string; content: Buffer; contentType: string }[] = [];
+  let total = 0;
+  for (const item of list.slice(0, 10)) {
+    const file = await queryOne<{ storage_key: string; original_name: string; mime_type: string; size_bytes: number }>(
+      "SELECT storage_key, original_name, mime_type, size_bytes FROM files WHERE id = ? AND scan_status IN ('clean','validated')",
+      [item.fileId],
+    );
+    if (!file || total + Number(file.size_bytes) > MAX_ATTACHMENT_BYTES) continue;
+    try {
+      const content = await fs.readFile(FileService.absolutePath(file.storage_key));
+      total += content.length;
+      result.push({ filename: file.original_name, content, contentType: file.mime_type });
+    } catch {
+      console.error(`[mail] attachment file ${item.fileId} is missing from storage`);
+    }
+  }
+  return result;
+}
+
+/** Turns SMTP failures into an administrator-readable reason without exposing credentials. */
+export function describeSmtpError(error: unknown): string {
+  const err = error as { code?: string; responseCode?: number; command?: string };
+  if (err?.code === 'EAUTH' || err?.responseCode === 535) return 'SMTP authentication failed: check the SMTP username and password (for Gmail, use an App Password).';
+  if (err?.code === 'ESOCKET' || err?.code === 'ECONNECTION' || err?.code === 'ETIMEDOUT' || err?.code === 'ECONNREFUSED') return 'Could not connect to the SMTP server: check the host, port and SSL/TLS setting.';
+  if (err?.code === 'EENVELOPE' || (err?.responseCode && err.responseCode >= 550 && err.responseCode < 560)) return 'The mail server rejected the recipient or sender address.';
+  if (err?.responseCode === 554 || err?.responseCode === 552) return 'The mail server refused the message (size or content policy).';
+  return 'SMTP delivery failed.';
+}
+
+/**
+ * Sends one queued email right now (used where the user is waiting for the
+ * result, e.g. "Send email"). Returns the real outcome: 'sent' only after the
+ * provider accepted the message. Failed rows stay in the queue for retry.
+ */
+export async function deliverNow(id: number): Promise<{ status: 'sent' | 'failed' | 'skipped' | 'queued'; error: string | null }> {
+  const claimed = await execute(
+    "UPDATE email_deliveries SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status IN ('queued','failed') AND attempts < max_attempts",
+    [id],
+  );
+  if (claimed.affectedRows === 1) {
+    const row = await queryOne<{ id: number; recipient_email: string; recipient_name: string | null; subject: string; template: string; payload: string | null }>(
+      'SELECT id, recipient_email, recipient_name, subject, template, payload FROM email_deliveries WHERE id = ?', [id],
+    );
+    if (row) await deliver(row);
+  }
+  const after = await queryOne<{ status: string; last_error: string | null }>('SELECT status, last_error FROM email_deliveries WHERE id = ?', [id]);
+  const status = (['sent', 'failed', 'skipped'].includes(String(after?.status)) ? after!.status : 'queued') as 'sent' | 'failed' | 'skipped' | 'queued';
+  return { status, error: status === 'sent' ? null : after?.last_error ?? null };
 }
 
 /** Processes due queue rows. Returns counters for the job log. */
@@ -393,7 +460,7 @@ export async function sendTestEmail(to: string): Promise<{ delivered: boolean; e
     ).catch(() => undefined);
     return { delivered: true };
   } catch (error) {
-    const message = 'SMTP delivery failed';
+    const message = describeSmtpError(error);
     await execute(
       `INSERT INTO email_deliveries (recipient_email, subject, template, status, attempts, last_error)
        VALUES (?, ?, 'test', 'failed', 1, ?)`,

@@ -22,7 +22,10 @@ import { WebhookService } from './WebhookService.js';
  * page content or input values ever reach the server.
  */
 
-export type PresenceStatus = 'active' | 'away' | 'dnd' | 'in_meeting' | 'on_break' | 'on_leave' | 'offline' | 'inactive_today';
+export type PresenceStatus = 'active' | 'away' | 'dnd' | 'in_meeting' | 'on_break' | 'on_leave' | 'offline' | 'logged_out' | 'inactive_today';
+
+/** A recent authenticated request counts as connected, so a dropped socket is not "offline". */
+const RECENT_SEEN_SECONDS = 150;
 export type ManualStatus = 'away' | 'dnd' | 'on_leave';
 
 export const PRESENCE_LABELS: Record<PresenceStatus, string> = {
@@ -33,6 +36,7 @@ export const PRESENCE_LABELS: Record<PresenceStatus, string> = {
   on_break: 'On Break',
   on_leave: 'On Leave',
   offline: 'Offline',
+  logged_out: 'Logged out',
   inactive_today: 'Inactive Today – Employee has not logged in.',
 };
 
@@ -58,6 +62,13 @@ interface PresenceRow {
   on_leave: number;
   on_break: number;
   logged_in_today: number;
+  has_session: number;
+  seen_seconds: number | null;
+}
+
+/** Connected = live socket, or an authenticated request in the last couple of minutes. */
+function connected(row: PresenceRow): boolean {
+  return isOnline(Number(row.id)) || (Number(row.has_session) === 1 && row.seen_seconds !== null && Number(row.seen_seconds) <= RECENT_SEEN_SECONDS);
 }
 
 const lastKnown = new Map<number, PresenceStatus>();
@@ -68,7 +79,12 @@ function resolve(row: PresenceRow, idleMinutes: number, busy: Set<number>): Pres
   const id = Number(row.id);
   const manual = row.availability_status as ManualStatus | null;
   if (manual === 'on_leave' || Number(row.on_leave)) return 'on_leave';
-  if (!isOnline(id)) return Number(row.logged_in_today) ? 'offline' : 'inactive_today';
+  if (!connected(row)) {
+    if (!Number(row.logged_in_today)) return 'inactive_today';
+    // Signed in today but no live session left: an explicit logout or an expired session.
+    // With a session still valid it is only a connection interruption ("offline").
+    return Number(row.has_session) ? 'offline' : 'logged_out';
+  }
   if (manual === 'dnd') return 'dnd';
   if (busy.has(id)) return 'in_meeting';
   if (Number(row.on_break)) return 'on_break';
@@ -111,7 +127,9 @@ export class PresenceService {
                 AND ? BETWEEN lr.start_date AND lr.end_date) AS on_leave,
          EXISTS(SELECT 1 FROM attendance_breaks b JOIN attendance a ON a.id = b.attendance_id
                 WHERE a.employee_id = e.id AND a.work_date = ? AND b.ended_at IS NULL) AS on_break,
-         EXISTS(SELECT 1 FROM login_history h WHERE h.employee_id = e.id AND h.success = 1 AND h.created_at >= ?) AS logged_in_today
+         EXISTS(SELECT 1 FROM login_history h WHERE h.employee_id = e.id AND h.success = 1 AND h.created_at >= ?) AS logged_in_today,
+         EXISTS(SELECT 1 FROM employee_sessions s WHERE s.employee_id = e.id AND s.revoked_at IS NULL AND s.expires_at > NOW(3)) AS has_session,
+         TIMESTAMPDIFF(SECOND, e.last_seen_at, NOW(3)) AS seen_seconds
        FROM employees e WHERE e.status = 'active' ${filter}`,
       [date, date, start, ...(employeeIds ?? [])],
     );
@@ -123,7 +141,7 @@ export class PresenceService {
       status,
       label: PRESENCE_LABELS[status],
       manual: (row.availability_status as ManualStatus | null) ?? null,
-      online: isOnline(Number(row.id)),
+      online: connected(row),
       lastActiveAt: toIso(row.last_active_at),
       lastSeenAt: toIso(row.last_seen_at),
     };
@@ -152,7 +170,7 @@ export class PresenceService {
 
   /** Records that real user activity happened. Returns the new effective status. */
   static async ping(employeeId: number): Promise<PresenceEntry> {
-    await execute('UPDATE employees SET last_active_at = NOW(3) WHERE id = ?', [employeeId]);
+    await execute('UPDATE employees SET last_active_at = NOW(3), last_seen_at = NOW(3) WHERE id = ?', [employeeId]);
     return PresenceService.refresh(employeeId);
   }
 

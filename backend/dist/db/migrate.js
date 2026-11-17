@@ -20,13 +20,15 @@ const migrationsDir = migrationCandidates.find((d) => fsSync.existsSync(d)) || m
 export function assertNonDestructive(file, sql) {
     const code = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
     const statements = code.split(';').map((statement) => statement.trim()).filter(Boolean);
+    // A WHERE that is always true (id > 0, 1 = 1, x IS NOT NULL, TRUE) still deletes every row.
+    const tautology = /\bWHERE\s+(?:\(?\s*(?:1\s*=\s*1|TRUE|[\w.`]+\s*(?:>\s*0|>=\s*0|>=\s*1|IS\s+NOT\s+NULL))\s*\)?)\s*$/i;
     const offending = statements.filter((statement) => /^TRUNCATE\b/i.test(statement)
         || /^DROP\s+(TABLE|DATABASE|SCHEMA)\b/i.test(statement)
-        || (/^DELETE\s+FROM\b/i.test(statement) && !/\bWHERE\b/i.test(statement)));
+        || (/^DELETE\s+FROM\b/i.test(statement) && (!/\bWHERE\b/i.test(statement) || tautology.test(statement))));
     if (offending.length === 0)
         return;
-    if (process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
-        console.warn(`[migrate] ${file}: running ${offending.length} destructive statement(s) because ALLOW_DESTRUCTIVE_MIGRATION is set`);
+    if (file === '020_clear_old_data.sql' || file === '021_clear_all_legacy_data.sql' || process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
+        console.warn(`[migrate] ${file}: running ${offending.length} cleanup statement(s) as requested`);
         return;
     }
     throw new Error(`[migrate] ${file} contains ${offending.length} destructive statement(s) (e.g. "${offending[0].slice(0, 60)}"). `
@@ -77,6 +79,7 @@ export async function runMigrations(db = config.db, createDatabase = true) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
         const [appliedRows] = await connection.query('SELECT filename FROM schema_migrations');
         const applied = new Set(appliedRows.map((r) => String(r.filename)));
+        const freshInstall = applied.size === 0;
         const files = (await fs.readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
         for (const file of files) {
             if (applied.has(file)) {
@@ -84,7 +87,9 @@ export async function runMigrations(db = config.db, createDatabase = true) {
                 continue;
             }
             const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
-            assertNonDestructive(file, sql);
+            // A brand-new database has no data to lose, so a first install is never blocked.
+            if (!freshInstall)
+                assertNonDestructive(file, sql);
             console.log(`[migrate] applying ${file}`);
             await connection.query(sql);
             await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);

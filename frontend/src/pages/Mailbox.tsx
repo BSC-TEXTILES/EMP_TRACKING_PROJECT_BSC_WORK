@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, fileUrl } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -8,6 +8,14 @@ import { Avatar, Badge, EmptyState, Field, Modal, Skeleton } from '../components
 import { Icon } from '../components/icons';
 import { cx, formatDateTime, formatDayLabel } from '../lib/format';
 import type { PickerEmployee } from '../lib/types';
+
+/** Server's real per-recipient delivery outcome for "Send Email". */
+interface SendResult {
+  sent: number;
+  delivered: number;
+  deliveryConfigured: boolean;
+  recipients: { recipientId: number; name: string; email: string; emailId: number; delivery: 'sent' | 'failed' | 'queued' | 'not_configured'; error: string | null }[];
+}
 
 interface EmailItem {
   id: number;
@@ -355,7 +363,8 @@ export default function Mailbox() {
                     {activeEmail.attachments.map((att) => (
                       <a
                         key={att.fileId}
-                        href={`/api/files/${att.fileId}`}
+                        href={fileUrl(att.fileId, true)}
+                        download={att.name}
                         target="_blank"
                         rel="noreferrer"
                         className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 text-xs font-medium text-ink-700 hover:bg-ink-100 transition-colors"
@@ -377,10 +386,19 @@ export default function Mailbox() {
       <ComposeEmailModal
         open={composeOpen}
         onClose={() => setComposeOpen(false)}
-        onSent={async () => {
+        onSent={async (result) => {
           setComposeOpen(false);
           await loadEmails();
-          toast.success('Email sent successfully.');
+          // Report what really happened: delivered to the inbox, or only saved in Workforce.
+          const failed = result.recipients.filter((r) => r.delivery !== 'sent');
+          if (!result.deliveryConfigured) {
+            toast.warning(`Saved in the Workforce mailbox for ${result.sent} recipient(s). Outgoing email is not configured on the server, so nothing was sent to their email inbox. Ask an administrator to set up SMTP.`);
+          } else if (failed.length === 0) {
+            toast.success(`Email delivered to ${result.recipients.map((r) => r.email).join(', ')}.`);
+          } else {
+            const reason = failed[0].error ?? 'delivery failed';
+            toast.error(`Delivered to ${result.delivered} of ${result.sent}. Not delivered to ${failed.map((r) => r.email).join(', ')}: ${reason} It is saved in their Workforce mailbox and will be retried.`);
+          }
         }}
         initialReply={activeEmail ? { recipientId: activeEmail.senderId, subject: `Re: ${activeEmail.subject}` } : undefined}
       />
@@ -396,7 +414,7 @@ function ComposeEmailModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onSent: () => Promise<void>;
+  onSent: (result: SendResult) => Promise<void>;
   initialReply?: { recipientId?: number; subject?: string };
 }) {
   const toast = useToast();
@@ -465,13 +483,13 @@ function ComposeEmailModal({
 
     setBusy(true);
     try {
-      await api.post('/emails/send', {
+      const result = await api.post<SendResult>('/emails/send', {
         recipientIds,
         subject: subject.trim(),
         body: body.trim(),
         attachments: attachments.length > 0 ? attachments : undefined,
       });
-      await onSent();
+      await onSent(result);
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {

@@ -176,6 +176,33 @@ async function seedReferenceData() {
             designation.level,
         ]);
     }
+    // Standard reporting lines (child designation -> designation it reports to), set only where missing.
+    const reporting = [
+        ['Managing Director', 'Owner'], ['Chief Executive Officer', 'Managing Director'], ['Chief Operating Officer', 'Chief Executive Officer'],
+        ['Chief Technology Officer', 'Chief Executive Officer'], ['Chief Financial Officer', 'Chief Executive Officer'], ['General Manager', 'Chief Operating Officer'],
+        ['Deputy General Manager', 'General Manager'], ['Operations Manager', 'General Manager'], ['Department Head', 'General Manager'],
+        ['Retail Head', 'Chief Operating Officer'], ['Regional Manager', 'Retail Head'], ['Branch Manager', 'Regional Manager'],
+        ['HR Director', 'Chief Executive Officer'], ['HR Manager', 'HR Director'], ['HR Executive', 'HR Manager'], ['HR Recruiter', 'HR Manager'],
+        ['HR Coordinator', 'HR Manager'], ['HR Administrator', 'HR Manager'], ['Payroll Manager', 'HR Director'], ['Payroll Executive', 'Payroll Manager'],
+        ['IT Head', 'Chief Technology Officer'], ['IT Manager', 'IT Head'], ['IT Administrator', 'IT Manager'], ['Software Developer', 'IT Manager'],
+        ['Frontend Developer', 'IT Manager'], ['Backend Developer', 'IT Manager'], ['Full Stack Developer', 'IT Manager'], ['Mobile App Developer', 'IT Manager'],
+        ['UI/UX Designer', 'IT Manager'], ['QA Engineer', 'IT Manager'], ['Software Tester', 'QA Engineer'], ['DevOps Engineer', 'IT Manager'],
+        ['Network Administrator', 'IT Administrator'], ['System Administrator', 'IT Administrator'], ['Cybersecurity Engineer', 'IT Manager'],
+        ['Database Administrator', 'IT Manager'], ['IT Support Executive', 'IT Administrator'], ['Helpdesk Technician', 'IT Support Executive'],
+        ['Digital Marketing Manager', 'General Manager'], ['SEO Executive', 'Digital Marketing Manager'], ['Social Media Manager', 'Digital Marketing Manager'],
+        ['Content Writer', 'Social Media Manager'], ['Graphic Designer', 'Digital Marketing Manager'], ['Video Editor', 'Digital Marketing Manager'],
+        ['Performance Marketing Executive', 'Digital Marketing Manager'], ['Business Analyst', 'Operations Manager'], ['Data Analyst', 'Business Analyst'],
+        ['MIS Executive', 'Business Analyst'], ['Reporting Executive', 'Business Analyst'], ['CRM Manager', 'Operations Manager'], ['CRM Executive', 'CRM Manager'],
+        ['Customer Support Executive', 'CRM Manager'], ['Telecaller', 'CRM Manager'], ['Business Development Executive', 'Operations Manager'],
+        ['Store Manager', 'Retail Head'], ['Assistant Store Manager', 'Store Manager'], ['Floor Manager', 'Assistant Store Manager'],
+        ['Department Manager', 'Store Manager'], ['Sales Manager', 'Store Manager'], ['Salesman', 'Floor Manager'], ['Cashier', 'Store Manager'],
+        ['Billing Executive', 'Store Manager'], ['Stock Manager', 'Store Manager'], ['Inventory Executive', 'Stock Manager'], ['Visual Merchandiser', 'Store Manager'],
+        ['Customer Relationship Executive', 'Store Manager'], ['Store Support Executive', 'Assistant Store Manager'],
+    ];
+    for (const [child, parent] of reporting) {
+        await execute(`UPDATE designations c JOIN (SELECT id FROM designations WHERE title = ? ORDER BY id LIMIT 1) p ON p.id <> c.id
+       SET c.reporting_designation_id = p.id WHERE c.title = ? AND c.reporting_designation_id IS NULL`, [parent, child]);
+    }
     for (const location of LOCATIONS) {
         await execute(`INSERT INTO locations (name, code, city, address, latitude, longitude, geofence_radius_m, timezone)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'Asia/Kolkata')

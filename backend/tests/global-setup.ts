@@ -8,7 +8,9 @@ function runTsx(args: string[]): void {
   const tsx = path.resolve(backendDir, '../node_modules/.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
   execFileSync(process.platform === 'win32' ? `"${tsx}"` : tsx, args, {
     cwd: backendDir,
-    env: { ...process.env, NODE_ENV: 'test' },
+    // The freshly created test database is empty, so the opt-in data-wipe
+    // migration is harmless here; running it also proves its SQL is valid.
+    env: { ...process.env, NODE_ENV: 'test', ALLOW_DESTRUCTIVE_MIGRATION: '020_clear_old_data.sql' },
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });

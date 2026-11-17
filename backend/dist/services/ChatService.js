@@ -569,6 +569,31 @@ export class ChatService {
         if (!conv)
             throw ApiError.notFound('Conversation not found');
         if (conv.conv_type === 'direct') {
+            const isFullAdmin = actor.roleLevel >= 60 || actor.permissions.includes('chat.groups.manage');
+            if (isFullAdmin) {
+                await transaction(async (conn) => {
+                    const [messages] = await conn.query('SELECT id FROM messages WHERE conversation_id = ?', [conversationId]);
+                    const msgIds = messages.map((m) => m.id);
+                    if (msgIds.length > 0) {
+                        const ph = msgIds.map(() => '?').join(',');
+                        await conn.query(`DELETE FROM message_reactions WHERE message_id IN (${ph})`, msgIds);
+                        await conn.query(`DELETE FROM message_attachments WHERE message_id IN (${ph})`, msgIds);
+                        await conn.query(`DELETE FROM message_receipts WHERE message_id IN (${ph})`, msgIds);
+                        await conn.query('DELETE FROM messages WHERE conversation_id = ?', [conversationId]);
+                    }
+                    await conn.query('DELETE FROM conversation_user_state WHERE conversation_id = ?', [conversationId]);
+                    await conn.query('DELETE FROM conversation_members WHERE conversation_id = ?', [conversationId]);
+                    await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
+                });
+                emitToConversation(conversationId, 'conversation:deleted', { conversationId });
+                await recordAudit({
+                    actorId: actor.id,
+                    action: 'chat.conversation_deleted',
+                    entityType: 'conversation',
+                    entityId: conversationId,
+                });
+                return { deleted: true, left: false, hidden: false };
+            }
             await execute(`INSERT INTO conversation_user_state (conversation_id, employee_id, deleted_at, cleared_at)
          VALUES (?, ?, NOW(3), NOW(3))
          ON DUPLICATE KEY UPDATE deleted_at = NOW(3), cleared_at = NOW(3)`, [conversationId, actor.id]);
@@ -599,6 +624,7 @@ export class ChatService {
                     await conn.query(`DELETE FROM message_receipts WHERE message_id IN (${ph})`, msgIds);
                     await conn.query('DELETE FROM messages WHERE conversation_id = ?', [conversationId]);
                 }
+                await conn.query('DELETE FROM conversation_user_state WHERE conversation_id = ?', [conversationId]);
                 await conn.query('DELETE FROM conversation_members WHERE conversation_id = ?', [conversationId]);
                 await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
             });

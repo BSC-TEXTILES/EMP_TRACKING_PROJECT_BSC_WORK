@@ -2,7 +2,10 @@ import { execute, query, queryOne } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { toIso } from '../lib/dates.js';
 import { NotificationService } from './NotificationService.js';
-import { enqueueEmail } from '../lib/mailer.js';
+import { deliverNow, enqueueEmail } from '../lib/mailer.js';
+import { config } from '../config.js';
+import { recordAudit } from '../lib/audit.js';
+import { FileService } from './FileService.js';
 export class InternalEmailService {
     static async inbox(userId, options = {}) {
         const page = Math.max(1, options.page ?? 1);
@@ -137,53 +140,96 @@ export class InternalEmailService {
             createdAt: toIso(row.created_at),
         };
     }
+    /**
+     * Sends a mailbox email: stored in Workforce for every recipient, plus a real
+     * email to each recipient's registered address (e.g. their Gmail inbox).
+     * Returns the true per-recipient delivery outcome — "sent" only after the
+     * mail provider accepted the message.
+     */
     static async send(sender, input) {
-        if (!input.subject.trim())
+        const subject = input.subject.trim();
+        const body = input.body.trim();
+        if (!subject)
             throw ApiError.badRequest('Subject is required.');
-        if (!input.body.trim())
+        if (!body)
             throw ApiError.badRequest('Message body is required.');
-        const recipients = [...new Set(input.recipientIds.filter((id) => Number.isFinite(id) && id > 0))];
+        const recipients = [...new Set(input.recipientIds.filter((id) => Number.isFinite(id) && id > 0 && id !== sender.id))];
         if (recipients.length === 0)
             throw ApiError.badRequest('Select at least one recipient.');
-        const createdIds = [];
-        const attachmentsJson = input.attachments && input.attachments.length > 0 ? JSON.stringify(input.attachments) : null;
+        if (recipients.length > 50)
+            throw ApiError.badRequest('Send to at most 50 recipients at a time.');
+        // Attachments must be files the sender can actually access; metadata comes
+        // from the database, never from the browser.
+        const attachments = [];
+        for (const item of input.attachments ?? []) {
+            const file = await FileService.getForUser(item.fileId, sender);
+            attachments.push({ fileId: Number(file.id), name: file.original_name, size: Number(file.size_bytes), mimeType: file.mime_type });
+        }
+        const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : null;
+        const smtpReady = config.smtp.configured;
+        const results = [];
         for (const recipientId of recipients) {
             const recipient = await queryOne("SELECT id, email, full_name FROM employees WHERE id = ? AND status = 'active'", [recipientId]);
             if (!recipient)
                 continue;
-            const res = await execute(`INSERT INTO internal_emails (sender_id, recipient_id, subject, body, attachments)
-         VALUES (?, ?, ?, ?, ?)`, [sender.id, recipientId, input.subject.trim(), input.body.trim(), attachmentsJson]);
-            const emailId = res.insertId;
-            createdIds.push(emailId);
-            // In-app notification
+            const res = await execute('INSERT INTO internal_emails (sender_id, recipient_id, subject, body, attachments) VALUES (?, ?, ?, ?, ?)', [sender.id, recipientId, subject, body, attachmentsJson]);
+            const emailId = Number(res.insertId);
             await NotificationService.notify({
                 employeeIds: [recipientId],
                 type: 'system',
                 title: `Email from ${sender.fullName}`,
-                body: input.subject.trim(),
+                body: subject,
                 link: `/mailbox?id=${emailId}`,
                 actorId: sender.id,
             });
-            // Best-effort SMTP forwarding if external mail is desired
-            try {
-                await enqueueEmail({
-                    to: recipient.email,
-                    template: 'ticket_update',
-                    subject: `[Workforce] ${input.subject.trim()}`,
-                    data: {
-                        title: input.subject.trim(),
-                        body: input.body.trim(),
-                        name: recipient.full_name,
-                        link: `/mailbox?id=${emailId}`,
-                        linkLabel: 'View Email in Workforce',
-                    },
-                }).catch(() => null);
+            let delivery = 'not_configured';
+            let error = smtpReady ? null : 'Outgoing email (SMTP) is not configured on the server.';
+            const deliveryId = await enqueueEmail({
+                to: recipient.email,
+                toName: recipient.full_name,
+                template: 'internal_email',
+                subject,
+                relatedType: 'internal_email',
+                relatedId: emailId,
+                dedupeKey: `internal_email:${emailId}`,
+                data: {
+                    title: subject,
+                    body,
+                    name: recipient.full_name,
+                    senderName: sender.fullName,
+                    link: `/mailbox?id=${emailId}`,
+                    linkLabel: 'Open in Workforce',
+                    meta: [{ label: 'From', value: `${sender.fullName} (${sender.email})` }],
+                    attachments: attachments.map((file) => ({ fileId: file.fileId, name: file.name })),
+                },
+            });
+            if (smtpReady && deliveryId) {
+                const outcome = await deliverNow(deliveryId);
+                delivery = outcome.status === 'sent' ? 'sent' : outcome.status === 'failed' ? 'failed' : 'queued';
+                error = outcome.error;
             }
-            catch {
-                /* Ignore SMTP failure for internal email */
+            else if (smtpReady) {
+                delivery = 'failed';
+                error = 'The email could not be queued.';
             }
+            results.push({ recipientId, name: recipient.full_name, email: recipient.email, emailId, delivery, error });
         }
-        return { sent: createdIds.length, emailIds: createdIds };
+        if (results.length === 0)
+            throw ApiError.badRequest('None of the selected recipients are active employees.');
+        await recordAudit({
+            actorId: sender.id,
+            action: 'internal_email.sent',
+            entityType: 'internal_email',
+            entityId: results[0].emailId,
+            after: { recipients: results.length, delivered: results.filter((r) => r.delivery === 'sent').length, attachments: attachments.length },
+        });
+        return {
+            sent: results.length,
+            emailIds: results.map((r) => r.emailId),
+            delivered: results.filter((r) => r.delivery === 'sent').length,
+            deliveryConfigured: smtpReady,
+            recipients: results,
+        };
     }
     static async toggleStar(id, userId) {
         const row = await queryOne('SELECT sender_id, recipient_id, is_starred_by_recipient, is_starred_by_sender FROM internal_emails WHERE id = ?', [id]);

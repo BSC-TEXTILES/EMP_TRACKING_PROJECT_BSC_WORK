@@ -29,7 +29,6 @@ DELETE FROM projects WHERE id > 0;
 DELETE FROM ticket_attachments WHERE id > 0;
 DELETE FROM ticket_assignments WHERE ticket_id > 0;
 DELETE FROM ticket_comments WHERE id > 0;
-DELETE FROM ticket_issue_details WHERE ticket_id > 0;
 DELETE FROM automatic_ticket_links WHERE id > 0;
 DELETE FROM tickets WHERE id > 0;
 
@@ -43,9 +42,6 @@ DELETE FROM attendance_corrections WHERE id > 0;
 DELETE FROM attendance WHERE id > 0;
 
 -- 7. Activity Monitoring & Logs
-DELETE FROM activity_events WHERE id > 0;
-DELETE FROM activity_metrics WHERE id > 0;
-DELETE FROM application_activities WHERE id > 0;
 DELETE FROM system_error_events WHERE id > 0;
 DELETE FROM error_incidents WHERE id > 0;
 DELETE FROM activity_audit_logs WHERE id > 0;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, fileUrl } from '../lib/api';
 import { useDocumentTitle, useDebounced } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocketEvent } from '../contexts/RealtimeContext';
@@ -346,7 +346,7 @@ export default function Tickets() {
                 <div key={key}><dt className="text-xs text-ink-500">{key.replace(/([A-Z])/g, ' $1').replace(/^./, letter => letter.toUpperCase()).replace('And Os', 'and OS')}</dt><dd className="whitespace-pre-wrap">{String(value)}</dd></div>
               ))}
             </dl>}
-            {!!detail.attachments?.length && <div className="space-y-1"><p className="text-xs font-semibold">Attachments</p>{detail.attachments.map(file => <a key={file.file_id} className="block text-sm underline" href={`/api/files/${file.file_id}`}>{file.original_name}</a>)}</div>}
+            {!!detail.attachments?.length && <div className="space-y-1"><p className="text-xs font-semibold">Attachments</p>{detail.attachments.map(file => <a key={file.file_id} className="block text-sm underline" href={fileUrl(file.file_id, true)}>{file.original_name}</a>)}</div>}
             <div className="grid gap-2 text-xs text-ink-500 sm:grid-cols-2">
               <p>Assigned team: {detail.assignedTeam ?? '—'}</p>
               <p>Assignee: {detail.assigneeName ?? 'Unassigned'}</p>

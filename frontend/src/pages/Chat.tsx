@@ -159,7 +159,9 @@ export default function Chat() {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameInput, setRenameInput] = useState('');
   const [renameDescription, setRenameDescription] = useState('');
+  const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
@@ -810,26 +812,31 @@ export default function Chat() {
     setSearchOpen(false);
   };
 
-  const handleRename = async (event?: React.FormEvent) => {
-    event?.preventDefault();
-    if (!activeId || !renameInput.trim()) return;
+  const handleRename = async (newName?: string, newDescription?: string) => {
+    const finalName = (newName ?? renameInput).trim();
+    const finalDescription = (newDescription ?? renameDescription).trim();
+    const targetId = renameTarget?.id ?? activeId;
+    if (!targetId || !finalName) return;
     setBusyAction(true);
     try {
-      await api.patch(`/chat/conversations/${activeId}`, {
-        name: renameInput.trim(),
-        description: renameDescription.trim() || undefined,
+      await api.patch(`/chat/conversations/${targetId}`, {
+        name: finalName,
+        description: finalDescription || undefined,
       });
       setConversations((previous) =>
         previous.map((conversation) =>
-          conversation.id === activeId ? { ...conversation, name: renameInput.trim() } : conversation,
+          conversation.id === targetId ? { ...conversation, name: finalName } : conversation,
         ),
       );
-      setDetail((previous) =>
-        previous
-          ? { ...previous, name: renameInput.trim(), description: renameDescription.trim() || null }
-          : previous,
-      );
+      if (activeId === targetId) {
+        setDetail((previous) =>
+          previous
+            ? { ...previous, name: finalName, description: finalDescription || null }
+            : previous,
+        );
+      }
       setRenameOpen(false);
+      setRenameTarget(null);
       toast.success('Conversation name updated.');
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -839,15 +846,17 @@ export default function Chat() {
   };
 
   const handleDelete = async () => {
-    if (!activeId) return;
+    const targetId = deleteTarget?.id ?? activeId;
+    if (!targetId) return;
     setBusyAction(true);
     try {
       const result = await api.del<{ deleted?: boolean; left?: boolean; hidden?: boolean }>(
-        `/chat/conversations/${activeId}`,
+        `/chat/conversations/${targetId}`,
       );
-      removeConversationLocally(activeId);
+      removeConversationLocally(targetId);
       setDeleteOpen(false);
-      if (result.hidden) toast.success('Chat deleted from your account. The other participant keeps their copy.');
+      setDeleteTarget(null);
+      if (result.hidden) toast.success('Chat deleted from your account.');
       else if (result.deleted) toast.success('Group deleted for all members.');
       else if (result.left) toast.success('You left the conversation.');
       else toast.success('Conversation removed.');
@@ -945,27 +954,28 @@ export default function Chat() {
   );
   const typingNames = Object.values(typingUsers);
 
+  const currentDeleteTarget =
+    deleteTarget ??
+    (activeConversation
+      ? activeConversation
+      : detail
+        ? ({ id: detail.id, name: detail.name, type: detail.type } as ConversationSummary)
+        : null);
+
   const deleteCopy =
-    detail?.type === 'direct'
+    currentDeleteTarget?.type === 'direct'
       ? {
-          title: 'Delete chat',
+          title: `Delete chat with ${currentDeleteTarget.name}`,
           description:
-            'This chat and its messages will be removed from your account only. The other participant keeps their copy of the conversation and any attachments. This cannot be undone for you.',
+            `This chat with ${currentDeleteTarget.name} and its messages will be removed from your account. The other participant keeps their copy. This cannot be undone.`,
           confirm: 'Delete chat',
         }
-      : detail?.myRole === 'admin'
-        ? {
-            title: 'Delete group',
-            description:
-              'This permanently deletes the group, its messages and its attachments for every member. This cannot be undone.',
-            confirm: 'Delete group',
-          }
-        : {
-            title: 'Leave group',
-            description:
-              'You will stop receiving messages from this group. Your existing message history in this group will no longer be accessible to you.',
-            confirm: 'Leave group',
-          };
+      : {
+          title: `Delete group "${currentDeleteTarget?.name ?? 'group'}"`,
+          description:
+            'Are you sure you want to delete this group? This action will permanently remove the conversation and all messages.',
+          confirm: 'Delete group',
+        };
 
   return (
     <div className="flex h-[calc(100vh-8.5rem)] min-h-[520px] overflow-hidden rounded-xl border border-ink-200 bg-white shadow-sm">
@@ -1013,53 +1023,87 @@ export default function Chat() {
             <EmptyState compact title="No conversations" description="Start a direct chat or create a group." />
           ) : (
             filteredConversations.map((conversation) => (
-              <button
+              <div
                 key={conversation.id}
-                type="button"
-                onClick={() => openConversation(conversation.id)}
                 className={cx(
-                  'flex w-full items-start gap-2.5 border-b border-ink-100 px-3 py-2.5 text-left hover:bg-ink-50',
+                  'group relative flex w-full items-center justify-between border-b border-ink-100 transition-colors hover:bg-ink-50',
                   activeId === conversation.id && 'bg-brand-50 hover:bg-brand-50',
                 )}
               >
-                <Avatar
-                  name={conversation.name}
-                  src={conversation.otherPhoto}
-                  size={38}
-                  online={
-                    conversation.otherEmployeeId
-                      ? onlineIds.includes(conversation.otherEmployeeId)
-                      : undefined
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-medium text-ink-900">{conversation.name}</p>
-                    {conversation.lastMessageAt && (
-                      <span className="shrink-0 text-[10px] text-ink-400">
-                        {formatTime(conversation.lastMessageAt)}
-                      </span>
-                    )}
+                <button
+                  type="button"
+                  onClick={() => openConversation(conversation.id)}
+                  className="flex min-w-0 flex-1 items-start gap-2.5 px-3 py-2.5 text-left"
+                >
+                  <Avatar
+                    name={conversation.name}
+                    src={conversation.otherPhoto}
+                    size={38}
+                    online={
+                      conversation.otherEmployeeId
+                        ? onlineIds.includes(conversation.otherEmployeeId)
+                        : undefined
+                    }
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium text-ink-900">{conversation.name}</p>
+                      {conversation.lastMessageAt && (
+                        <span className="shrink-0 text-[10px] text-ink-400">
+                          {formatTime(conversation.lastMessageAt)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-xs text-ink-500">
+                        {conversation.lastSender ? `${conversation.lastSender.split(' ')[0]}: ` : ''}
+                        {conversation.lastMessage ?? 'No messages yet'}
+                      </p>
+                      {conversation.unread > 0 && (
+                        <span className="shrink-0 rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+                          {conversation.unread}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 flex gap-1">
+                      {conversation.type === 'channel' && <Badge tone="brand">Channel</Badge>}
+                      {conversation.type === 'group' && <Badge tone="neutral">{conversation.memberCount} members</Badge>}
+                      {conversation.isAnnouncement && <Badge tone="warning">Announcements</Badge>}
+                      {conversation.muted && <Badge tone="neutral">Muted</Badge>}
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-xs text-ink-500">
-                      {conversation.lastSender ? `${conversation.lastSender.split(' ')[0]}: ` : ''}
-                      {conversation.lastMessage ?? 'No messages yet'}
-                    </p>
-                    {conversation.unread > 0 && (
-                      <span className="shrink-0 rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">
-                        {conversation.unread}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 flex gap-1">
-                    {conversation.type === 'channel' && <Badge tone="brand">Channel</Badge>}
-                    {conversation.type === 'group' && <Badge tone="neutral">{conversation.memberCount} members</Badge>}
-                    {conversation.isAnnouncement && <Badge tone="warning">Announcements</Badge>}
-                    {conversation.muted && <Badge tone="neutral">Muted</Badge>}
-                  </div>
+                </button>
+                <div className="flex items-center gap-0.5 pr-2 shrink-0">
+                  <button
+                    type="button"
+                    title="Change name"
+                    aria-label="Change name"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRenameTarget(conversation);
+                      setRenameInput(conversation.name);
+                      setRenameDescription(conversation.description ?? '');
+                      setRenameOpen(true);
+                    }}
+                    className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600 transition-colors"
+                  >
+                    <Icon name="edit" size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    title="Delete chat"
+                    aria-label="Delete chat"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(conversation);
+                      setDeleteOpen(true);
+                    }}
+                    className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                  >
+                    <Icon name="trash" size={14} />
+                  </button>
                 </div>
-              </button>
+              </div>
             ))
           )}
         </div>
@@ -1096,20 +1140,25 @@ export default function Chat() {
                     <p className="truncate text-sm font-semibold text-ink-900">
                       {activeConversation?.name ?? detail?.name ?? 'Conversation'}
                     </p>
-                    {canManage && detail?.type !== 'direct' && (
-                      <button
-                        type="button"
-                        className="rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
-                        title="Rename conversation"
-                        onClick={() => {
-                          setRenameInput(activeConversation?.name ?? detail?.name ?? '');
-                          setRenameDescription(detail?.description ?? '');
-                          setRenameOpen(true);
-                        }}
-                      >
-                        <Icon name="edit" size={13} />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className="rounded p-1 text-ink-400 hover:bg-ink-100 hover:text-brand-600 transition-colors"
+                      title="Change name"
+                      onClick={() => {
+                        const target = activeConversation ?? (detail ? ({
+                          id: detail.id,
+                          name: detail.name,
+                          description: detail.description,
+                          type: detail.type,
+                        } as ConversationSummary) : null);
+                        setRenameTarget(target);
+                        setRenameInput(activeConversation?.name ?? detail?.name ?? '');
+                        setRenameDescription(detail?.description ?? '');
+                        setRenameOpen(true);
+                      }}
+                    >
+                      <Icon name="edit" size={14} />
+                    </button>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-ink-500">
                     <span className="truncate">
@@ -1167,15 +1216,17 @@ export default function Chat() {
                 </button>
                 <button
                   type="button"
-                  className="rounded-lg p-1.5 text-red-500 hover:bg-red-50"
-                  title={
-                    detail?.type === 'direct'
-                      ? 'Delete chat'
-                      : detail?.myRole === 'admin'
-                        ? 'Delete group'
-                        : 'Leave group'
-                  }
-                  onClick={() => setDeleteOpen(true)}
+                  className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 transition-colors"
+                  title="Delete chat"
+                  onClick={() => {
+                    const target = activeConversation ?? (detail ? ({
+                      id: detail.id,
+                      name: detail.name,
+                      type: detail.type,
+                    } as ConversationSummary) : null);
+                    setDeleteTarget(target);
+                    setDeleteOpen(true);
+                  }}
                 >
                   <Icon name="trash" size={16} />
                 </button>
@@ -1474,19 +1525,23 @@ export default function Chat() {
       />
       <RenameModal
         open={renameOpen}
-        onClose={() => setRenameOpen(false)}
+        onClose={() => {
+          setRenameOpen(false);
+          setRenameTarget(null);
+        }}
         initialName={renameInput}
         initialDescription={renameDescription}
         onSave={async (name, description) => {
-          setRenameInput(name);
-          setRenameDescription(description);
-          await handleRename();
+          await handleRename(name, description);
         }}
         busy={busyAction}
       />
       <DeleteConfirmModal
         open={deleteOpen}
-        onClose={() => setDeleteOpen(false)}
+        onClose={() => {
+          setDeleteOpen(false);
+          setDeleteTarget(null);
+        }}
         onConfirm={handleDelete}
         title={deleteCopy.title}
         description={deleteCopy.description}
