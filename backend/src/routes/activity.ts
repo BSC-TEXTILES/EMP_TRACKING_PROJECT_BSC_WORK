@@ -90,6 +90,49 @@ activityRouter.post(
   }),
 );
 
+// Allow web client to report frontend errors without requiring authentication (e.g. login failures)
+activityRouter.post(
+  '/client-error',
+  rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'activity-client-error' }),
+  asyncHandler(async (req, res) => {
+    const path = String(req.body?.path ?? '/').slice(0, 180);
+    const status = Number(req.body?.status ?? 500);
+    if (!Number.isFinite(status) || status < 400 || status > 599) {
+      res.json({ recorded: false, reason: 'invalid_status' });
+      return;
+    }
+    // Attempt to extract user if authorization header or cookie is present
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith('Bearer ')) {
+      try {
+        const { AuthService } = await import('../services/AuthService.js');
+        const user = await AuthService.authenticateToken(authHeader.slice(7));
+        if (user) {
+          const session = await ActivityService.currentSession(user);
+          if (session) {
+            const recorded = await ActivityService.recordError(user.id, null, session.id, {
+              type: 'error',
+              clientEventId: `client-${crypto.randomUUID()}`,
+              errorCategory: Number(status) >= 500 ? 'Failed project operation' : 'Client request error',
+              module: String(req.body?.module ?? 'Platform').slice(0, 60),
+              errorCode: `HTTP_${status}`,
+              severity: Number(status) >= 500 ? 'medium' : 'low',
+              description: `Platform request failed with HTTP ${status} on ${path}`,
+              application: 'Workforce web app',
+              diagnostic: { status, path, source: 'web_client' },
+            });
+            res.json({ recorded });
+            return;
+          }
+        }
+      } catch {
+        // Fall through to anonymous return
+      }
+    }
+    res.json({ recorded: false, reason: 'unauthenticated' });
+  }),
+);
+
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
 
@@ -202,30 +245,7 @@ activityRouter.post(
   }),
 );
 
-activityRouter.post(
-  '/client-error',
-  rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'activity-client-error' }),
-  asyncHandler(async (req: AuthedRequest, res) => {
-    const user = currentUser(req);
-    const session = await ActivityService.currentSession(user);
-    if (!session) { res.json({ recorded: false, reason: 'no_active_session' }); return; }
-    const path = String(req.body?.path ?? '/').slice(0, 180);
-    const status = Number(req.body?.status ?? 500);
-    if (!Number.isFinite(status) || status < 400 || status > 599) throw ApiError.badRequest('Invalid HTTP status.');
-    const recorded = await ActivityService.recordError(user.id, null, session.id, {
-      type: 'error',
-      clientEventId: `client-${crypto.randomUUID()}`,
-      errorCategory: Number(status) >= 500 ? 'Failed project operation' : 'Client request error',
-      module: String(req.body?.module ?? 'Platform').slice(0, 60),
-      errorCode: `HTTP_${status}`,
-      severity: Number(status) >= 500 ? 'medium' : 'low',
-      description: `Platform request failed with HTTP ${status} on ${path}`,
-      application: 'Workforce web app',
-      diagnostic: { status, path, source: 'web_client' },
-    });
-    res.json({ recorded });
-  }),
-);
+
 
 activityRouter.get(
   '/dashboard',

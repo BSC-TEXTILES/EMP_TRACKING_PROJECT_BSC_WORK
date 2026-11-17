@@ -120,6 +120,38 @@ async function ensureDatabaseReady() {
             catch (err) {
                 console.warn('[startup] Migration check note:', err);
             }
+            try {
+                const { execute } = await import('./db/index.js');
+                await execute(`CREATE TABLE IF NOT EXISTS employee_login_audit (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          session_id BIGINT UNSIGNED NULL,
+          employee_id BIGINT UNSIGNED NOT NULL,
+          employee_code VARCHAR(40) NULL,
+          full_name VARCHAR(120) NULL,
+          location_name VARCHAR(120) NULL,
+          login_at DATETIME(3) NOT NULL,
+          logout_at DATETIME(3) NULL,
+          last_heartbeat_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          duration_minutes INT NOT NULL DEFAULT 0,
+          ip VARCHAR(64) NULL,
+          user_agent VARCHAR(255) NULL,
+          browser VARCHAR(120) NULL,
+          os VARCHAR(60) NULL,
+          device_id BIGINT UNSIGNED NULL,
+          login_status VARCHAR(24) NOT NULL DEFAULT 'success',
+          logout_reason VARCHAR(120) NULL,
+          termination_status VARCHAR(24) NOT NULL DEFAULT 'active',
+          created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+          updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+          PRIMARY KEY (id),
+          KEY idx_login_audit_emp_date (employee_id, login_at),
+          KEY idx_login_audit_login_at (login_at),
+          KEY idx_login_audit_status (termination_status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+            }
+            catch (schemaErr) {
+                console.warn('[startup] Schema readiness note:', schemaErr);
+            }
             if (config.isProd) {
                 const { findDemoPasswordAccounts } = await import('./db/seed.js');
                 const exposed = await findDemoPasswordAccounts();

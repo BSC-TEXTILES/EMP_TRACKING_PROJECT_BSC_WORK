@@ -19,7 +19,7 @@ SET @sql_sess_dur := IF(@has_sess_dur = 0, 'ALTER TABLE employee_sessions ADD CO
 PREPARE stmt4 FROM @sql_sess_dur; EXECUTE stmt4; DEALLOCATE PREPARE stmt4;
 
 SET @has_sess_term := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'employee_sessions' AND COLUMN_NAME = 'termination_status');
-SET @sql_sess_term := IF(@has_sess_term = 0, "ALTER TABLE employee_sessions ADD COLUMN termination_status VARCHAR(24) NOT NULL DEFAULT 'active' AFTER duration_minutes", 'SELECT 1');
+SET @sql_sess_term := IF(@has_sess_term = 0, 'ALTER TABLE employee_sessions ADD COLUMN termination_status VARCHAR(24) NOT NULL DEFAULT \'active\' AFTER duration_minutes', 'SELECT 1');
 PREPARE stmt5 FROM @sql_sess_term; EXECUTE stmt5; DEALLOCATE PREPARE stmt5;
 
 -- 2. Dedicated employee_login_audit table for permanent login/logout records

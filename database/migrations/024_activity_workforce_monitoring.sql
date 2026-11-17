@@ -44,7 +44,7 @@ ON DUPLICATE KEY UPDATE name = VALUES(name);
 INSERT INTO monitoring_policies (
   name, version, policy_text, screenshot_enabled, screenshot_interval_minutes,
   retention_days, idle_threshold_minutes, stale_session_minutes,
-  allowed_apps, blockedApps, allowed_domains, domain_categories, effective_at, is_active
+  allowed_apps, blocked_apps, allowed_domains, domain_categories, effective_at, is_active
 ) VALUES (
   'BSC Textiles Standard Workforce Monitoring Policy v2.0', 2,
   'Authorised work activity monitoring during office attendance sessions. Tracks foreground application names, active time, idle time, and work domains. No keystrokes, passwords, webcams or personal communications are ever recorded.',
