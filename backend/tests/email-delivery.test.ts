@@ -139,7 +139,7 @@ describe('mailbox email delivery', () => {
 
     // Someone outside the email cannot.
     const outsider = await login('meera.joshi@workforce.test');
-    expect((await outsider.agent.get(`/api/files/${fileId}?download=1`)).status).toBe(403);
+    expect((await outsider.agent.get(`/api/files/${fileId}?download=1`)).status).toBe(404);
   });
 
   it('refuses to attach a file the sender cannot access', async () => {

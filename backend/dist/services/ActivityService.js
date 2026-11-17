@@ -200,18 +200,11 @@ export class ActivityService {
         const existing = await queryOne('SELECT id, employee_id, status FROM employee_devices WHERE machine_fingerprint = ?', [fingerprint]);
         let deviceId;
         if (existing && Number(existing.employee_id) !== user.id) {
-            // Shared store PC or reassigned device across shifts: cleanly reassign to current authenticated employee
-            deviceId = Number(existing.id);
-            await execute(`UPDATE employee_devices SET employee_id = ?, device_name = ?, os_name = ?, os_version = ?, agent_version = ?, status = 'active',
-                revoked_at = NULL, revoked_reason = NULL, last_seen_at = NOW(3) WHERE id = ?`, [user.id, deviceName, osName, cleanText(input.osVersion, 60) || null, cleanText(input.agentVersion, 40) || null, deviceId]);
-            await execute('UPDATE device_registrations SET revoked_at = NOW(3) WHERE device_id = ? AND revoked_at IS NULL', [deviceId]);
-            await ActivityService.audit(user.id, 'activity.device_reassigned', user.id, 'employee_device', deviceId, {
-                previousEmployeeId: existing.employee_id,
-                newEmployeeId: user.id,
-                deviceName,
-            });
+            throw ApiError.conflict('This device belongs to another employee. Administrator reassignment is required.');
         }
         else if (existing) {
+            if (existing.status !== 'active')
+                throw ApiError.forbidden('This device is revoked. Administrator approval is required.');
             deviceId = Number(existing.id);
             await execute(`UPDATE employee_devices SET device_name = ?, os_name = ?, os_version = ?, agent_version = ?, status = 'active',
                 revoked_at = NULL, revoked_reason = NULL, last_seen_at = NOW(3) WHERE id = ?`, [deviceName, osName, cleanText(input.osVersion, 60) || null, cleanText(input.agentVersion, 40) || null, deviceId]);
@@ -321,7 +314,7 @@ export class ActivityService {
             throw ApiError.forbidden('Monitoring is unavailable during approved leave.');
         const attendance = await queryOne('SELECT id, check_in_at, check_out_at FROM attendance WHERE employee_id = ? AND work_date = ?', [user.id, workDate]);
         if (!attendance?.check_in_at || attendance.check_out_at) {
-            throw ApiError.forbidden('An open attendance record is required before monitoring.');
+            throw ApiError.conflict('An open attendance record is required before monitoring.');
         }
         const onBreak = attendance?.id ? await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND ended_at IS NULL', [attendance.id]) : null;
         const active = await queryOne("SELECT id, device_id, status FROM monitoring_sessions WHERE employee_id = ? AND status IN ('active','paused') ORDER BY id DESC LIMIT 1", [user.id]);

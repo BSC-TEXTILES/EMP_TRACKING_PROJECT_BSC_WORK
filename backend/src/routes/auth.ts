@@ -18,7 +18,8 @@ export const authRouter = Router();
  */
 const DEMO_LOGINS = [
   { role: 'Super Admin', email: 'admin@bsctextiles.in', fallbackEmail: 'admin@workforce.test' },
-  { role: 'IT Admin', email: 'it.admin@bsctextiles.in', fallbackEmail: 'it.admin@workforce.test' },
+  { role: 'IT Support', email: 'it.admin@workforce.test', fallbackEmail: 'it.admin@workforce.test' },
+  { role: 'Department Manager', email: 'it.manager@workforce.test', fallbackEmail: 'it.manager@workforce.test' },
   { role: 'Store Manager', email: 'store.manager@bsctextiles.in', fallbackEmail: 'store.manager@workforce.test' },
   { role: 'HR Manager', email: 'hr.manager@bsctextiles.in', fallbackEmail: 'hr.manager@workforce.test' },
   { role: 'Developer', email: 'ananya.rao@bsctextiles.in', fallbackEmail: 'ananya.rao@workforce.test' },
@@ -28,31 +29,12 @@ const DEMO_LOGINS = [
 authRouter.get(
   '/test-accounts',
   asyncHandler(async (_req, res) => {
-    if (process.env.TEST_LOGIN_ENABLED === 'false') {
+    if (config.isProd || process.env.TEST_LOGIN_ENABLED === 'false') {
       res.status(404).json({ error: 'Not available', code: 'not_found' });
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
-    const gagan = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
-      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Gagan%' AND status = 'active' LIMIT 1",
-    );
-    if (gagan) {
-      res.json({
-        enabled: true,
-        environment: config.env,
-        accounts: [
-          {
-            role: 'Super Admin & Store Manager',
-            employeeId: gagan.employee_code,
-            name: gagan.full_name,
-            email: gagan.email,
-            password,
-          },
-        ],
-      });
-      return;
-    }
     const allEmails = DEMO_LOGINS.flatMap((item) => [item.email, item.fallbackEmail]);
     const employees = await query<{ full_name: string; employee_code: string; email: string }>(
       `SELECT full_name, employee_code, email FROM employees

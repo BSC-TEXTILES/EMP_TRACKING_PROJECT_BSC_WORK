@@ -18,6 +18,9 @@ SET @gagan_id := (SELECT id FROM employees WHERE full_name LIKE '%Gagan%' ORDER 
 UPDATE employees 
 SET manager_id = NULL,
     status = 'active',
+    failed_login_attempts = 0,
+    locked_until = NULL,
+    password_hash = '$2a$10$X7y6huEHiPUp8I/jTxyZJenYgazAJwzdifd9dtz588WDnd92ydv9m',
     role_id = COALESCE((SELECT id FROM roles WHERE slug = 'super_admin' LIMIT 1), role_id)
 WHERE id = @gagan_id;
 

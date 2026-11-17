@@ -153,17 +153,19 @@ async function ensureDatabaseReady() {
           SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
           WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
                 // Retain only Gagan C B and remove all other demo employee records
-                const gagan = await queryOne('SELECT id FROM employees WHERE full_name LIKE ? LIMIT 1', ['%Gagan%']);
+                const gagan = await queryOne('SELECT id, employee_code, email FROM employees WHERE full_name LIKE ? ORDER BY id DESC LIMIT 1', ['%Gagan%']);
                 if (gagan) {
+                    const { hashPassword } = await import('./lib/crypto.js');
+                    const validHash = await hashPassword('Workforce@2026');
                     await execute('SET FOREIGN_KEY_CHECKS = 0');
                     await execute('DELETE FROM employee_sessions WHERE employee_id <> ?', [gagan.id]);
                     await execute('DELETE FROM employee_login_audit WHERE employee_id <> ?', [gagan.id]);
                     await execute('DELETE FROM employee_roles WHERE employee_id <> ?', [gagan.id]);
                     await execute('DELETE FROM employees WHERE id <> ? AND full_name NOT LIKE ?', [gagan.id, '%Gagan%']);
-                    await execute('UPDATE employees SET manager_id = NULL, status = "active" WHERE id = ?', [gagan.id]);
+                    await execute('UPDATE employees SET manager_id = NULL, status = "active", failed_login_attempts = 0, locked_until = NULL, password_hash = ? WHERE id = ?', [validHash, gagan.id]);
                     await execute('UPDATE departments SET head_employee_id = ?', [gagan.id]);
                     await execute('SET FOREIGN_KEY_CHECKS = 1');
-                    console.log('[startup] Retained Gagan C B as sole primary employee record and removed demo IDs.');
+                    console.log('[startup] Retained Gagan C B as sole primary employee record and reset credentials to Workforce@2026.');
                 }
                 // Ensure task management tables exist
                 await execute(`CREATE TABLE IF NOT EXISTS store_daily_checkpoints (

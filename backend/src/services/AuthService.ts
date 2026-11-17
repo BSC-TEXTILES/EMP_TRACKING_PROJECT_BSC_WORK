@@ -615,8 +615,8 @@ export class AuthService {
                    logout_reason = 'explicit_logout',
                    duration_minutes = TIMESTAMPDIFF(MINUTE, login_at, NOW(3)),
                    termination_status = 'normal'
-               WHERE session_id = ? OR (employee_id = ? AND logout_at IS NULL)`,
-              [session.id, session.employee_id],
+               WHERE session_id = ? AND logout_at IS NULL`,
+              [session.id],
             );
           } catch {
             // Ignore if audit table not yet added

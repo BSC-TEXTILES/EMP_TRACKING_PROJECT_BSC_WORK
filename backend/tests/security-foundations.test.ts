@@ -138,7 +138,8 @@ describe('helpdesk persistence and attachment authorization', () => {
       const downloaded = await request(app).get(`/api/files/${fileId}`).set('Cookie', employee.cookie);
       expect(downloaded.status).toBe(200);
       const forbidden = await request(app).get(`/api/files/${fileId}`).set('Cookie', other.cookie);
-      expect(forbidden.status).toBe(403);
+      // File API conceals inaccessible file existence.
+      expect(forbidden.status).toBe(404);
       const action = await request(app).post(`/api/tickets/${ticketId}/action`).set('Cookie', employee.cookie)
         .send({ action: 'resolve', resolution: 'Unauthorized resolution' });
       expect(action.status).toBe(403);
