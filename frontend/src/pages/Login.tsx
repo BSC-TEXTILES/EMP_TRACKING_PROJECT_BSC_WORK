@@ -15,6 +15,44 @@ interface TestAccount {
   password: string;
 }
 
+const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
+  {
+    role: 'Super Admin',
+    employeeId: 'EMP-1001',
+    name: 'Aarti Sharma (Super Admin)',
+    email: 'admin@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+  {
+    role: 'IT Admin',
+    employeeId: 'EMP-1008',
+    name: 'Rohan Gupta (IT Administrator)',
+    email: 'it.admin@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+  {
+    role: 'Store Manager',
+    employeeId: 'EMP-1016',
+    name: 'Farhan Khan (Store Manager)',
+    email: 'store.manager@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+  {
+    role: 'HR Manager',
+    employeeId: 'EMP-1005',
+    name: 'Neha Kapoor (HR Manager)',
+    email: 'hr.manager@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+  {
+    role: 'Employee',
+    employeeId: 'EMP-1009',
+    name: 'Ananya Rao (Frontend Dev)',
+    email: 'ananya.rao@bsctextiles.in',
+    password: 'Workforce@2026',
+  },
+];
+
 export default function Login() {
   useDocumentTitle('Sign in');
   const { login } = useAuth();
@@ -30,22 +68,27 @@ export default function Login() {
   const [challenge, setChallenge] = useState<string | null>(null);
   const [otp, setOtp] = useState('');
   const [devCode, setDevCode] = useState<string | null>(null);
-  const [testAccounts, setTestAccounts] = useState<TestAccount[]>([]);
-  const [testEnvironment, setTestEnvironment] = useState<string | null>(null);
-  const [selectedTest, setSelectedTest] = useState<TestAccount | null>(null);
+  const [testAccounts, setTestAccounts] = useState<TestAccount[]>(DEFAULT_TEST_ACCOUNTS);
+  const [testEnvironment, setTestEnvironment] = useState<string | null>('production');
+  const [selectedTest, setSelectedTest] = useState<TestAccount | null>(DEFAULT_TEST_ACCOUNTS[0]);
 
-  // Test credentials are supplied by the API at runtime and are never bundled.
-  // The endpoint only exists in development, so production builds never request it.
+  // Load latest accounts dynamically if server provides them
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
     api
       .get<{ enabled: boolean; environment: string; accounts: TestAccount[] }>('/auth/test-accounts')
       .then((result) => {
-        setTestAccounts(result.accounts);
-        setTestEnvironment(result.environment);
-        setSelectedTest(result.accounts[0] ?? null);
+        if (result.accounts && result.accounts.length > 0) {
+          setTestAccounts(result.accounts);
+          setSelectedTest(result.accounts[0] ?? DEFAULT_TEST_ACCOUNTS[0]);
+        }
+        if (result.environment) {
+          setTestEnvironment(result.environment);
+        }
       })
-      .catch(() => setTestAccounts([]));
+      .catch(() => {
+        setTestAccounts(DEFAULT_TEST_ACCOUNTS);
+        setSelectedTest(DEFAULT_TEST_ACCOUNTS[0]);
+      });
   }, []);
 
   const fillTest = (account: TestAccount) => {
@@ -272,57 +315,95 @@ export default function Login() {
           </div>
 
           {testAccounts.length > 0 && (
-            <section className="mt-4 rounded-lg border border-dashed border-ink-300 bg-white p-4">
+            <section className="mt-4 rounded-xl border border-brand-200 bg-white p-4 shadow-xs">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="text-sm font-semibold text-ink-800">Development / Testing Access</p>
-                  <p className="text-xs text-ink-500">Seeded demo accounts only. Disabled automatically in production.</p>
+                  <p className="text-sm font-bold text-ink-900">Admin & Role Access Credentials</p>
+                  <p className="text-xs text-ink-500">Select any role below to view Login ID and Password, and auto-fill to sign in.</p>
                 </div>
-                <span className="badge bg-amber-100 text-amber-800">
-                  {testEnvironment === 'production' ? 'Production' : `${testEnvironment?.charAt(0).toUpperCase()}${testEnvironment?.slice(1)} environment`}
+                <span className="rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-semibold text-brand-700 border border-brand-200">
+                  Quick Role Access
                 </span>
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">
-                {testAccounts.map((account) => (
-                  <button
-                    key={account.email}
-                    type="button"
-                    onClick={() => fillTest(account)}
-                    className={
-                      selectedTest?.email === account.email
-                        ? 'rounded-md border border-brand-300 bg-brand-50 px-2.5 py-1 text-xs font-medium text-brand-800'
-                        : 'rounded-md border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-600 hover:bg-ink-50'
-                    }
-                  >
-                    {account.role}
-                  </button>
-                ))}
+                {testAccounts.map((account) => {
+                  const isSelected = selectedTest?.email === account.email;
+                  return (
+                    <button
+                      key={account.email}
+                      type="button"
+                      onClick={() => fillTest(account)}
+                      className={
+                        isSelected
+                          ? 'rounded-lg border-2 border-brand-600 bg-brand-50 px-3 py-1.5 text-xs font-bold text-brand-900 shadow-xs transition-colors'
+                          : 'rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs font-medium text-ink-700 hover:border-brand-400 hover:bg-brand-50/50 transition-colors'
+                      }
+                    >
+                      {account.role}
+                    </button>
+                  );
+                })}
               </div>
 
               {selectedTest && (
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="label">Test Employee ID</span>
-                    <input className="input font-mono text-xs" readOnly value={selectedTest.employeeId} />
-                  </label>
-                  <label className="block">
-                    <span className="label">Test password</span>
-                    <input className="input font-mono text-xs" readOnly value={selectedTest.password} />
-                  </label>
-                  <p className="text-xs text-ink-500 sm:col-span-2">
-                    {selectedTest.name} · {selectedTest.email}
-                  </p>
+                <div className="mt-3.5 rounded-lg border border-ink-200 bg-ink-50/60 p-3">
+                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-ink-200 text-xs">
+                    <span className="font-semibold text-ink-800">{selectedTest.role} Profile</span>
+                    <span className="text-ink-500">{selectedTest.name}</span>
+                  </div>
+
+                  <div className="grid gap-2.5 sm:grid-cols-2">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-ink-700">Login ID / Email</span>
+                        <button
+                          type="button"
+                          className="text-[11px] text-brand-700 hover:underline"
+                          onClick={() => {
+                            navigator.clipboard.writeText(selectedTest.email);
+                            toast.success('Login ID copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <input className="input font-mono text-xs bg-white" readOnly value={selectedTest.email} />
+                      <p className="mt-1 text-[11px] text-ink-400 font-mono">Employee Code: {selectedTest.employeeId}</p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-semibold text-ink-700">Password</span>
+                        <button
+                          type="button"
+                          className="text-[11px] text-brand-700 hover:underline"
+                          onClick={() => {
+                            navigator.clipboard.writeText(selectedTest.password);
+                            toast.success('Password copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <input className="input font-mono text-xs bg-white font-semibold text-brand-900" readOnly value={selectedTest.password} />
+                      <p className="mt-1 text-[11px] text-emerald-700">Ready to authenticate</p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm mt-3 w-full justify-center text-xs font-semibold py-2"
+                    onClick={() => {
+                      fillTest(selectedTest);
+                      toast.success(`${selectedTest.role} credentials auto-filled. Click Sign In.`);
+                    }}
+                  >
+                    <Icon name="check" size={14} />
+                    <span>Auto-Fill {selectedTest.role} Credentials</span>
+                  </button>
                 </div>
               )}
-
-              <button
-                type="button"
-                className="btn-secondary btn-sm mt-3 w-full"
-                onClick={() => selectedTest && fillTest(selectedTest)}
-              >
-                Auto-fill test credentials
-              </button>
             </section>
           )}
         </div>

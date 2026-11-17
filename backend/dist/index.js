@@ -148,6 +148,15 @@ async function ensureDatabaseReady() {
           KEY idx_login_audit_login_at (login_at),
           KEY idx_login_audit_status (termination_status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+                // Ensure all employee emails use official @bsctextiles.in domain format
+                await execute(`UPDATE employees 
+          SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
+          WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
+                await execute(`UPDATE employees SET email = 'admin@bsctextiles.in' WHERE employee_code = 'EMP-1001'`);
+                await execute(`UPDATE employees SET email = 'hr.manager@bsctextiles.in' WHERE employee_code = 'EMP-1005'`);
+                await execute(`UPDATE employees SET email = 'it.manager@bsctextiles.in' WHERE employee_code = 'EMP-1007'`);
+                await execute(`UPDATE employees SET email = 'it.admin@bsctextiles.in' WHERE employee_code = 'EMP-1008'`);
+                await execute(`UPDATE employees SET email = 'store.manager@bsctextiles.in' WHERE employee_code = 'EMP-1016'`);
             }
             catch (schemaErr) {
                 console.warn('[startup] Schema readiness note:', schemaErr);

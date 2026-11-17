@@ -435,6 +435,14 @@ function ComposeEmailModal({
   const [bccSearch, setBccSearch] = useState('');
   const [bccOpen, setBccOpen] = useState(false);
 
+  const formatRealEmail = (email?: string | null, name?: string): string => {
+    if (email && !email.toLowerCase().includes('@workforce.test')) {
+      return email;
+    }
+    const clean = (name || 'employee').toLowerCase().trim().replace(/[^a-z0-9]+/g, '.');
+    return `${clean}@bsctextiles.in`;
+  };
+
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [attachments, setAttachments] = useState<{ fileId: number; name: string; size: number; mimeType: string }[]>([]);
@@ -470,16 +478,17 @@ function ComposeEmailModal({
   const filterEmployees = (queryText: string, excludedIds: number[]) => {
     const q = queryText.trim().toLowerCase();
     const available = contacts.filter((c) => !excludedIds.includes(c.id));
-    if (!q) return available.slice(0, 8);
+    if (!q) return available.slice(0, 10);
     return available
       .filter((c) => {
         const name = (c.full_name ?? '').toLowerCase();
-        const email = (c.email ?? '').toLowerCase();
+        const rawEmail = (c.email ?? '').toLowerCase();
+        const realEmail = formatRealEmail(c.email, c.full_name).toLowerCase();
         const dept = (c.department_name ?? '').toLowerCase();
         const desig = (c.designation_title ?? '').toLowerCase();
-        return name.includes(q) || email.includes(q) || dept.includes(q) || desig.includes(q);
+        return name.includes(q) || rawEmail.includes(q) || realEmail.includes(q) || dept.includes(q) || desig.includes(q);
       })
-      .slice(0, 8);
+      .slice(0, 10);
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -706,7 +715,7 @@ function ComposeEmailModal({
                         </span>
                         <div>
                           <p className="font-semibold text-slate-800">{emp.full_name}</p>
-                          <p className="text-[11px] text-slate-500">{emp.email ?? `${emp.full_name.toLowerCase().replace(/ /g, '.')}@bsctextiles.in`}</p>
+                          <p className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</p>
                         </div>
                       </div>
                       {emp.designation_title && (
@@ -770,7 +779,7 @@ function ComposeEmailModal({
                       }}
                     >
                       <span className="font-medium text-slate-800">{emp.full_name}</span>
-                      <span className="text-[11px] text-slate-500">{emp.email}</span>
+                      <span className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</span>
                     </button>
                   ))}
                 </div>
@@ -827,7 +836,7 @@ function ComposeEmailModal({
                       }}
                     >
                       <span className="font-medium text-slate-800">{emp.full_name}</span>
-                      <span className="text-[11px] text-slate-500">{emp.email}</span>
+                      <span className="text-[11px] text-slate-500">{formatRealEmail(emp.email, emp.full_name)}</span>
                     </button>
                   ))}
                 </div>
@@ -1066,6 +1075,15 @@ function ComposeEmailModal({
               className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
             >
               <Icon name="edit" size={15} />
+            </button>
+
+            <button
+              type="button"
+              title="More options"
+              onClick={() => toast.info('Additional email options')}
+              className="p-2 rounded hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            >
+              <Icon name="moreVertical" size={15} />
             </button>
           </div>
 

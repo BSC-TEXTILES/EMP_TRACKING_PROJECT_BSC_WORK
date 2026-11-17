@@ -520,7 +520,13 @@ export class ChatService {
         await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, memberId]);
     }
     static async contacts(employeeId) {
-        return query(`SELECT e.id, e.full_name, e.mobile AS phone, e.email, dg.title AS designation_title, d.name AS department_name, e.photo_url
+        return query(`SELECT e.id, e.full_name, e.mobile AS phone,
+        CASE
+          WHEN e.email IS NULL OR e.email = '' OR e.email LIKE '%@workforce.test'
+          THEN CONCAT(LOWER(REPLACE(TRIM(e.full_name), ' ', '.')), '@bsctextiles.in')
+          ELSE e.email
+        END AS email,
+        dg.title AS designation_title, d.name AS department_name, e.photo_url
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id

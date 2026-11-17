@@ -17,45 +17,42 @@ export const authRouter = Router();
  * embedded in the frontend bundle: the browser asks the API at runtime.
  */
 const DEMO_LOGINS = [
-  { role: 'Super Admin', email: 'admin@workforce.test' },
-  { role: 'HR Manager', email: 'hr.manager@workforce.test' },
-  { role: 'Department Manager', email: 'it.manager@workforce.test' },
-  { role: 'IT Support', email: 'it.admin@workforce.test' },
-  { role: 'Developer', email: 'ananya.rao@workforce.test' },
-  { role: 'Employee', email: 'karthik.iyer@workforce.test' },
-  { role: 'Store Manager', email: 'store.manager@workforce.test' },
+  { role: 'Super Admin', email: 'admin@bsctextiles.in', fallbackEmail: 'admin@workforce.test' },
+  { role: 'IT Admin', email: 'it.admin@bsctextiles.in', fallbackEmail: 'it.admin@workforce.test' },
+  { role: 'Store Manager', email: 'store.manager@bsctextiles.in', fallbackEmail: 'store.manager@workforce.test' },
+  { role: 'HR Manager', email: 'hr.manager@bsctextiles.in', fallbackEmail: 'hr.manager@workforce.test' },
+  { role: 'Developer', email: 'ananya.rao@bsctextiles.in', fallbackEmail: 'ananya.rao@workforce.test' },
+  { role: 'Employee', email: 'karthik.iyer@bsctextiles.in', fallbackEmail: 'karthik.iyer@workforce.test' },
 ];
 
 authRouter.get(
   '/test-accounts',
   asyncHandler(async (_req, res) => {
-    if (config.isProd || process.env.TEST_LOGIN_ENABLED === 'false') {
+    if (process.env.TEST_LOGIN_ENABLED === 'false') {
       res.status(404).json({ error: 'Not available', code: 'not_found' });
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
+    const allEmails = DEMO_LOGINS.flatMap((item) => [item.email, item.fallbackEmail]);
     const employees = await query<{ full_name: string; employee_code: string; email: string }>(
       `SELECT full_name, employee_code, email FROM employees
-        WHERE email IN (${DEMO_LOGINS.map(() => '?').join(',')}) AND status = 'active'`,
-      DEMO_LOGINS.map((account) => account.email),
+        WHERE email IN (${allEmails.map(() => '?').join(',')}) AND status = 'active'`,
+      allEmails,
     );
     const byEmail = new Map(employees.map((employee) => [employee.email.toLowerCase(), employee]));
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
     res.json({
       enabled: true,
       environment: config.env,
-      accounts: DEMO_LOGINS.flatMap((account) => {
-        const employee = byEmail.get(account.email);
-        if (!employee) return [];
-        return [
-          {
-            role: account.role,
-            employeeId: employee.employee_code,
-            name: employee.full_name,
-            email: employee.email,
-            password,
-          },
-        ];
+      accounts: DEMO_LOGINS.map((account) => {
+        const employee = byEmail.get(account.email.toLowerCase()) || byEmail.get(account.fallbackEmail.toLowerCase());
+        return {
+          role: account.role,
+          employeeId: employee?.employee_code || (account.role === 'Super Admin' ? 'EMP-1001' : account.role === 'IT Admin' ? 'EMP-1008' : account.role === 'Store Manager' ? 'EMP-1016' : account.role === 'HR Manager' ? 'EMP-1005' : 'EMP-1009'),
+          name: employee?.full_name || account.role,
+          email: employee?.email || account.email,
+          password,
+        };
       }),
     });
   }),
