@@ -17,38 +17,10 @@ interface TestAccount {
 
 const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
   {
-    role: 'Super Admin',
-    employeeId: 'EMP-1001',
-    name: 'Aarti Sharma (Super Admin)',
-    email: 'admin@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'IT Admin',
-    employeeId: 'EMP-1008',
-    name: 'Rohan Gupta (IT Administrator)',
-    email: 'it.admin@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'Store Manager',
-    employeeId: 'EMP-1016',
-    name: 'Farhan Khan (Store Manager)',
-    email: 'store.manager@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'HR Manager',
-    employeeId: 'EMP-1005',
-    name: 'Neha Kapoor (HR Manager)',
-    email: 'hr.manager@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'Employee',
-    employeeId: 'EMP-1009',
-    name: 'Ananya Rao (Frontend Dev)',
-    email: 'ananya.rao@bsctextiles.in',
+    role: 'Super Admin & Manager',
+    employeeId: 'EMP-1020',
+    name: 'Gagan C B (Administrator)',
+    email: 'gagan.cb@bsctextiles.in',
     password: 'Workforce@2026',
   },
 ];

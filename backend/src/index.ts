@@ -163,11 +163,20 @@ async function ensureDatabaseReady(): Promise<void> {
         await execute(`UPDATE employees 
           SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
           WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
-        await execute(`UPDATE employees SET email = 'admin@bsctextiles.in' WHERE employee_code = 'EMP-1001'`);
-        await execute(`UPDATE employees SET email = 'hr.manager@bsctextiles.in' WHERE employee_code = 'EMP-1005'`);
-        await execute(`UPDATE employees SET email = 'it.manager@bsctextiles.in' WHERE employee_code = 'EMP-1007'`);
-        await execute(`UPDATE employees SET email = 'it.admin@bsctextiles.in' WHERE employee_code = 'EMP-1008'`);
-        await execute(`UPDATE employees SET email = 'store.manager@bsctextiles.in' WHERE employee_code = 'EMP-1016'`);
+
+        // Retain only Gagan C B and remove all other demo employee records
+        const gagan = await queryOne<{ id: number }>('SELECT id FROM employees WHERE full_name LIKE ? LIMIT 1', ['%Gagan%']);
+        if (gagan) {
+          await execute('SET FOREIGN_KEY_CHECKS = 0');
+          await execute('DELETE FROM employee_sessions WHERE employee_id <> ?', [gagan.id]);
+          await execute('DELETE FROM employee_login_audit WHERE employee_id <> ?', [gagan.id]);
+          await execute('DELETE FROM employee_roles WHERE employee_id <> ?', [gagan.id]);
+          await execute('DELETE FROM employees WHERE id <> ? AND full_name NOT LIKE ?', [gagan.id, '%Gagan%']);
+          await execute('UPDATE employees SET manager_id = NULL, status = "active" WHERE id = ?', [gagan.id]);
+          await execute('UPDATE departments SET head_employee_id = ?', [gagan.id]);
+          await execute('SET FOREIGN_KEY_CHECKS = 1');
+          console.log('[startup] Retained Gagan C B as sole primary employee record and removed demo IDs.');
+        }
       } catch (schemaErr) {
         console.warn('[startup] Schema readiness note:', schemaErr);
       }

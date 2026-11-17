@@ -46,6 +46,12 @@ export default function Register() {
     return options.designations.filter((d) => !form.departmentId || d.department_id === Number(form.departmentId) || d.department_id === null);
   }, [options, form.departmentId]);
 
+  const visibleManagers = useMemo(() => {
+    if (!options?.managers) return [];
+    const gaganList = options.managers.filter((m) => m.full_name.toLowerCase().includes('gagan'));
+    return gaganList.length > 0 ? gaganList : options.managers;
+  }, [options?.managers]);
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
@@ -180,7 +186,7 @@ export default function Register() {
                 <Field label="Reporting manager">
                   <select className="input" value={form.managerId} onChange={(event) => setForm({ ...form, managerId: event.target.value })}>
                     <option value="">Select manager</option>
-                    {options?.managers.map((manager) => (
+                    {visibleManagers.map((manager) => (
                       <option key={manager.id} value={manager.id}>
                         {manager.full_name}{manager.location_name ? ` · ${manager.location_name}` : ''}
                       </option>

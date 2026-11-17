@@ -7,7 +7,7 @@ import { ActivityService } from '../services/ActivityService.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { rateLimit } from '../middleware/security.js';
-import { query } from '../db/index.js';
+import { query, queryOne } from '../db/index.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
 export const authRouter = Router();
@@ -33,6 +33,26 @@ authRouter.get(
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
+    const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
+    const gagan = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
+      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Gagan%' AND status = 'active' LIMIT 1",
+    );
+    if (gagan) {
+      res.json({
+        enabled: true,
+        environment: config.env,
+        accounts: [
+          {
+            role: 'Super Admin & Store Manager',
+            employeeId: gagan.employee_code,
+            name: gagan.full_name,
+            email: gagan.email,
+            password,
+          },
+        ],
+      });
+      return;
+    }
     const allEmails = DEMO_LOGINS.flatMap((item) => [item.email, item.fallbackEmail]);
     const employees = await query<{ full_name: string; employee_code: string; email: string }>(
       `SELECT full_name, employee_code, email FROM employees
@@ -40,7 +60,6 @@ authRouter.get(
       allEmails,
     );
     const byEmail = new Map(employees.map((employee) => [employee.email.toLowerCase(), employee]));
-    const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
     res.json({
       enabled: true,
       environment: config.env,
@@ -177,7 +196,8 @@ authRouter.get(
         `SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
-         WHERE e.status = 'active' ORDER BY e.full_name`,
+         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR NOT EXISTS (SELECT 1 FROM employees WHERE full_name LIKE '%Gagan%'))
+         ORDER BY e.full_name`,
       ),
     ]);
     res.json({ departments, designations, locations, managers });
