@@ -700,7 +700,7 @@ export class GroupService {
           )) AS meetings,
           SUM(EXISTS(
             SELECT 1 FROM attendance_breaks ab 
-            WHERE ab.attendance_id = a.id AND ab.end_time IS NULL
+            WHERE ab.attendance_id = a.id AND ab.ended_at IS NULL
           )) AS breaks
         FROM employees e
         LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = CURDATE()
@@ -768,7 +768,7 @@ export class GroupService {
            )) AS inMeetings,
            SUM(EXISTS(
              SELECT 1 FROM attendance_breaks ab 
-             WHERE ab.attendance_id = a.id AND ab.end_time IS NULL
+             WHERE ab.attendance_id = a.id AND ab.ended_at IS NULL
            )) AS onBreak,
            (SELECT COUNT(*) FROM workforce_groups wg WHERE wg.location_id = l.id AND wg.is_active = 1) AS groupCount
          FROM locations l
