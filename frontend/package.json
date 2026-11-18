@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && node scripts/build.mjs",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "mobile:sync": "npm run build && cap sync",
+    "mobile:assets": "node scripts/generate-app-assets.mjs",
+    "mobile:android": "cap open android",
+    "mobile:ios": "cap open ios"
   },
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "8.0.1",
