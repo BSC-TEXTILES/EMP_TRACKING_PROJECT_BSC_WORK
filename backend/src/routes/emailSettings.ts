@@ -32,17 +32,23 @@ emailSettingsRouter.get('/', (_req, res) => {
 });
 
 emailSettingsRouter.post('/test', rateLimit({ windowMs: 60000, max: 5, keyPrefix: 'smtp-config' }), asyncHandler(async (req, res) => {
-  const body = parseBody(z.object({ smtp: smtpInput.extend({ password: z.string().max(1000) }),
-    to: z.string().email().max(190), otp: z.object({ expiryMinutes: z.number().int().min(1).max(30),
-      resendCooldownSeconds: z.number().int().min(30).max(600), maxAttempts: z.number().int().min(1).max(10) }) }), req.body);
+  const body = parseBody(z.object({
+    smtp: smtpInput.extend({ password: z.string().max(1000) }),
+    to: z.string().email().max(190), otp: z.object({
+      expiryMinutes: z.number().int().min(1).max(30),
+      resendCooldownSeconds: z.number().int().min(30).max(600), maxAttempts: z.number().int().min(1).max(10)
+    })
+  }), req.body);
   const input = { ...body.smtp };
   if (!input.password && input.host === config.smtp.host && input.user === config.smtp.user) input.password = config.smtp.password;
   if (!input.password) throw ApiError.badRequest('Enter the SMTP password.');
   const transport = smtpTransport(input);
   try {
     await transport.verify();
-    const result = await transport.sendMail({ from: { name: input.fromName, address: input.fromEmail }, to: body.to,
-      replyTo: input.replyTo, subject: 'Workforce email configuration test', text: 'Your proposed SMTP configuration was accepted. Return to Email Settings to save it after confirming receipt.' });
+    const result = await transport.sendMail({
+      from: { name: input.fromName, address: input.fromEmail }, to: body.to,
+      replyTo: input.replyTo, subject: 'Workforce email configuration test', text: 'Your proposed SMTP configuration was accepted. Return to Email Settings to save it after confirming receipt.'
+    });
     if (!result.accepted?.length) throw new Error('Recipient rejected');
   } catch { throw ApiError.badRequest('SMTP verification or test email failed. Check your settings.'); }
   finally { transport.close(); }
