@@ -30,7 +30,9 @@ coverage/
 .vite/
 *.tsbuildinfo
 
-# Website-managed encrypted configuration and recovery artifacts
+# Cloned reference repos
+LiveGuard-Pro-Tracking/
+
 private-config/
 *.enc
 master.key

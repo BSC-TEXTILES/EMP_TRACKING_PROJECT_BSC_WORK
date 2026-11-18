@@ -620,6 +620,57 @@ export class TaskService {
                 await execute("UPDATE task_assignments SET status = 'in_progress', completed_at = NULL WHERE task_id = ?", [taskId]);
                 break;
             }
+            case 'set_status': {
+                const nextStatus = payload.status;
+                const validStatuses = ['assigned', 'accepted', 'in_progress', 'on_hold', 'pending_approval', 'completed', 'cancelled'];
+                if (!nextStatus || !validStatuses.includes(nextStatus)) {
+                    throw ApiError.badRequest('Invalid target status.');
+                }
+                if (!isAssignee && !isManager) {
+                    throw ApiError.forbidden('You are not authorized to update this task status.');
+                }
+                await transaction(async (conn) => {
+                    if (nextStatus === 'completed') {
+                        await closeOpenLog(conn, user.id);
+                        await conn.query("UPDATE tasks SET status = 'completed', verification_status = 'verified', progress = 100, completed_at = COALESCE(completed_at, NOW(3)), approved_at = NOW(3), approved_by = ? WHERE id = ?", [user.id, taskId]);
+                        await conn.query("UPDATE task_assignments SET status = 'completed', completed_at = COALESCE(completed_at, NOW(3)) WHERE task_id = ?", [taskId]);
+                    }
+                    else if (nextStatus === 'pending_approval') {
+                        await closeOpenLog(conn, user.id);
+                        await conn.query("UPDATE tasks SET status = 'pending_approval', submitted_at = NOW(3), progress = 100 WHERE id = ?", [taskId]);
+                        if (isAssignee && assignment) {
+                            await conn.query("UPDATE task_assignments SET status = 'pending_approval' WHERE id = ?", [assignment.id]);
+                        }
+                    }
+                    else if (nextStatus === 'in_progress') {
+                        await conn.query("UPDATE tasks SET status = 'in_progress', progress = GREATEST(progress, 25) WHERE id = ?", [taskId]);
+                        if (isAssignee && assignment) {
+                            await conn.query("UPDATE task_assignments SET status = 'in_progress', started_at = COALESCE(started_at, NOW(3)) WHERE id = ?", [assignment.id]);
+                        }
+                    }
+                    else if (nextStatus === 'on_hold') {
+                        await closeOpenLog(conn, user.id);
+                        await conn.query("UPDATE tasks SET status = 'on_hold' WHERE id = ?", [taskId]);
+                        if (isAssignee && assignment) {
+                            await conn.query("UPDATE task_assignments SET status = 'on_hold' WHERE id = ?", [assignment.id]);
+                        }
+                    }
+                    else {
+                        await conn.query("UPDATE tasks SET status = ? WHERE id = ?", [nextStatus, taskId]);
+                        if (isAssignee && assignment) {
+                            await conn.query("UPDATE task_assignments SET status = ? WHERE id = ?", [nextStatus, assignment.id]);
+                        }
+                    }
+                    if (payload.note) {
+                        await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
+                            taskId,
+                            user.id,
+                            payload.note,
+                        ]);
+                    }
+                });
+                break;
+            }
             default:
                 throw ApiError.badRequest('Unsupported task action');
         }

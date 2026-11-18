@@ -214,6 +214,39 @@ async function ensureDatabaseReady() {
                     // Assign HR Manager role to Chetan TK
                     await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
              SELECT ?, id FROM roles WHERE slug IN ('hr_manager', 'manager')`, [chetanId]);
+                    // Ensure Renuka Adhya exists as active Level 2 Software Manager
+                    const [renukaRows] = await dbConn.query("SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Renuka%' ORDER BY id DESC LIMIT 1");
+                    let renukaId;
+                    const [itDept] = await dbConn.query("SELECT id FROM departments WHERE code = 'IT' LIMIT 1");
+                    const itDeptId = itDept.length > 0 ? Number(itDept[0].id) : null;
+                    const [swDesig] = await dbConn.query("SELECT id FROM designations WHERE title LIKE '%Software Manager%' OR title LIKE '%IT Manager%' LIMIT 1");
+                    const swDesigId = swDesig.length > 0 ? Number(swDesig[0].id) : null;
+                    const [managerRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'manager' LIMIT 1");
+                    const managerRoleId = managerRole.length > 0 ? Number(managerRole[0].id) : 2;
+                    if (renukaRows.length > 0) {
+                        renukaId = Number(renukaRows[0].id);
+                        await dbConn.query(`UPDATE employees 
+               SET full_name = 'Renuka Adhya',
+                   email = 'renuka.adhya@bsctextiles.in',
+                   mobile = '9876543212',
+                   manager_id = ?,
+                   role_id = ?,
+                   department_id = COALESCE(?, department_id),
+                   designation_id = COALESCE(?, designation_id),
+                   status = 'active',
+                   failed_login_attempts = 0,
+                   locked_until = NULL,
+                   password_hash = ?
+               WHERE id = ?`, [gaganId, managerRoleId, itDeptId, swDesigId, validHash, renukaId]);
+                    }
+                    else {
+                        const [renukaInsert] = await dbConn.query(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
+               VALUES ('EMP-1003', 'Renuka Adhya', 'renuka.adhya@bsctextiles.in', '9876543212', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, managerRoleId, itDeptId, swDesigId, gaganId]);
+                        renukaId = Number(renukaInsert.insertId);
+                    }
+                    // Assign Manager role to Renuka Adhya
+                    await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
+             SELECT ?, id FROM roles WHERE slug IN ('manager')`, [renukaId]);
                     // Purge only deprecated mock/test accounts with @workforce.test domain
                     try {
                         await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''");
@@ -223,7 +256,7 @@ async function ensureDatabaseReady() {
                     await dbConn.query(`INSERT IGNORE INTO employee_roles (employee_id, role_id)
              SELECT ?, id FROM roles WHERE slug IN ('super_admin', 'admin', 'store_manager', 'general_manager', 'executive')`, [gaganId]);
                     await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
-                    console.log(`[startup] Verified Gagan C B (ID: ${gaganId}) and Chetan TK (ID: ${chetanId}) credentials ready.`);
+                    console.log(`[startup] Verified Gagan C B (ID: ${gaganId}), Chetan TK (ID: ${chetanId}) and Renuka Adhya (ID: ${renukaId}) credentials ready.`);
                 }
                 finally {
                     try {

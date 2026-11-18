@@ -26,7 +26,7 @@ export type PresenceStatus = 'active' | 'away' | 'dnd' | 'in_meeting' | 'on_brea
 
 /** A recent authenticated request counts as connected, so a dropped socket is not "offline". */
 const RECENT_SEEN_SECONDS = 150;
-export type ManualStatus = 'away' | 'dnd' | 'on_leave';
+export type ManualStatus = 'away' | 'dnd' | 'in_meeting' | 'on_break' | 'inactive' | 'on_leave';
 
 export const PRESENCE_LABELS: Record<PresenceStatus, string> = {
   active: 'Active',
@@ -86,9 +86,10 @@ function resolve(row: PresenceRow, idleMinutes: number, busy: Set<number>): Pres
     return Number(row.has_session) ? 'offline' : 'logged_out';
   }
   if (manual === 'dnd') return 'dnd';
-  if (busy.has(id)) return 'in_meeting';
-  if (Number(row.on_break)) return 'on_break';
+  if (manual === 'in_meeting' || busy.has(id)) return 'in_meeting';
+  if (manual === 'on_break' || Number(row.on_break)) return 'on_break';
   if (manual === 'away') return 'away';
+  if (manual === 'inactive') return 'inactive_today';
   if (row.idle_seconds !== null && Number(row.idle_seconds) > idleMinutes * 60) return 'away';
   return 'active';
 }

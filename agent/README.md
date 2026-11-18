@@ -36,7 +36,10 @@ Stop with `Ctrl+C`; the agent flushes its encrypted queue and ends the monitorin
 - Raises a sanitized connectivity incident after repeated server failures, and discards a batch the server rejects (for example after the work session ended) instead of retrying forever.
 - Aggregates transitions offline in an AES-256-GCM encrypted queue (`queue.enc`) and retries until the server accepts them.
 - Exits immediately if the policy is unacknowledged, attendance is not open, the device is revoked or working hours are closed.
-- Sends heartbeats and device health; monitoring ends as soon as the session or attendance ends.
+- Sends heartbeats and, every 5 minutes, device health: CPU, memory, disk, uptime and the connected network name.
+- Every 30 minutes reads Windows Defender status (antivirus, real-time protection, definitions age, firewall, detections in the last 7 days). A detection opens a security incident. No files are scanned or read by the agent.
+- Device location (Windows Location API) is sent only when the monitoring policy enables it, the employee has acknowledged that policy version and a work session is active. See `docs/LIVEGUARD_INTEGRATION.md`.
+- Monitoring ends as soon as the session or attendance ends.
 - Unknown or blocked applications are never recorded.
 
 ## Packaging

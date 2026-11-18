@@ -3,6 +3,7 @@ import { api, errorMessage } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocketEvent } from '../contexts/RealtimeContext';
+import { LiveDevicesPanel } from '../components/LiveDevicesPanel';
 import { useToast } from '../contexts/ToastContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, ProgressBar, SectionHeader, Skeleton, StatCard, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
@@ -15,6 +16,8 @@ interface Policy {
   policyText: string;
   screenshotEnabled: boolean;
   screenshotIntervalMinutes: number;
+  locationTrackingEnabled?: boolean;
+  locationIntervalMinutes?: number;
   retentionDays: number;
   allowedApps: string[];
   allowedDomains: string[];
@@ -192,7 +195,7 @@ export default function Activity() {
   const { user, has, canAny } = useAuth();
   const toast = useToast();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [tab, setTab] = useState<'today' | 'login_history' | 'timeline' | 'weekly' | 'monthly' | 'team' | 'admin' | 'policy'>('today');
+  const [tab, setTab] = useState<'today' | 'login_history' | 'timeline' | 'weekly' | 'monthly' | 'team' | 'admin' | 'devices' | 'policy'>('today');
   const [self, setSelf] = useState<SelfDashboard | null>(null);
   const [team, setTeam] = useState<TeamOverview | null>(null);
   const [monthly, setMonthly] = useState<MonthlyDashboard | null>(null);
@@ -204,7 +207,7 @@ export default function Activity() {
   const [feedback, setFeedback] = useState('');
   const [detail, setDetail] = useState<{ employeeId: number; daily: DailySummary; weekly: WeeklyReport[]; name: string } | null>(null);
   const [policyOpen, setPolicyOpen] = useState(false);
-  const [policyForm, setPolicyForm] = useState({ retentionDays: 90, screenshotEnabled: false, allowedDomains: '' });
+  const [policyForm, setPolicyForm] = useState({ retentionDays: 90, screenshotEnabled: false, locationTrackingEnabled: false, locationIntervalMinutes: 15, allowedDomains: '' });
 
   // Login History State
   const [loginHistory, setLoginHistory] = useState<LoginHistoryResponse | null>(null);
@@ -255,6 +258,8 @@ export default function Activity() {
         setPolicyForm({
           retentionDays: result.policy.retentionDays,
           screenshotEnabled: result.policy.screenshotEnabled,
+          locationTrackingEnabled: Boolean(result.policy.locationTrackingEnabled),
+          locationIntervalMinutes: result.policy.locationIntervalMinutes ?? 15,
           allowedDomains: result.policy.allowedDomains.join(', '),
         });
       }
@@ -377,6 +382,7 @@ export default function Activity() {
     { value: 'monthly', label: 'Monthly report' },
     ...(canTeam ? [{ value: 'team', label: 'Store Team Activity' }] : []),
     ...(canAdmin ? [{ value: 'admin', label: 'Live Store Monitoring' }] : []),
+    ...(canTeam ? [{ value: 'devices', label: 'Devices & Location' }] : []),
     { value: 'policy', label: 'Monitoring policy' },
   ], [canTeam, canAdmin]);
 
@@ -1310,14 +1316,17 @@ export default function Activity() {
         )
       )}
 
+      {tab === 'devices' && canTeam && <LiveDevicesPanel />}
+
       {tab === 'policy' && (
         loading || !self ? <Skeleton lines={6} /> : (
           <Card className="card-pad space-y-4">
             <SectionHeader title={self.policy.name} description={`Version ${self.policy.version} · effective ${formatDate((self.policy as unknown as { effectiveAt: string }).effectiveAt)}`} action={<Badge tone={self.consent.acknowledged ? 'success' : 'warning'}>{self.consent.acknowledged ? 'Acknowledged' : 'Not acknowledged'}</Badge>} />
             <p className="text-sm leading-relaxed text-ink-700">{self.policy.policyText}</p>
-            <div className="grid gap-3 text-sm sm:grid-cols-3">
+            <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg bg-ink-50 p-3"><p className="text-xs text-ink-500">Screenshots</p><p className="font-medium text-ink-800">{self.policy.screenshotEnabled ? `Every ${self.policy.screenshotIntervalMinutes} min` : 'Disabled'}</p></div>
               <div className="rounded-lg bg-ink-50 p-3"><p className="text-xs text-ink-500">Retention</p><p className="font-medium text-ink-800">{self.policy.retentionDays} days</p></div>
+              <div className="rounded-lg bg-ink-50 p-3"><p className="text-xs text-ink-500">Device location</p><p className="font-medium text-ink-800">{self.policy.locationTrackingEnabled ? `Every ${self.policy.locationIntervalMinutes ?? 15} min, work sessions only` : 'Not collected'}</p></div>
               <div className="rounded-lg bg-ink-50 p-3"><p className="text-xs text-ink-500">Monitoring window</p><p className="font-medium text-ink-800">Authorised sessions only</p></div>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -1348,6 +1357,15 @@ export default function Activity() {
                       Allow screenshot evidence on supported agents (this build stores no screenshots)
                     </label>
                   </Field>
+                  <Field label="Device location" hint="Turning this on creates a new policy version: every employee must acknowledge it again before any location is recorded.">
+                    <label className="flex items-center gap-2 pt-2 text-sm text-ink-700">
+                      <input type="checkbox" checked={policyForm.locationTrackingEnabled} onChange={(event) => setPolicyForm({ ...policyForm, locationTrackingEnabled: event.target.checked })} />
+                      Record device location (Windows Location API) during work sessions
+                    </label>
+                  </Field>
+                  <Field label="Location interval (minutes)">
+                    <input type="number" min={5} max={240} className="input" disabled={!policyForm.locationTrackingEnabled} value={policyForm.locationIntervalMinutes} onChange={(event) => setPolicyForm({ ...policyForm, locationIntervalMinutes: Number(event.target.value) })} />
+                  </Field>
                 </div>
                 <Field label="Approved work domains" hint="Comma-separated. Only these domains are stored by the browser bridge.">
                   <textarea className="input min-h-[70px]" value={policyForm.allowedDomains} onChange={(event) => setPolicyForm({ ...policyForm, allowedDomains: event.target.value })} />
@@ -1358,6 +1376,8 @@ export default function Activity() {
                     await api.put('/activity/policy', {
                       retentionDays: policyForm.retentionDays,
                       screenshotEnabled: policyForm.screenshotEnabled,
+                      locationTrackingEnabled: policyForm.locationTrackingEnabled,
+                      locationIntervalMinutes: policyForm.locationIntervalMinutes,
                       allowedDomains: policyForm.allowedDomains.split(',').map((value) => value.trim()).filter(Boolean),
                     });
                     toast.success('Monitoring policy updated.');

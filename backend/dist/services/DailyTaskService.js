@@ -263,7 +263,7 @@ export class DailyTaskService {
      * Generates SOP pre-assigned daily tasks for an employee based on their designation.
      * If tasks for today have already been generated, returns the existing count.
      */
-    static async generateDailyTasksForEmployee(employeeId, actor) {
+    static async generateDailyTasksForEmployee(employeeId, actor, options) {
         await DailyTaskService.ensureTemplatesExist();
         const employee = await queryOne(`SELECT e.id, e.full_name, d.title AS designation_title, e.manager_id, e.department_id, e.location_id
        FROM employees e
@@ -276,11 +276,25 @@ export class DailyTaskService {
        WHERE is_active = 1 AND (designation_title = ? OR designation_title = 'Store Manager')
        ORDER BY FIELD(designation_title, ?, 'Store Manager'), task_order ASC`, [title, title]);
         if (templates.length === 0) {
-            // Fallback to all active templates or master templates directly
+            // Fallback to all active templates
             templates = await query('SELECT * FROM task_templates WHERE is_active = 1 ORDER BY task_order ASC');
         }
-        if (templates.length === 0) {
-            return { created: 0, existing: 0 };
+        let templatesToUse = templates;
+        if (templatesToUse.length === 0) {
+            // Direct in-memory fallback to MASTER_SOP_TEMPLATES so tasks are NEVER empty
+            templatesToUse = MASTER_SOP_TEMPLATES.map((t, idx) => ({
+                id: idx + 1,
+                title: t.title,
+                description: t.description,
+                priority: t.priority,
+                time_slot: t.timeSlot,
+                requires_evidence: t.requiresEvidence,
+                evidence_type: t.evidenceType,
+                requires_metric: t.requiresMetric,
+                metric_label: t.metricLabel,
+                metric_unit: t.metricUnit,
+                task_order: t.taskOrder,
+            }));
         }
         const dateRow = await queryOne('SELECT CURDATE() AS cd');
         const todayStr = dateRow?.cd ? String(dateRow.cd).slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -288,14 +302,15 @@ export class DailyTaskService {
         const existing = await queryOne(`SELECT COUNT(*) AS count FROM tasks t
        JOIN task_assignments ta ON ta.task_id = t.id
        WHERE ta.employee_id = ? AND t.start_date = ?`, [employeeId, todayStr]);
-        if (Number(existing?.count ?? 0) > 0) {
-            return { created: 0, existing: Number(existing?.count ?? 0) };
+        const existingCount = Number(existing?.count ?? 0);
+        if (existingCount > 0 && !options?.force) {
+            return { created: 0, existing: existingCount };
         }
         const managerId = employee.manager_id ?? actor.id;
         let createdCount = 0;
         await transaction(async (conn) => {
-            for (const tpl of templates) {
-                let taskNo = `TSK-${Date.now().toString().slice(-5)}${Math.floor(Math.random() * 90 + 10)}`;
+            for (const tpl of templatesToUse) {
+                let taskNo = `TSK-${Date.now().toString().slice(-6)}${String(createdCount + 1).padStart(2, '0')}${Math.floor(Math.random() * 90 + 10)}`;
                 try {
                     const seq = await nextSequence(conn, 'task_no_seq');
                     taskNo = `TSK-${String(seq).padStart(5, '0')}`;

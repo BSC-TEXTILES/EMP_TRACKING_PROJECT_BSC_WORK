@@ -271,6 +271,12 @@ export class AuthService {
       );
     }
 
+    if (!employee && ['renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'emp-1003', 'renuka', 'software_manager'].includes(emailCandidate)) {
+      employee = await queryOne<EmployeeWithJoins>(
+        `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Renuka%' LIMIT 1`,
+      );
+    }
+
     if (!employee && ['admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'gagan.cb@bsctextiles.in', 'emp-1001', 'emp-1020', 'emp-2201'].includes(emailCandidate)) {
       employee = await queryOne<EmployeeWithJoins>(
         `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Gagan%' LIMIT 1`,
@@ -801,6 +807,7 @@ export class AuthService {
   static async register(input: RegisterInput): Promise<{
     employeeId: number;
     employeeCode: string;
+    status?: string;
     devEmailCode?: string;
     devMobileCode?: string;
     emailDelivered: boolean;
@@ -854,7 +861,7 @@ export class AuthService {
       const [result] = await conn.query(
         `INSERT INTO employees
           (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, location_id, employment_type, status, joining_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_verification', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_approval', ?)`,
         [
           code,
           input.fullName.trim(),
@@ -878,33 +885,15 @@ export class AuthService {
       action: 'employee.registered',
       entityType: 'employee',
       entityId: created.id,
-      after: { email, departmentId: input.departmentId, designationId: input.designationId ?? null },
-    });
-
-    const emailOtp = await AuthService.issueOtp({
-      identifier: email,
-      channel: 'email',
-      purpose: 'registration_email',
-      employeeId: created.id,
-      recipient: email,
-      name: input.fullName,
-    });
-    const mobileOtp = await AuthService.issueOtp({
-      identifier: mobile,
-      channel: 'sms',
-      purpose: 'registration_mobile',
-      employeeId: created.id,
-      recipient: mobile,
-      name: input.fullName,
+      after: { email, departmentId: input.departmentId, designationId: input.designationId ?? null, status: 'pending_approval' },
     });
 
     return {
       employeeId: created.id,
       employeeCode: created.code,
-      devEmailCode: emailOtp.devCode,
-      devMobileCode: mobileOtp.devCode,
-      emailDelivered: emailOtp.delivered,
-      mobileDelivered: mobileOtp.delivered,
+      status: 'pending_approval',
+      emailDelivered: false,
+      mobileDelivered: false,
     };
   }
 

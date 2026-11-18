@@ -16,11 +16,10 @@ export default function Register() {
   useDocumentTitle('Create account');
   const toast = useToast();
   const [options, setOptions] = useState<Options | null>(null);
-  const [step, setStep] = useState<'form' | 'verify' | 'done'>('form');
+  const [step, setStep] = useState<'form' | 'done'>('form');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [registration, setRegistration] = useState<{ employeeId: number; employeeCode: string; devEmailCode?: string; devMobileCode?: string } | null>(null);
-  const [codes, setCodes] = useState({ email: '', mobile: '' });
+  const [registration, setRegistration] = useState<{ employeeId: number; employeeCode: string } | null>(null);
   const [form, setForm] = useState({
     fullName: '',
     email: '',
@@ -48,8 +47,7 @@ export default function Register() {
 
   const visibleManagers = useMemo(() => {
     if (!options?.managers) return [{ id: 1, full_name: 'Gagan C B', location_name: 'Head Office' }];
-    const managers = options.managers.filter((m) => m.full_name.toLowerCase().includes('gagan') || m.full_name.toLowerCase().includes('chetan'));
-    return managers.length > 0 ? managers : [{ id: 1, full_name: 'Gagan C B', location_name: 'Head Office' }];
+    return options.managers.length > 0 ? options.managers : [{ id: 1, full_name: 'Gagan C B', location_name: 'Head Office' }];
   }, [options?.managers]);
 
   const submit = async (event: React.FormEvent) => {
@@ -64,8 +62,6 @@ export default function Register() {
       const result = await api.post<{
         employeeId: number;
         employeeCode: string;
-        devEmailCode?: string;
-        devMobileCode?: string;
       }>('/auth/register', {
         fullName: form.fullName,
         email: form.email,
@@ -78,28 +74,8 @@ export default function Register() {
         password: form.password,
       });
       setRegistration(result);
-      setCodes({ email: result.devEmailCode ?? '', mobile: result.devMobileCode ?? '' });
-      setStep('verify');
-      toast.info('Verification codes have been sent to your email and mobile.');
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const verify = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!registration) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      await api.post('/auth/register/verify', {
-        employeeId: registration.employeeId,
-        emailCode: codes.email,
-        mobileCode: codes.mobile,
-      });
       setStep('done');
+      toast.success('Registration submitted! Awaiting administrator approval.');
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -123,7 +99,7 @@ export default function Register() {
             <>
               <h1 className="text-xl font-semibold text-ink-900">Create your employee account</h1>
               <p className="mt-1 text-sm text-ink-500">
-                Your registration is verified by email and mobile OTP, then approved by HR before access is granted.
+                Enter your details to register. Once submitted, an administrator will review and activate your account.
               </p>
               {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
               <form onSubmit={submit} className="mt-5 grid gap-4 sm:grid-cols-2">
@@ -240,78 +216,24 @@ export default function Register() {
             </>
           )}
 
-          {step === 'verify' && registration && (
-            <>
-              <h1 className="text-xl font-semibold text-ink-900">Verify your email and mobile</h1>
-              <p className="mt-1 text-sm text-ink-500">
-                Registration <strong>{registration.employeeCode}</strong> was created. Enter both codes to continue.
-              </p>
-              {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-              {(registration.devEmailCode || registration.devMobileCode) && (
-                <div className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Development mode: email/SMS delivery is not configured on this server, so the generated codes are shown here.
-                </div>
-              )}
-              <form onSubmit={verify} className="mt-5 space-y-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <Field label="Email OTP" required>
-                    <input
-                      className="input tracking-[0.3em]"
-                      value={codes.email}
-                      onChange={(event) => setCodes({ ...codes, email: event.target.value.replace(/\D/g, '').slice(0, 6) })}
-                      placeholder="000000"
-                      inputMode="numeric"
-                      required
-                    />
-                  </Field>
-                  <Field label="Mobile OTP" required>
-                    <input
-                      className="input tracking-[0.3em]"
-                      value={codes.mobile}
-                      onChange={(event) => setCodes({ ...codes, mobile: event.target.value.replace(/\D/g, '').slice(0, 6) })}
-                      placeholder="000000"
-                      inputMode="numeric"
-                      required
-                    />
-                  </Field>
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm"
-                    onClick={async () => {
-                      try {
-                        const result = await api.post<{ devCode?: string }>('/auth/register/resend', {
-                          employeeId: registration.employeeId,
-                          channel: 'email',
-                        });
-                        if (result.devCode) setCodes({ ...codes, email: result.devCode });
-                        toast.success('A new email code has been sent.');
-                      } catch (caught) {
-                        toast.error(errorMessage(caught));
-                      }
-                    }}
-                  >
-                    Resend email code
-                  </button>
-                  <button type="submit" className="btn-primary" disabled={submitting}>
-                    {submitting ? 'Verifying…' : 'Verify and submit for approval'}
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
-
           {step === 'done' && (
-            <div className="py-6 text-center">
-              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">✓</div>
-              <h1 className="text-xl font-semibold text-ink-900">Verification complete</h1>
-              <p className="mx-auto mt-2 max-w-md text-sm text-ink-500">
-                Your account is now awaiting HR approval. You will receive a notification as soon as it is activated, and can then sign in.
+            <div className="py-6 text-center space-y-4">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 text-2xl font-bold">
+                ✓
+              </div>
+              <h1 className="text-xl font-bold text-ink-900">Registration Submitted</h1>
+              <p className="mx-auto max-w-md text-sm text-ink-600">
+                Your employee registration <strong className="text-ink-900 font-mono text-base">{registration?.employeeCode}</strong> has been submitted.
               </p>
-              <Link to="/login" className="btn-primary mt-5">
-                Back to sign in
-              </Link>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 text-left max-w-md mx-auto space-y-1">
+                <p className="font-semibold text-amber-900">Awaiting Administrator Approval</p>
+                <p>An administrator or HR manager will review and approve your registration. Once approved, you can immediately sign in with your email or employee ID and password.</p>
+              </div>
+              <div className="pt-2">
+                <Link to="/login" className="btn-primary">
+                  Back to sign in
+                </Link>
+              </div>
             </div>
           )}
         </div>

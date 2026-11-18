@@ -39,12 +39,14 @@ function resolve(row, idleMinutes, busy) {
     }
     if (manual === 'dnd')
         return 'dnd';
-    if (busy.has(id))
+    if (manual === 'in_meeting' || busy.has(id))
         return 'in_meeting';
-    if (Number(row.on_break))
+    if (manual === 'on_break' || Number(row.on_break))
         return 'on_break';
     if (manual === 'away')
         return 'away';
+    if (manual === 'inactive')
+        return 'inactive_today';
     if (row.idle_seconds !== null && Number(row.idle_seconds) > idleMinutes * 60)
         return 'away';
     return 'active';

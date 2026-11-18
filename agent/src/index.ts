@@ -17,6 +17,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { collectHealth, collectLocation } from './telemetry.js';
 
 const run = promisify(execFile);
 
@@ -27,6 +28,9 @@ const INTERVAL_MS = Math.max(3000, Number(process.env.AGENT_INTERVAL_MS ?? 10000
 // Optional bounded run for smoke tests / demos; 0 means run until stopped.
 const MAX_RUN_MS = Math.max(0, Number(process.env.AGENT_MAX_RUN_MS ?? 0));
 const DATA_DIR = process.env.AGENT_DATA_DIR ?? path.resolve(process.cwd(), 'agent-data');
+const AGENT_VERSION = '1.1.0';
+const HEALTH_INTERVAL_MS = 5 * 60 * 1000;
+const SECURITY_EVERY_N_HEALTH = 6; // Defender status every 30 minutes
 
 interface Policy {
   allowedApps: string[];
@@ -36,6 +40,8 @@ interface Policy {
   retentionDays: number;
   idleThresholdMinutes?: number;
   screenshotEnabled: boolean;
+  locationTrackingEnabled?: boolean;
+  locationIntervalMinutes?: number;
 }
 
 interface QueueEvent {
@@ -173,7 +179,7 @@ async function registerDevice(cookie: string): Promise<{ deviceId: number; token
       deviceName: `${os.hostname()} · Windows`,
       osName: process.platform === 'win32' ? 'Windows' : process.platform,
       osVersion: os.release(),
-      agentVersion: '1.0.0',
+      agentVersion: AGENT_VERSION,
       machineFingerprint: await machineFingerprint(),
     }),
   }, { cookie });
@@ -492,6 +498,45 @@ async function main(): Promise<void> {
     log('Monitoring stopped.');
     process.exit(0);
   };
+
+  // --- Device telemetry (LiveGuard Pro integration) ---
+  let healthRuns = 0;
+  const reportHealth = async (): Promise<void> => {
+    if (stopped) return;
+    try {
+      const sample = await collectHealth(AGENT_VERSION, healthRuns++ % SECURITY_EVERY_N_HEALTH === 0);
+      const response = await api('/activity/agent/health', { method: 'POST', body: JSON.stringify(sample) }, { deviceToken: token });
+      if (!response.ok) log(`Device health not accepted (${response.status}).`);
+      else if (sample.security?.recentThreats) log(`Windows Defender reports ${sample.security.recentThreats} recent threat(s); IT has been notified.`);
+    } catch {
+      log('Device health report deferred (server unreachable).');
+    }
+  };
+  const reportLocation = async (): Promise<void> => {
+    if (stopped) return;
+    const location = await collectLocation();
+    if (!location) {
+      log('Location unavailable. Turn on Windows Settings → Privacy & security → Location to share it.');
+      return;
+    }
+    try {
+      const response = await api('/activity/agent/location', { method: 'POST', body: JSON.stringify(location) }, { deviceToken: token });
+      const result = await response.json().catch(() => ({})) as { accepted?: boolean; reason?: string };
+      if (!result.accepted) log(`Location not recorded (${result.reason ?? response.status}).`);
+    } catch {
+      log('Location report deferred (server unreachable).');
+    }
+  };
+  void reportHealth();
+  setInterval(() => { void reportHealth(); }, HEALTH_INTERVAL_MS);
+  if (policy.locationTrackingEnabled) {
+    const minutes = Math.min(240, Math.max(5, policy.locationIntervalMinutes ?? 15));
+    log(`Location sharing is enabled by policy (every ${minutes} min, only during the work session).`);
+    void reportLocation();
+    setInterval(() => { void reportLocation(); }, minutes * 60 * 1000);
+  } else {
+    log('Location sharing: disabled by policy.');
+  }
 
   process.on('SIGINT', () => void shutdown());
   process.on('SIGTERM', () => void shutdown());

@@ -5,6 +5,7 @@ import { authenticate, currentUser } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
 import { ActivityService, type DeviceContext } from '../services/ActivityService.js';
 import { ActivityAnalyticsService } from '../services/ActivityAnalyticsService.js';
+import { DeviceTelemetryService } from '../services/DeviceTelemetryService.js';
 import { today } from '../lib/dates.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
@@ -71,22 +72,21 @@ activityRouter.post(
 
 activityRouter.post(
   '/agent/health',
+  rateLimit({ windowMs: 60000, max: 20, keyPrefix: 'agent-health' }),
   requireDevice,
   asyncHandler(async (req: AgentRequest, res) => {
-    const { execute } = await import('../db/index.js');
-    const device = req.device!;
-    const numeric = (value: unknown) => (value === undefined || value === null || Number.isNaN(Number(value)) ? null : Math.max(0, Number(value)));
-    await execute(
-      `INSERT INTO device_health_logs (device_id, employee_id, cpu_percent, memory_percent, disk_free_mb, agent_version, details, reported_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(3))`,
-      [
-        device.deviceId, device.employeeId, numeric(req.body?.cpuPercent), numeric(req.body?.memoryPercent),
-        numeric(req.body?.diskFreeMb), String(req.body?.agentVersion ?? '').slice(0, 40) || null,
-        JSON.stringify({ source: 'agent' }),
-      ],
-    );
-    if (device.sessionId) await ActivityService.heartbeat(device);
-    res.json({ ok: true, deviceId: device.deviceId, sessionId: device.sessionId });
+    res.json(await DeviceTelemetryService.recordHealth(req.device!, (req.body ?? {}) as Record<string, unknown>));
+  }),
+);
+
+// Device location (ported from LiveGuard Pro). Accepted only when the policy enables
+// it, the employee acknowledged that policy version, and a work session is active.
+activityRouter.post(
+  '/agent/location',
+  rateLimit({ windowMs: 60000, max: 10, keyPrefix: 'agent-location' }),
+  requireDevice,
+  asyncHandler(async (req: AgentRequest, res) => {
+    res.json(await DeviceTelemetryService.recordLocation(req.device!, (req.body ?? {}) as Record<string, unknown>));
   }),
 );
 
@@ -135,6 +135,23 @@ activityRouter.post(
 
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
+
+// LiveGuard device board: health, security posture and location per device.
+activityRouter.get(
+  '/live-devices',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json(await DeviceTelemetryService.liveDevices(currentUser(req)));
+  }),
+);
+
+activityRouter.get(
+  '/devices/:id/locations',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) throw ApiError.badRequest('Invalid device id');
+    res.json(await DeviceTelemetryService.locationTrail(currentUser(req), id, dateParam(req.query.date)));
+  }),
+);
 
 activityRouter.get(
   '/policy',

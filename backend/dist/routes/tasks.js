@@ -71,10 +71,13 @@ tasksRouter.post('/', requireAny('tasks.create'), asyncHandler(async (req, res) 
 }));
 tasksRouter.post('/daily/generate', asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    const body = parseBody(z.object({ employeeId: z.number().int().positive().optional() }), req.body);
+    const body = parseBody(z.object({
+        employeeId: z.number().int().positive().optional(),
+        force: z.boolean().optional(),
+    }), req.body);
     const targetEmployeeId = body.employeeId ?? user.id;
     try {
-        const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user);
+        const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user, { force: body.force });
         res.json(result);
     }
     catch (err) {
@@ -151,7 +154,9 @@ tasksRouter.post('/:id/action', asyncHandler(async (req, res) => {
             'verify',
             'reject',
             'escalate',
+            'set_status',
         ]),
+        status: z.string().optional(),
         note: z.string().max(2000).optional(),
         progress: z.number().int().min(0).max(100).optional(),
         assigneeId: z.number().int().positive().optional(),

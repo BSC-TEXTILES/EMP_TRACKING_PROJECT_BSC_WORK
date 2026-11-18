@@ -33,6 +33,10 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
     const hrName = chetan?.full_name || 'Chetan TK';
     const hrCode = chetan?.employee_code || 'EMP-1002';
+    const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' LIMIT 1");
+    const swEmail = renuka?.email || 'renuka.adhya@bsctextiles.in';
+    const swName = renuka?.full_name || 'Renuka Adhya';
+    const swCode = renuka?.employee_code || 'EMP-1003';
     res.json({
         enabled: true,
         environment: config.env,
@@ -42,6 +46,13 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
                 employeeId: code,
                 name,
                 email,
+                password,
+            },
+            {
+                role: 'Software Manager',
+                employeeId: swCode,
+                name: swName,
+                email: swEmail,
                 password,
             },
             {
@@ -142,7 +153,7 @@ authRouter.get('/registration-options', asyncHandler(async (_req, res) => {
         query(`SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
-         WHERE e.status = 'active' AND e.full_name LIKE '%Gagan%'
+         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Renuka%' OR e.full_name LIKE '%Chetan%')
          ORDER BY e.full_name`),
     ]);
     res.json({ departments, designations, locations, managers });

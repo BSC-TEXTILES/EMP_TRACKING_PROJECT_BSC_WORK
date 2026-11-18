@@ -128,6 +128,8 @@ export class ActivityService {
             policyText: String(row.policy_text),
             screenshotEnabled: Boolean(row.screenshot_enabled),
             screenshotIntervalMinutes: Number(row.screenshot_interval_minutes),
+            locationTrackingEnabled: Boolean(row.location_tracking_enabled),
+            locationIntervalMinutes: Number(row.location_interval_minutes ?? 15),
             retentionDays: Number(row.retention_days),
             idleThresholdMinutes: Number(row.idle_threshold_minutes ?? 5),
             staleSessionMinutes: Number(row.stale_session_minutes ?? 15),
@@ -440,6 +442,8 @@ export class ActivityService {
                 version: policy.version,
                 idleThresholdMinutes: policy.idleThresholdMinutes,
                 screenshotEnabled: policy.screenshotEnabled,
+                locationTrackingEnabled: policy.locationTrackingEnabled,
+                locationIntervalMinutes: policy.locationIntervalMinutes,
                 retentionDays: policy.retentionDays,
                 policyText: policy.policyText,
             },
@@ -1035,6 +1039,7 @@ export class ActivityService {
             { key: 'work_events', table: 'work_activity_events', column: 'occurred_at' },
             { key: 'error_events', table: 'system_error_events', column: 'occurred_at' },
             { key: 'device_health', table: 'device_health_logs', column: 'reported_at' },
+            { key: 'device_locations', table: 'device_location_logs', column: 'recorded_at' },
             { key: 'daily_summaries', table: 'daily_activity_summaries', column: 'summary_date' },
             { key: 'weekly_reports', table: 'weekly_performance_reports', column: 'week_end' },
             { key: 'corrections', table: 'activity_record_corrections', column: 'created_at', extra: "AND status <> 'pending'" },
@@ -1096,15 +1101,22 @@ export class ActivityService {
             domainCategories = Object.fromEntries(allowedDomains.map((domain) => [domain, existing[domain] ?? 'Business Operations']));
         }
         const policyText = typeof input.policyText === 'string' && cleanText(input.policyText, 5000).length >= 40 ? String(input.policyText).trim().slice(0, 5000) : null;
+        const locationTrackingEnabled = input.locationTrackingEnabled === undefined ? Boolean(current.location_tracking_enabled) : Boolean(input.locationTrackingEnabled);
+        const locationIntervalMinutes = Math.min(240, Math.max(5, Number(input.locationIntervalMinutes ?? current.location_interval_minutes) || 15));
         // A changed policy text is a new version: every employee must acknowledge it again.
-        const bumpVersion = policyText !== null && policyText !== String(current.policy_text);
-        await execute(`UPDATE monitoring_policies SET screenshot_enabled = ?, screenshot_interval_minutes = ?, retention_days = ?,
+        // Switching location tracking on is also a material change that needs fresh consent.
+        const bumpVersion = (policyText !== null && policyText !== String(current.policy_text))
+            || (locationTrackingEnabled && !current.location_tracking_enabled);
+        await execute(`UPDATE monitoring_policies SET screenshot_enabled = ?, screenshot_interval_minutes = ?,
+              location_tracking_enabled = ?, location_interval_minutes = ?, retention_days = ?,
               idle_threshold_minutes = ?, stale_session_minutes = ?,
               allowed_apps = COALESCE(?, allowed_apps), allowed_domains = COALESCE(?, allowed_domains),
               domain_categories = COALESCE(?, domain_categories), policy_text = COALESCE(?, policy_text),
               version = version + ?, updated_at = NOW(3) WHERE id = ?`, [
             screenshotEnabled ? 1 : 0,
             Math.min(240, Math.max(5, Number(input.screenshotIntervalMinutes ?? current.screenshot_interval_minutes) || 30)),
+            locationTrackingEnabled ? 1 : 0,
+            locationIntervalMinutes,
             Math.min(3650, Math.max(1, Number(input.retentionDays ?? current.retention_days) || 90)),
             Math.min(60, Math.max(1, Number(input.idleThresholdMinutes ?? current.idle_threshold_minutes) || 5)),
             Math.min(240, Math.max(5, Number(input.staleSessionMinutes ?? current.stale_session_minutes) || 15)),
@@ -1116,7 +1128,7 @@ export class ActivityService {
             Number(current.id),
         ]);
         await ActivityService.audit(user.id, 'activity.policy_updated', null, 'monitoring_policy', Number(current.id), {
-            screenshotEnabled, newVersion: bumpVersion, domains: allowedDomains?.length,
+            screenshotEnabled, locationTrackingEnabled, newVersion: bumpVersion, domains: allowedDomains?.length,
         });
         return ActivityService.policy();
     }

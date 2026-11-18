@@ -5,6 +5,7 @@ import { authenticate, currentUser } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
 import { ActivityService } from '../services/ActivityService.js';
 import { ActivityAnalyticsService } from '../services/ActivityAnalyticsService.js';
+import { DeviceTelemetryService } from '../services/DeviceTelemetryService.js';
 import { today } from '../lib/dates.js';
 export const activityRouter = Router();
 function requireDevice(req, _res, next) {
@@ -36,19 +37,13 @@ activityRouter.post('/agent/extension', requireDevice, asyncHandler(async (req, 
        ON DUPLICATE KEY UPDATE extension_version = VALUES(extension_version), last_seen_at = NOW(3), status = 'active'`, [device.employeeId, device.deviceId, browser, version]);
     res.json({ ok: true, browser });
 }));
-activityRouter.post('/agent/health', requireDevice, asyncHandler(async (req, res) => {
-    const { execute } = await import('../db/index.js');
-    const device = req.device;
-    const numeric = (value) => (value === undefined || value === null || Number.isNaN(Number(value)) ? null : Math.max(0, Number(value)));
-    await execute(`INSERT INTO device_health_logs (device_id, employee_id, cpu_percent, memory_percent, disk_free_mb, agent_version, details, reported_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(3))`, [
-        device.deviceId, device.employeeId, numeric(req.body?.cpuPercent), numeric(req.body?.memoryPercent),
-        numeric(req.body?.diskFreeMb), String(req.body?.agentVersion ?? '').slice(0, 40) || null,
-        JSON.stringify({ source: 'agent' }),
-    ]);
-    if (device.sessionId)
-        await ActivityService.heartbeat(device);
-    res.json({ ok: true, deviceId: device.deviceId, sessionId: device.sessionId });
+activityRouter.post('/agent/health', rateLimit({ windowMs: 60000, max: 20, keyPrefix: 'agent-health' }), requireDevice, asyncHandler(async (req, res) => {
+    res.json(await DeviceTelemetryService.recordHealth(req.device, (req.body ?? {})));
+}));
+// Device location (ported from LiveGuard Pro). Accepted only when the policy enables
+// it, the employee acknowledged that policy version, and a work session is active.
+activityRouter.post('/agent/location', rateLimit({ windowMs: 60000, max: 10, keyPrefix: 'agent-location' }), requireDevice, asyncHandler(async (req, res) => {
+    res.json(await DeviceTelemetryService.recordLocation(req.device, (req.body ?? {})));
 }));
 // Allow web client to report frontend errors without requiring authentication (e.g. login failures)
 activityRouter.post('/client-error', rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'activity-client-error' }), asyncHandler(async (req, res) => {
@@ -91,6 +86,16 @@ activityRouter.post('/client-error', rateLimit({ windowMs: 60000, max: 30, keyPr
 }));
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
+// LiveGuard device board: health, security posture and location per device.
+activityRouter.get('/live-devices', asyncHandler(async (req, res) => {
+    res.json(await DeviceTelemetryService.liveDevices(currentUser(req)));
+}));
+activityRouter.get('/devices/:id/locations', asyncHandler(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0)
+        throw ApiError.badRequest('Invalid device id');
+    res.json(await DeviceTelemetryService.locationTrail(currentUser(req), id, dateParam(req.query.date)));
+}));
 activityRouter.get('/policy', asyncHandler(async (req, res) => {
     res.json(await ActivityService.consentStatus(currentUser(req)));
 }));

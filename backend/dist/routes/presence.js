@@ -29,7 +29,7 @@ presenceRouter.get('/me', asyncHandler(async (req, res) => {
 }));
 presenceRouter.put('/me', rateLimit({ windowMs: 60_000, max: 30, keyPrefix: 'presence-set' }), asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    const body = parseBody(z.object({ status: z.enum(['active', 'away', 'dnd', 'on_leave']) }), req.body);
+    const body = parseBody(z.object({ status: z.enum(['active', 'away', 'dnd', 'in_meeting', 'on_break', 'inactive', 'on_leave']) }), req.body);
     const presence = await PresenceService.setManual(user.id, body.status);
     res.json({ presence });
 }));
