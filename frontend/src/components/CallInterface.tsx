@@ -100,6 +100,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [audioOutputId, setAudioOutputId] = useState('');
   const [showDevices, setShowDevices] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true);
+  const [speakerVolume, setSpeakerVolume] = useState(100);
+  const [connectionQuality, setConnectionQuality] = useState<'connecting' | 'ringing' | 'connected' | 'reconnecting' | 'failed'>('connecting');
 
   const sessionRef = useRef<CallSession | null>(null);
   const incomingRef = useRef<IncomingCall | null>(null);
@@ -172,6 +175,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setMuted(false);
     setCameraOff(false);
     setSharingScreen(false);
+    setSpeakerEnabled(true);
+    setSpeakerVolume(100);
+    setConnectionQuality('connecting');
     setElapsed(0);
     setShowDevices(false);
     setMediaError(null);
@@ -264,14 +270,22 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setRemoteStream(next);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = next;
+        remoteVideoRef.current.muted = !speakerEnabled;
+        remoteVideoRef.current.volume = speakerVolume / 100;
         void remoteVideoRef.current.play().catch(() => undefined);
       }
     };
     pc.onconnectionstatechange = () => {
       if (!pcRef.current) return;
       if (pc.connectionState === 'connected') {
+        setConnectionQuality('connected');
         restartAttemptedRef.current = false;
+      } else if (pc.connectionState === 'connecting') {
+        setConnectionQuality('connecting');
+      } else if (pc.connectionState === 'disconnected') {
+        setConnectionQuality('reconnecting');
       } else if (pc.connectionState === 'failed') {
+        setConnectionQuality('failed');
         if (!restartAttemptedRef.current) {
           restartAttemptedRef.current = true;
           try {
@@ -285,6 +299,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
           teardown();
           setHistoryVersion((value) => value + 1);
         }
+      }
+    };
+    pc.oniceconnectionstatechange = () => {
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'checking') {
+        setConnectionQuality('reconnecting');
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        setConnectionQuality('connected');
       }
     };
     return pc;
@@ -687,6 +708,29 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setMuted(next);
   }, []);
 
+  const toggleSpeaker = useCallback(() => {
+    setSpeakerEnabled((prev) => {
+      const next = !prev;
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.muted = !next;
+        remoteVideoRef.current.volume = next ? speakerVolume / 100 : 0;
+      }
+      return next;
+    });
+  }, [speakerVolume]);
+
+  const changeSpeakerVolume = useCallback((val: number) => {
+    const clamped = Math.max(0, Math.min(100, val));
+    setSpeakerVolume(clamped);
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.volume = clamped / 100;
+      if (clamped > 0 && !speakerEnabled) {
+        setSpeakerEnabled(true);
+        remoteVideoRef.current.muted = false;
+      }
+    }
+  }, [speakerEnabled]);
+
   const toggleCamera = useCallback(async () => {
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (!track) {
@@ -842,8 +886,23 @@ export function CallProvider({ children }: { children: ReactNode }) {
               <p className="truncate text-xs text-white/60">{phaseLabel}</p>
             </div>
             <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs">
-              <span className={cx('h-2 w-2 rounded-full', session.phase === 'active' ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse')} />
-              {session.phase === 'active' ? formatDuration(elapsed) : 'Ringing'}
+              <span
+                className={cx(
+                  'h-2 w-2 rounded-full',
+                  connectionQuality === 'connected'
+                    ? 'bg-emerald-400'
+                    : connectionQuality === 'reconnecting'
+                    ? 'bg-amber-400 animate-ping'
+                    : 'bg-blue-400 animate-pulse',
+                )}
+              />
+              <span>
+                {session.phase === 'active'
+                  ? connectionQuality === 'reconnecting'
+                    ? 'Reconnecting…'
+                    : `HD Audio · ${formatDuration(elapsed)}`
+                  : 'Ringing…'}
+              </span>
             </div>
           </div>
 
@@ -913,7 +972,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
               )}
               {canSelectSpeaker && speakerDevices.length > 0 && (
                 <label className="block">
-                  <span className="mb-1 block text-white/60">Speaker</span>
+                  <span className="mb-1 block text-white/60">Speaker Output Device</span>
                   <select
                     className="w-full rounded-lg bg-slate-900 px-2 py-1.5 text-white"
                     value={audioOutputId}
@@ -925,6 +984,21 @@ export function CallProvider({ children }: { children: ReactNode }) {
                   </select>
                 </label>
               )}
+              <label className="block">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-white/60">Speaker Volume</span>
+                  <span className="font-mono text-white/80">{speakerVolume}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={speakerVolume}
+                  onChange={(e) => changeSpeakerVolume(Number(e.target.value))}
+                  className="w-full accent-brand-500"
+                />
+              </label>
             </div>
           )}
 
@@ -932,11 +1006,24 @@ export function CallProvider({ children }: { children: ReactNode }) {
             <button
               type="button"
               onClick={toggleMute}
-              className={cx('flex h-14 w-14 items-center justify-center rounded-full transition', muted ? 'bg-red-500' : 'bg-white/15 hover:bg-white/25')}
+              className={cx('flex h-14 w-14 items-center justify-center rounded-full transition shadow-md', muted ? 'bg-red-500 hover:bg-red-600' : 'bg-white/15 hover:bg-white/25')}
               aria-label={muted ? 'Unmute microphone' : 'Mute microphone'}
+              title={muted ? 'Unmute microphone' : 'Mute microphone'}
               disabled={session.phase !== 'active'}
             >
               <Icon name={muted ? 'micOff' : 'mic'} size={22} />
+            </button>
+            <button
+              type="button"
+              onClick={toggleSpeaker}
+              className={cx(
+                'flex h-14 w-14 items-center justify-center rounded-full transition shadow-md',
+                !speakerEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-white/15 hover:bg-white/25',
+              )}
+              aria-label={speakerEnabled ? 'Turn speaker OFF' : 'Turn speaker ON'}
+              title={speakerEnabled ? 'Speaker ON (Click to mute)' : 'Speaker OFF (Click to unmute)'}
+            >
+              <Icon name={speakerEnabled ? 'volume' : 'volumeOff'} size={22} />
             </button>
             {session.type === 'video' && (
               <button

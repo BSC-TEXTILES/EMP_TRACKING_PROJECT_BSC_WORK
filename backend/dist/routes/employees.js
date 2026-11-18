@@ -179,6 +179,41 @@ employeesRouter.delete('/roles/:id', requireAny('roles.manage', 'org.manage'), a
         throw ApiError.badRequest('Invalid target replacement role.');
     res.json(await EmployeeService.deleteRole(currentUser(req), intParam(req.params.id), moveTo, clientIp(req)));
 }));
+employeesRouter.post('/roles/:id/duplicate', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    res.status(201).json(await EmployeeService.duplicateRole(user, id, clientIp(req)));
+}));
+employeesRouter.get('/roles/audit-logs', requireAny('roles.manage', 'audit.view', 'admin.dashboard'), asyncHandler(async (_req, res) => {
+    res.json({ logs: await EmployeeService.getPermissionAuditLogs() });
+}));
+employeesRouter.get('/roles/:id/employees', requireAny('roles.manage', 'org.manage', 'employees.manage', 'employees.view.all'), asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    res.json({ employees: await EmployeeService.getRoleEmployees(id) });
+}));
+employeesRouter.post('/roles/:id/employees', requireAny('roles.manage', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({ employeeId: z.number().int().positive() }), req.body);
+    res.json(await EmployeeService.assignEmployeeToRole(user, id, body.employeeId, clientIp(req)));
+}));
+employeesRouter.delete('/roles/:id/employees/:employeeId', requireAny('roles.manage', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+    const roleId = intParam(req.params.id);
+    const employeeId = intParam(req.params.employeeId);
+    const user = currentUser(req);
+    res.json(await EmployeeService.unassignEmployeeFromRole(user, roleId, employeeId, undefined, clientIp(req)));
+}));
+employeesRouter.get('/roles/:id/locations', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    res.json({ locationIds: await EmployeeService.getRoleLocations(id) });
+}));
+employeesRouter.put('/roles/:id/locations', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({ locationIds: z.array(z.number().int().positive()) }), req.body);
+    const updated = await EmployeeService.setRoleLocations(user, id, body.locationIds, clientIp(req));
+    res.json({ locationIds: updated });
+}));
 employeesRouter.post('/:id/permissions', requireAny('roles.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);

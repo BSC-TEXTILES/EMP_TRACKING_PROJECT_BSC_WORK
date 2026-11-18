@@ -719,9 +719,15 @@ export class EmployeeService {
         };
     }
     static async rolePermissions() {
-        const roles = await query('SELECT id, name, slug, level, description, is_system FROM roles ORDER BY level DESC');
+        const roles = await query(`SELECT r.id, r.name, r.slug, r.level, r.description, r.is_system,
+              COUNT(e.id) AS employee_count
+       FROM roles r
+       LEFT JOIN employees e ON e.role_id = r.id AND e.status NOT IN ('deleted', 'rejected')
+       GROUP BY r.id
+       ORDER BY r.level DESC, r.name ASC`);
         const permissions = await query('SELECT id, code, module, action, description FROM permissions ORDER BY module, action');
         const mapping = await query('SELECT role_id, permission_id FROM role_permissions');
+        const roleLocs = await query('SELECT role_id, location_id FROM role_locations');
         return {
             roles: roles.map((r) => ({
                 id: Number(r.id),
@@ -730,7 +736,9 @@ export class EmployeeService {
                 level: Number(r.level),
                 description: r.description,
                 isSystem: Boolean(r.is_system),
+                employeeCount: Number(r.employee_count || 0),
                 permissions: mapping.filter((m) => Number(m.role_id) === Number(r.id)).map((m) => Number(m.permission_id)),
+                locations: roleLocs.filter((l) => Number(l.role_id) === Number(r.id)).map((l) => Number(l.location_id)),
             })),
             permissions: permissions.map((p) => ({
                 id: Number(p.id),
@@ -741,9 +749,10 @@ export class EmployeeService {
             })),
         };
     }
-    static async updateRolePermissions(roleId, actor, permissionIds) {
-        if (!actor.permissions.includes('roles.manage'))
+    static async updateRolePermissions(roleId, actor, permissionIds, ip) {
+        if (!actor.permissions.includes('roles.manage') && actor.roleSlug !== 'super_admin' && (actor.roleLevel ?? 0) < 90) {
             throw ApiError.forbidden('You cannot change the permission matrix.');
+        }
         const role = await queryOne('SELECT name, slug FROM roles WHERE id = ?', [roleId]);
         if (!role)
             throw ApiError.notFound('Role not found');
@@ -760,6 +769,24 @@ export class EmployeeService {
             before: { permissions: before.map((b) => Number(b.permission_id)) },
             after: { permissions: permissionIds },
         });
+        try {
+            await execute(`INSERT INTO permission_audit_logs (actor_id, role_id, action, module, details, ip)
+         VALUES (?, ?, 'permissions.updated', 'roles', ?, ?)`, [
+                actor.id,
+                roleId,
+                JSON.stringify({
+                    roleName: role.name,
+                    roleSlug: role.slug,
+                    count: permissionIds.length,
+                    addedCount: permissionIds.filter((p) => !before.some((b) => Number(b.permission_id) === p)).length,
+                    removedCount: before.filter((b) => !permissionIds.includes(Number(b.permission_id))).length,
+                }),
+                ip ?? null,
+            ]);
+        }
+        catch {
+            /* audit log safe fallback */
+        }
     }
     static async setUserPermission(employeeId, actor, permissionId, effect) {
         if (!actor.permissions.includes('roles.manage'))
@@ -1129,7 +1156,145 @@ export class EmployeeService {
         await execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
         await execute('DELETE FROM roles WHERE id = ?', [roleId]);
         await recordAudit({ actorId: actor.id, action: 'role.deleted', entityType: 'role', entityId: roleId, before: role, ip });
+        try {
+            await execute(`INSERT INTO permission_audit_logs (actor_id, role_id, action, module, details, ip)
+         VALUES (?, ?, 'role.deleted', 'roles', ?, ?)`, [actor.id, roleId, JSON.stringify({ name: role.name, slug: role.slug, transferred: staff.length }), ip ?? null]);
+        }
+        catch {
+            /* audit log safe fallback */
+        }
         return { ok: true, moved: staff.length };
+    }
+    static async duplicateRole(actor, sourceRoleId, ip) {
+        const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
+            throw ApiError.forbidden('You cannot duplicate roles.');
+        const source = await queryOne('SELECT id, name, slug, level, description, category FROM roles WHERE id = ?', [sourceRoleId]);
+        if (!source)
+            throw ApiError.notFound('Source role not found');
+        const suffix = Date.now().toString(36).slice(-4);
+        const newName = `${source.name} (Copy)`;
+        const newSlug = `${source.slug.slice(0, 50)}_copy_${suffix}`;
+        const res = await execute('INSERT INTO roles (name, slug, category, level, description) VALUES (?, ?, ?, ?, ?)', [newName, newSlug, source.category || 'general', source.level, source.description]);
+        const newRoleId = res.insertId;
+        // Clone all permissions
+        await execute('INSERT INTO role_permissions (role_id, permission_id) SELECT ?, permission_id FROM role_permissions WHERE role_id = ?', [newRoleId, sourceRoleId]);
+        // Clone all locations
+        await execute('INSERT INTO role_locations (role_id, location_id, granted_by) SELECT ?, location_id, ? FROM role_locations WHERE role_id = ?', [newRoleId, actor.id, sourceRoleId]);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'role.duplicated',
+            entityType: 'role',
+            entityId: newRoleId,
+            after: { sourceRoleId, name: newName, slug: newSlug },
+            ip,
+        });
+        try {
+            await execute(`INSERT INTO permission_audit_logs (actor_id, role_id, action, module, details, ip)
+         VALUES (?, ?, 'role.duplicated', 'roles', ?, ?)`, [actor.id, newRoleId, JSON.stringify({ sourceRoleId, sourceName: source.name, newName, newSlug }), ip ?? null]);
+        }
+        catch {
+            /* ignore */
+        }
+        return { id: newRoleId, name: newName, slug: newSlug };
+    }
+    static async getRoleEmployees(roleId) {
+        const rows = await query(`SELECT e.id, e.employee_code AS employeeCode, e.full_name AS fullName, e.email, e.mobile,
+              e.photo_url AS photoUrl, e.status,
+              d.name AS departmentName, dg.title AS designationTitle,
+              l.name AS locationName, l.code AS locationCode
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       WHERE e.role_id = ? AND e.status NOT IN ('deleted', 'rejected')
+       ORDER BY e.full_name ASC`, [roleId]);
+        return rows;
+    }
+    static async assignEmployeeToRole(actor, roleId, employeeId, ip) {
+        const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
+            throw ApiError.forbidden('You cannot assign roles to employees.');
+        const role = await queryOne('SELECT id, name, slug FROM roles WHERE id = ?', [roleId]);
+        if (!role)
+            throw ApiError.notFound('Role not found');
+        const emp = await queryOne('SELECT e.id, e.full_name, e.role_id, r.name AS role_name FROM employees e LEFT JOIN roles r ON r.id = e.role_id WHERE e.id = ?', [employeeId]);
+        if (!emp)
+            throw ApiError.notFound('Employee not found');
+        await execute('UPDATE employees SET role_id = ? WHERE id = ?', [roleId, employeeId]);
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.role_assigned',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { roleId: emp.role_id, roleName: emp.role_name },
+            after: { roleId, roleName: role.name },
+            ip,
+        });
+        try {
+            await execute(`INSERT INTO permission_audit_logs (actor_id, role_id, employee_id, action, module, details, ip)
+         VALUES (?, ?, ?, 'employee.role_assigned', 'roles', ?, ?)`, [actor.id, roleId, employeeId, JSON.stringify({ employeeName: emp.full_name, previousRole: emp.role_name, newRole: role.name }), ip ?? null]);
+        }
+        catch {
+            /* ignore */
+        }
+        return { ok: true, roleName: role.name };
+    }
+    static async unassignEmployeeFromRole(actor, roleId, employeeId, targetRoleId, ip) {
+        const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
+            throw ApiError.forbidden('You cannot unassign employees.');
+        let fallbackId = targetRoleId;
+        if (!fallbackId) {
+            const defaultRole = await queryOne('SELECT id FROM roles WHERE slug = "employee" LIMIT 1');
+            fallbackId = defaultRole ? defaultRole.id : 1;
+        }
+        return await EmployeeService.assignEmployeeToRole(actor, fallbackId, employeeId, ip);
+    }
+    static async getRoleLocations(roleId) {
+        const rows = await query('SELECT location_id FROM role_locations WHERE role_id = ?', [roleId]);
+        return rows.map((r) => Number(r.location_id));
+    }
+    static async setRoleLocations(actor, roleId, locationIds, ip) {
+        const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
+            throw ApiError.forbidden('You cannot change role location access.');
+        const role = await queryOne('SELECT id, name FROM roles WHERE id = ?', [roleId]);
+        if (!role)
+            throw ApiError.notFound('Role not found');
+        await execute('DELETE FROM role_locations WHERE role_id = ?', [roleId]);
+        for (const locId of locationIds) {
+            await execute('INSERT IGNORE INTO role_locations (role_id, location_id, granted_by) VALUES (?, ?, ?)', [roleId, locId, actor.id]);
+        }
+        await recordAudit({
+            actorId: actor.id,
+            action: 'role.locations_updated',
+            entityType: 'role',
+            entityId: roleId,
+            after: { locationIds },
+            ip,
+        });
+        try {
+            await execute(`INSERT INTO permission_audit_logs (actor_id, role_id, action, module, details, ip)
+         VALUES (?, ?, 'role.locations_updated', 'locations', ?, ?)`, [actor.id, roleId, JSON.stringify({ roleName: role.name, locationIds }), ip ?? null]);
+        }
+        catch {
+            /* ignore */
+        }
+        return locationIds;
+    }
+    static async getPermissionAuditLogs(limit = 60) {
+        const rows = await query(`SELECT pal.id, pal.action, pal.module, pal.details, pal.ip, pal.created_at AS createdAt,
+              actor.full_name AS actorName, actor.employee_code AS actorCode,
+              r.name AS roleName, r.slug AS roleSlug,
+              emp.full_name AS employeeName, emp.employee_code AS employeeCode
+       FROM permission_audit_logs pal
+       LEFT JOIN employees actor ON actor.id = pal.actor_id
+       LEFT JOIN roles r ON r.id = pal.role_id
+       LEFT JOIN employees emp ON emp.id = pal.employee_id
+       ORDER BY pal.created_at DESC
+       LIMIT ?`, [limit]);
+        return rows;
     }
 }
 //# sourceMappingURL=EmployeeService.js.map

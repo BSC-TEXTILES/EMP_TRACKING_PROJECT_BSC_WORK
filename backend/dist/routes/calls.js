@@ -7,6 +7,7 @@ import { query, execute, queryOne } from '../db/index.js';
 import { emitToEmployees } from '../realtime/io.js';
 import { toIso } from '../lib/dates.js';
 import { NotificationService } from '../services/NotificationService.js';
+import { EmployeeService } from '../services/EmployeeService.js';
 export const callsRouter = Router();
 callsRouter.use(authenticate);
 export function rtcIceServers() {
@@ -100,16 +101,45 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
         targetEmployeeId: z.number().int().positive(),
         type: z.enum(['audio', 'video']),
     }), req.body);
+    // 1. Authorize caller
+    const canMakeCalls = user.permissions.includes('calls.make') ||
+        user.roleSlug === 'super_admin' ||
+        (user.roleLevel ?? 0) >= 80;
+    if (!canMakeCalls) {
+        throw ApiError.forbidden('You do not have permission to make calls. Contact your administrator.');
+    }
     const target = await queryOne(`SELECT e.id, e.employee_code AS employeeCode, e.full_name AS fullName, e.photo_url AS photoUrl,
-              d.name AS departmentName, dg.title AS designationTitle
+              e.location_id AS locationId, e.role_id AS roleId,
+              d.name AS departmentName, dg.title AS designationTitle,
+              l.name AS locationName, l.code AS locationCode
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN locations l ON l.id = e.location_id
        WHERE e.id = ? AND e.status = 'active'`, [body.targetEmployeeId]);
     if (!target)
         throw ApiError.notFound('Employee not found or inactive');
     if (target.id === user.id)
         throw ApiError.badRequest('Cannot call yourself');
+    // 2. Location-based authorization
+    const callerAllowedLocs = await EmployeeService.getUserAllowedLocations(user);
+    const hasCrossLocationAccess = user.roleSlug === 'super_admin' ||
+        (user.roleLevel ?? 0) >= 80 ||
+        user.permissions.includes('locations.view.all') ||
+        callerAllowedLocs.length === 0 ||
+        (target.locationId && callerAllowedLocs.some((l) => l.id === target.locationId));
+    if (!hasCrossLocationAccess) {
+        throw ApiError.forbidden('You do not have access to call employees outside your assigned branch.');
+    }
+    // 3. Verify recipient is authorized to receive calls
+    if (target.roleId && target.roleId !== 1) {
+        const calleePerms = await query(`SELECT p.code FROM role_permissions rp
+         JOIN permissions p ON p.id = rp.permission_id
+         WHERE rp.role_id = ? AND p.code = 'calls.receive'`, [target.roleId]);
+        if (calleePerms.length === 0) {
+            throw ApiError.forbidden(`${target.fullName} is not authorized to receive calls.`);
+        }
+    }
     const ownActive = await activeCallForEmployee(user.id);
     if (ownActive)
         throw new ApiError(409, 'You are already in a call.', 'already_in_call');
@@ -174,6 +204,12 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
 callsRouter.post('/:callId/accept', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const callId = req.params.callId;
+    const canReceive = user.permissions.includes('calls.receive') ||
+        user.roleSlug === 'super_admin' ||
+        (user.roleLevel ?? 0) >= 80;
+    if (!canReceive) {
+        throw ApiError.forbidden('You do not have permission to accept calls.');
+    }
     const call = await queryOne('SELECT id, caller_id, callee_id, status FROM calls WHERE call_id = ?', [callId]);
     if (!call)
         throw ApiError.notFound('Call not found');
