@@ -212,6 +212,9 @@ export interface NotificationItem {
   body: string | null;
   link: string | null;
   priority: string;
+  senderName?: string | null;
+  locationName?: string | null;
+  locationCode?: string | null;
   createdAt: string | null;
   read: boolean;
 }

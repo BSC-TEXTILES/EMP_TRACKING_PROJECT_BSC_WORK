@@ -200,8 +200,12 @@ export const config = {
         username: process.env.TURN_USERNAME ?? '',
         credential: process.env.TURN_CREDENTIAL ?? '',
     },
-    vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
-    vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
+    get vapidPublicKey() {
+        return process.env.VAPID_PUBLIC_KEY || configStore.vapidKeys().publicKey;
+    },
+    get vapidPrivateKey() {
+        return process.env.VAPID_PRIVATE_KEY || configStore.vapidKeys().privateKey;
+    },
     /**
      * Firebase Cloud Messaging for the Android / iOS app. Server-side only: the
      * service-account key never ships in the app. Either a path to the JSON key

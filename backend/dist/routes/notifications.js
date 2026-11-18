@@ -10,10 +10,14 @@ export const notificationsRouter = Router();
 notificationsRouter.use(authenticate);
 notificationsRouter.get('/', asyncHandler(async (req, res) => {
     const user = currentUser(req);
+    const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+    const location = typeof req.query.location === 'string' ? req.query.location : undefined;
     const items = await NotificationService.list(user.id, {
         limit: req.query.limit ? Number(req.query.limit) : 30,
         unreadOnly: req.query.unread === 'true',
         offset: req.query.offset ? Number(req.query.offset) : 0,
+        category,
+        location,
     });
     res.json({ items, unread: await NotificationService.unreadCount(user.id) });
 }));

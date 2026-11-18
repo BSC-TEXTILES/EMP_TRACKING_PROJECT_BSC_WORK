@@ -6,6 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import { Avatar } from './ui';
 import { Icon } from './icons';
 import { cx } from '../lib/format';
+import { showDesktopNotification } from '../lib/notifications';
 
 export type CallType = 'audio' | 'video';
 
@@ -593,6 +594,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
       updateIncoming({ callId: payload.callId, peer: payload.caller, type: payload.type });
       ringtoneRef.current.start('incoming');
+      void showDesktopNotification(`Incoming ${payload.type === 'video' ? 'Video' : 'Audio'} Call`, {
+        body: `${payload.caller.name} (${payload.caller.designation || 'Colleague'} · ${payload.caller.location || 'BSC Textiles'}) is calling you`,
+        icon: payload.caller.photoUrl || '/icons/icon-192.png',
+        tag: `call_${payload.callId}`,
+        link: `/calls?incoming=${payload.callId}`,
+        urgent: true,
+      });
     };
 
     const onPeerJoined = (payload: { callId: string; employeeId: number }) => {

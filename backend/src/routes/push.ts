@@ -17,8 +17,9 @@ let vapidInitialized = false;
 function initVapid() {
   if (vapidInitialized) return;
   if (config.vapidPublicKey && config.vapidPrivateKey) {
+    const email = config.smtp.from.replace(/.*<([^>]+)>.*/, '$1').trim() || 'admin@bsctextiles.in';
     webpush.setVapidDetails(
-      `mailto:${config.smtp.from}`,
+      `mailto:${email}`,
       config.vapidPublicKey,
       config.vapidPrivateKey
     );

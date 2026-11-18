@@ -11,6 +11,7 @@ import { Icon } from './icons';
 import { BottomNav, type BottomNavItem } from './mobile/BottomNav';
 import { PullToRefresh } from './mobile/NativeShell';
 import { isNative } from '../lib/native';
+import { NotificationPermissionBanner } from './NotificationPermissionBanner';
 import type { NotificationItem } from '../lib/types';
 
 interface NavItem {
@@ -576,9 +577,19 @@ export function AppShell() {
                           >
                             <span className={cx('mt-1 h-1.5 w-1.5 shrink-0 rounded-full', item.read ? 'bg-ink-300' : 'bg-brand-600')} />
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate text-sm font-medium text-ink-800">{item.title}</span>
+                              <span className="flex items-center justify-between gap-1.5">
+                                <span className="truncate text-sm font-medium text-ink-800">{item.title}</span>
+                                {item.locationCode && (
+                                  <span className="shrink-0 rounded px-1.5 py-0.2 text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                    {item.locationCode}
+                                  </span>
+                                )}
+                              </span>
                               {item.body && <span className="block truncate text-xs text-ink-500">{item.body}</span>}
-                              <span className="mt-0.5 block text-[11px] text-ink-400">{relativeTime(item.createdAt)}</span>
+                              <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-400">
+                                {item.senderName && <span>{item.senderName} ·</span>}
+                                <span>{relativeTime(item.createdAt)}</span>
+                              </span>
                             </span>
                           </button>
                         ))
@@ -696,6 +707,8 @@ export function AppShell() {
             </div>
           </div>
         </header>
+
+        <NotificationPermissionBanner />
 
         <main className={cx('mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 sm:px-6 sm:py-6', isNative && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
           {isNative ? (

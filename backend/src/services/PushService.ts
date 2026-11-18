@@ -1,6 +1,8 @@
 import { execute, query } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { fcmConfigured, sendFcm, type FcmMessage } from '../lib/fcm.js';
+import { config } from '../config.js';
+import webpush from 'web-push';
 import type { AuthUser } from './AuthService.js';
 
 /**
@@ -153,10 +155,13 @@ export class PushService {
   }
 
   /**
-   * Pushes one notification to the recipients' phones. Never throws: the
+   * Pushes one notification to the recipients' phones and desktop browsers. Never throws: the
    * notification is already stored and visible in the app, push is best effort.
    */
   static async deliver(employeeIds: number[], payload: PushPayload): Promise<{ sent: number; failed: number; removed: number }> {
+    // Deliver to web push subscribers (Windows desktop / browsers) in parallel
+    void PushService.deliverWebPush(employeeIds, payload);
+
     const stats = { sent: 0, failed: 0, removed: 0 };
     try {
       if (!fcmConfigured() || employeeIds.length === 0) return stats;
@@ -231,6 +236,101 @@ export class PushService {
       }
     } catch (error) {
       console.error('[push] delivery error', (error as Error).message);
+    }
+    return stats;
+  }
+
+  /**
+   * Pushes notification via Web Push (VAPID) to desktop browsers and web users.
+   */
+  static async deliverWebPush(employeeIds: number[], payload: PushPayload): Promise<{ sent: number; failed: number; removed: number }> {
+    const stats = { sent: 0, failed: 0, removed: 0 };
+    try {
+      if (!config.vapidPublicKey || !config.vapidPrivateKey || employeeIds.length === 0) return stats;
+      const category = categoryOf(payload.type);
+
+      let recipients = employeeIds;
+      if (category !== 'security') {
+        const muted = await query<{ employee_id: number }>(
+          'SELECT employee_id FROM notification_preferences WHERE category = ? AND push_enabled = 0 AND employee_id IN (?)',
+          [category, recipients],
+        );
+        const mutedIds = new Set(muted.map((m) => Number(m.employee_id)));
+        recipients = recipients.filter((id) => !mutedIds.has(id));
+      }
+      if (recipients.length === 0) return stats;
+
+      const subscriptions = await query<{
+        id: number;
+        employee_id: number;
+        endpoint: string;
+        p256dh: string;
+        auth: string;
+      }>(
+        `SELECT s.id, s.employee_id, s.endpoint, s.p256dh, s.auth
+         FROM push_subscriptions s
+         JOIN employees e ON e.id = s.employee_id AND e.status = 'active'
+         WHERE s.employee_id IN (?)`,
+        [recipients],
+      );
+      if (subscriptions.length === 0) return stats;
+
+      try {
+        webpush.setVapidDetails(
+          `mailto:${config.smtp.from.replace(/.*<([^>]+)>.*/, '$1') || 'admin@bsctextiles.in'}`,
+          config.vapidPublicKey,
+          config.vapidPrivateKey,
+        );
+      } catch {
+        /* vapid already set or valid */
+      }
+
+      const urgent = payload.priority === 'high' || payload.priority === 'critical' || payload.type.endsWith('_call') || payload.type.startsWith('call');
+      const bodyJson = JSON.stringify({
+        title: payload.title,
+        body: payload.body ?? '',
+        icon: '/icons/icon-192.png',
+        badge: '/icons/badge-72.png',
+        tag: `notif_${payload.notificationId}`,
+        data: {
+          notificationId: payload.notificationId,
+          type: payload.type,
+          link: safeDeepLink(payload.link),
+          category,
+        },
+        requireInteraction: urgent,
+        vibrate: urgent ? [300, 150, 300, 150, 300] : [200, 100, 200],
+        actions: [
+          { action: 'open', title: 'Open' },
+          { action: 'dismiss', title: 'Dismiss' },
+        ],
+      });
+
+      await inBatches(subscriptions, CONCURRENCY, async (sub) => {
+        try {
+          await webpush.sendNotification(
+            {
+              endpoint: sub.endpoint,
+              keys: { p256dh: sub.p256dh, auth: sub.auth },
+            },
+            bodyJson,
+            { TTL: 86400, urgency: urgent ? 'high' : 'normal' }
+          );
+          stats.sent += 1;
+        } catch (error: any) {
+          if (error.statusCode === 410 || error.statusCode === 404) {
+            stats.removed += 1;
+            await execute('DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
+          } else {
+            stats.failed += 1;
+          }
+        }
+      });
+      if (stats.sent > 0) {
+        console.log(`[push:web] notification ${payload.notificationId}: ${stats.sent} web push sent`);
+      }
+    } catch (error) {
+      console.error('[push:web] delivery error', (error as Error).message);
     }
     return stats;
   }

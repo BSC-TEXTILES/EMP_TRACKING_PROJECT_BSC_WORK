@@ -406,4 +406,78 @@ adminRouter.put('/office-times', requireAny('settings.manage', 'org.manage', 'lo
     });
     res.json({ ok: true, message: 'Office times and shift schedules saved successfully.' });
 }));
+/**
+ * Live Login and Branch Tracking Audit
+ * Returns real-time login/logout history, assigned location, online state and device info.
+ */
+adminRouter.get('/login-audit', requireAny('settings.manage', 'audit.view', 'admin.dashboard', 'employees.view.team', 'employees.view.all'), asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const location = typeof req.query.location === 'string' ? req.query.location.trim() : '';
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const isGlobal = (user.roleLevel ?? 0) >= 70 || user.roleSlug === 'super_admin';
+    const allowedLocIds = user.allowedLocations?.map((l) => l.id) ?? (user.locationId ? [user.locationId] : []);
+    const conditions = [];
+    const params = [];
+    if (!isGlobal && allowedLocIds.length > 0) {
+        conditions.push(`e.location_id IN (${allowedLocIds.map(() => '?').join(',')})`);
+        params.push(...allowedLocIds);
+    }
+    if (location) {
+        conditions.push(`(l.code = ? OR l.name LIKE ? OR a.location_name LIKE ?)`);
+        params.push(location, `%${location}%`, `%${location}%`);
+    }
+    if (search) {
+        conditions.push(`(a.full_name LIKE ? OR a.employee_code LIKE ? OR a.ip LIKE ? OR a.browser LIKE ?)`);
+        params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const countRow = await queryOne(`SELECT COUNT(*) AS total
+       FROM employee_login_audit a
+       JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       ${where}`, params);
+    const rows = await query(`SELECT a.id, a.session_id, a.employee_id, a.employee_code, a.full_name,
+              COALESCE(l.name, a.location_name, 'Head Office') AS location_name,
+              l.code AS location_code,
+              d.name AS department_name,
+              dg.title AS designation_title,
+              a.login_at, a.logout_at, a.last_heartbeat_at, a.duration_minutes,
+              a.ip, a.user_agent, a.browser, a.os,
+              a.login_status, a.logout_reason, a.termination_status
+       FROM employee_login_audit a
+       JOIN employees e ON e.id = a.employee_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       ${where}
+       ORDER BY a.login_at DESC
+       LIMIT ${limit} OFFSET ${offset}`, params);
+    res.json({
+        records: rows.map((r) => ({
+            id: Number(r.id),
+            sessionId: r.session_id ? Number(r.session_id) : null,
+            employeeId: Number(r.employee_id),
+            employeeCode: r.employee_code,
+            fullName: r.full_name,
+            locationName: r.location_name,
+            locationCode: r.location_code || 'HUB',
+            department: r.department_name,
+            designation: r.designation_title,
+            loginAt: toIso(r.login_at),
+            logoutAt: r.logout_at ? toIso(r.logout_at) : null,
+            lastHeartbeatAt: toIso(r.last_heartbeat_at),
+            durationMinutes: Number(r.duration_minutes || 0),
+            ip: r.ip,
+            browser: r.browser,
+            os: r.os,
+            status: r.login_status,
+            logoutReason: r.logout_reason,
+            terminationStatus: r.termination_status,
+            isLive: !r.logout_at && r.termination_status === 'active',
+        })),
+        total: Number(countRow?.total ?? 0),
+    });
+}));
 //# sourceMappingURL=admin.js.map

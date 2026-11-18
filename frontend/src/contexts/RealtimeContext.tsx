@@ -4,6 +4,7 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { ensureFreshAccess } from '../lib/api';
 import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
+import { showDesktopNotification } from '../lib/notifications';
 
 type Handler = (payload: unknown) => void;
 type ConnectionStatus = 'connecting' | 'online' | 'offline';
@@ -157,8 +158,15 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         return prev.filter((id) => id !== payload.employeeId);
       });
     });
-    socket.on('notification:new', (payload: { title?: string; body?: string | null }) => {
-      if (payload?.title) toastRef.current.toast(payload.title, 'info');
+    socket.on('notification:new', (payload: { title?: string; body?: string | null; link?: string | null; priority?: string }) => {
+      if (payload?.title) {
+        toastRef.current.toast(payload.title, 'info');
+        void showDesktopNotification(payload.title, {
+          body: payload.body,
+          link: payload.link,
+          urgent: payload.priority === 'high' || payload.priority === 'critical',
+        });
+      }
       window.dispatchEvent(new CustomEvent('notifications:changed'));
     });
 

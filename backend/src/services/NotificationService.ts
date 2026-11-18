@@ -116,9 +116,46 @@ export class NotificationService {
     return Number(row?.total ?? 0);
   }
 
-  static async list(employeeId: number, options: { limit?: number; unreadOnly?: boolean; offset?: number } = {}) {
-    const limit = Math.min(100, options.limit ?? 30);
-    const offset = options.offset ?? 0;
+  static async list(
+    employeeId: number,
+    options: { limit?: number; unreadOnly?: boolean; offset?: number; category?: string; location?: string } = {},
+  ) {
+    const limit = Math.min(100, Math.max(1, options.limit ?? 30));
+    const offset = Math.max(0, options.offset ?? 0);
+
+    const conditions: string[] = ['nr.employee_id = ?'];
+    const params: unknown[] = [employeeId];
+
+    if (options.unreadOnly) {
+      conditions.push('nr.read_at IS NULL');
+    }
+
+    if (options.category && options.category !== 'all') {
+      const cat = options.category.toLowerCase();
+      if (cat === 'tasks') {
+        conditions.push("(n.notif_type LIKE 'task%' OR n.notif_type LIKE 'project%' OR n.notif_type LIKE 'collection%')");
+      } else if (cat === 'reports') {
+        conditions.push("(n.notif_type LIKE 'daily_report%' OR n.notif_type LIKE 'kpi%' OR n.notif_type LIKE 'activity%')");
+      } else if (cat === 'attendance' || cat === 'leave') {
+        conditions.push("(n.notif_type LIKE 'attendance%' OR n.notif_type LIKE 'leave%')");
+      } else if (cat === 'calls' || cat === 'meetings') {
+        conditions.push("(n.notif_type LIKE '%call%' OR n.notif_type LIKE 'meeting%')");
+      } else if (cat === 'chat') {
+        conditions.push("n.notif_type LIKE 'chat%'");
+      } else if (cat === 'tickets') {
+        conditions.push("n.notif_type LIKE 'ticket%'");
+      } else if (cat === 'announcements') {
+        conditions.push("(n.notif_type = 'announcement' OR n.notif_type = 'system')");
+      }
+    }
+
+    if (options.location && options.location !== 'all') {
+      conditions.push('(l.code = ? OR l.name LIKE ?)');
+      params.push(options.location, `%${options.location}%`);
+    }
+
+    const where = conditions.join(' AND ');
+
     const rows = await query<{
       id: number;
       notif_type: string;
@@ -128,14 +165,20 @@ export class NotificationService {
       priority: string;
       created_at: string;
       read_at: string | null;
+      sender_name: string | null;
+      location_name: string | null;
+      location_code: string | null;
     }>(
-      `SELECT n.id, n.notif_type, n.title, n.body, n.link, n.priority, n.created_at, nr.read_at
+      `SELECT n.id, n.notif_type, n.title, n.body, n.link, n.priority, n.created_at, nr.read_at,
+              act.full_name AS sender_name, l.name AS location_name, l.code AS location_code
        FROM notification_recipients nr
        JOIN notifications n ON n.id = nr.notification_id
-       WHERE nr.employee_id = ? ${options.unreadOnly ? 'AND nr.read_at IS NULL' : ''}
+       LEFT JOIN employees act ON act.id = n.actor_id
+       LEFT JOIN locations l ON l.id = act.location_id
+       WHERE ${where}
        ORDER BY n.created_at DESC
        LIMIT ${limit} OFFSET ${offset}`,
-      [employeeId],
+      params,
     );
     return rows.map((r) => ({
       id: Number(r.id),
@@ -144,6 +187,9 @@ export class NotificationService {
       body: r.body,
       link: r.link,
       priority: r.priority,
+      senderName: r.sender_name ?? 'System',
+      locationName: r.location_name ?? null,
+      locationCode: r.location_code ?? null,
       createdAt: toIso(r.created_at),
       read: Boolean(r.read_at),
     }));

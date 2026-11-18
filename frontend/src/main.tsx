@@ -9,6 +9,7 @@ import { RealtimeProvider } from './contexts/RealtimeContext';
 import { NativeShell } from './components/mobile/NativeShell';
 import { initNativeSession, isNative } from './lib/native';
 import { initTheme } from './lib/theme';
+import { registerWebPushSubscription } from './lib/notifications';
 // Captures the browser's one-time install event before any screen renders.
 import './lib/installPrompt';
 
@@ -21,6 +22,9 @@ if (!isNative && 'serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
       .then((registration) => {
         console.log('[SW] Service Worker registered:', registration.scope);
+        if ('Notification' in window && Notification.permission === 'granted') {
+          void registerWebPushSubscription();
+        }
         
         // Check for updates
         registration.addEventListener('updatefound', () => {

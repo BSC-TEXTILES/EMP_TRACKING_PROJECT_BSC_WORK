@@ -19,6 +19,10 @@ interface CallParticipant {
   photoUrl: string | null;
   departmentName: string | null;
   designationTitle: string | null;
+  locationId?: number | null;
+  locationName?: string | null;
+  locationCode?: string | null;
+  managerName?: string | null;
 }
 
 interface IceServerConfig {
@@ -89,15 +93,36 @@ callsRouter.get(
   '/contacts',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
+    const isGlobal = (user.roleLevel ?? 0) >= 70 || user.roleSlug === 'super_admin';
+    const allowedLocIds = user.allowedLocations?.map((l) => l.id) ?? (user.locationId ? [user.locationId] : []);
+
+    let whereClause = "e.status = 'active' AND e.id != ?";
+    const params: unknown[] = [user.id];
+
+    if (!isGlobal && allowedLocIds.length > 0) {
+      // Allow contacts in the same location, or HQ, or their direct manager/reportees
+      whereClause += ` AND (
+        e.location_id IN (${allowedLocIds.map(() => '?').join(',')})
+        OR l.code IN ('HQ', 'HUB')
+        OR e.id = ?
+        OR e.manager_id = ?
+      )`;
+      params.push(...allowedLocIds, user.managerId ?? 0, user.id);
+    }
+
     const rows = await query<CallParticipant>(`
       SELECT e.id, e.employee_code AS employeeCode, e.full_name AS fullName, e.photo_url AS photoUrl,
-             d.name AS departmentName, dg.title AS designationTitle
+             d.name AS departmentName, dg.title AS designationTitle,
+             e.location_id AS locationId, l.name AS locationName, l.code AS locationCode,
+             mgr.full_name AS managerName
       FROM employees e
       LEFT JOIN departments d ON d.id = e.department_id
       LEFT JOIN designations dg ON dg.id = e.designation_id
-      WHERE e.status = 'active' AND e.id != ?
+      LEFT JOIN locations l ON l.id = e.location_id
+      LEFT JOIN employees mgr ON mgr.id = e.manager_id
+      WHERE ${whereClause}
       ORDER BY e.full_name
-    `, [user.id]);
+    `, params);
     res.json({ contacts: rows });
   })
 );

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useRealtime, useSocketEvent } from '../contexts/RealtimeContext';
@@ -36,6 +37,10 @@ interface Contact {
   photoUrl: string | null;
   departmentName: string | null;
   designationTitle: string | null;
+  locationId?: number | null;
+  locationName?: string | null;
+  locationCode?: string | null;
+  managerName?: string | null;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -88,6 +93,7 @@ export default function CallsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactSearch, setContactSearch] = useState('');
+  const [branchFilter, setBranchFilter] = useState('all');
   const [pickerOpen, setPickerOpen] = useState(false);
   const [startingId, setStartingId] = useState<number | null>(null);
 
@@ -137,14 +143,18 @@ export default function CallsPage() {
   );
 
   const searchedContacts = useMemo(() => {
+    let result = contacts;
+    if (branchFilter !== 'all') {
+      result = result.filter((c) => (c.locationCode || 'HUB').toUpperCase() === branchFilter.toUpperCase());
+    }
     const query = contactSearch.trim().toLowerCase();
-    if (!query) return contacts;
-    return contacts.filter((contact) =>
-      [contact.fullName, contact.employeeCode, contact.departmentName, contact.designationTitle]
+    if (!query) return result;
+    return result.filter((contact) =>
+      [contact.fullName, contact.employeeCode, contact.departmentName, contact.designationTitle, contact.locationName, contact.managerName]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query)),
     );
-  }, [contactSearch, contacts]);
+  }, [branchFilter, contactSearch, contacts]);
 
   const startCall = useCallback(
     async (employeeId: number, type: 'audio' | 'video', peer?: CallPeer) => {
@@ -290,35 +300,69 @@ export default function CallsPage() {
 
         <Card>
           <div className="border-b border-ink-100 px-4 py-3">
-            <h3 className="font-semibold text-ink-900">Quick dial</h3>
-            <p className="mt-0.5 text-xs text-ink-500">Active colleagues you can call</p>
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="font-semibold text-ink-900">Quick dial & Directory</h3>
+                <p className="mt-0.5 text-xs text-ink-500">Live colleagues across store branches</p>
+              </div>
+              <select
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+                className="input py-1 px-2 text-xs w-auto font-medium"
+              >
+                <option value="all">All Branches</option>
+                <option value="BEL">BEL – Belagavi</option>
+                <option value="DAV">DAV – Davanagere</option>
+                <option value="SHI">SHI – Shivamogga</option>
+                <option value="HUB">HUB/HQ – Head Office</option>
+              </select>
+            </div>
           </div>
-          <div className="p-4">
-            {contacts.length === 0 ? (
-              <EmptyState compact title="No contacts" description="Active colleagues will appear here." />
+          <div className="p-3">
+            {searchedContacts.length === 0 ? (
+              <EmptyState compact title="No contacts found" description="No active colleagues in this branch filter." />
             ) : (
-              <div className="max-h-[520px] space-y-1 overflow-y-auto">
-                {contacts.slice(0, 30).map((contact) => (
+              <div className="max-h-[520px] space-y-1.5 overflow-y-auto">
+                {searchedContacts.slice(0, 40).map((contact) => (
                   <div
                     key={contact.id}
-                    className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 transition-colors hover:bg-ink-50"
+                    className="flex items-center justify-between gap-2 rounded-lg p-2 transition-colors hover:bg-ink-50 border border-transparent hover:border-ink-200"
                   >
-                    <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-2.5">
                       <Avatar
                         name={contact.fullName}
                         src={contact.photoUrl}
-                        size={38}
+                        size={36}
                         online={onlineIds.includes(contact.id)}
                       />
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-ink-900">{contact.fullName}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="truncate text-sm font-semibold text-ink-900">{contact.fullName}</p>
+                          {contact.locationCode && (
+                            <span className="shrink-0 rounded px-1.5 py-0.2 text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                              {contact.locationCode}
+                            </span>
+                          )}
+                        </div>
                         <p className="truncate text-xs text-ink-500">
                           {contact.employeeCode}
                           {contact.designationTitle ? ` · ${contact.designationTitle}` : ''}
                         </p>
+                        {contact.managerName && (
+                          <p className="truncate text-[10px] text-ink-400">
+                            Reports to: {contact.managerName}
+                          </p>
+                        )}
                       </div>
                     </div>
-                    <div className="flex shrink-0 gap-1">
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Link
+                        to={`/chat?dm=${contact.id}`}
+                        className="btn-secondary btn-sm h-8 w-8 p-0 inline-flex items-center justify-center text-ink-600 hover:text-brand-600"
+                        title={`Send message to ${contact.fullName}`}
+                      >
+                        <Icon name="chat" size={13} />
+                      </Link>
                       <button
                         type="button"
                         className="btn-secondary btn-sm h-8 w-8 p-0"
@@ -333,9 +377,10 @@ export default function CallsPage() {
                           })
                         }
                         disabled={startingId === contact.id}
+                        title={`Audio call ${contact.fullName}`}
                         aria-label={`Audio call ${contact.fullName}`}
                       >
-                        <Icon name="phone" size={14} />
+                        <Icon name="phone" size={13} />
                       </button>
                       <button
                         type="button"
@@ -351,9 +396,10 @@ export default function CallsPage() {
                           })
                         }
                         disabled={startingId === contact.id}
+                        title={`Video call ${contact.fullName}`}
                         aria-label={`Video call ${contact.fullName}`}
                       >
-                        <Icon name="video" size={14} />
+                        <Icon name="video" size={13} />
                       </button>
                     </div>
                   </div>
@@ -404,7 +450,14 @@ export default function CallsPage() {
                       online={onlineIds.includes(contact.id)}
                     />
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-ink-900">{contact.fullName}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="truncate text-sm font-semibold text-ink-900">{contact.fullName}</p>
+                        {contact.locationCode && (
+                          <span className="shrink-0 rounded px-1.5 py-0.2 text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                            {contact.locationCode}
+                          </span>
+                        )}
+                      </div>
                       <p className="truncate text-xs text-ink-500">
                         {[contact.employeeCode, contact.designationTitle, contact.departmentName]
                           .filter(Boolean)

@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import webpush from 'web-push';
 
 export interface WebsiteSettings {
   setupComplete?: boolean;
@@ -76,6 +77,25 @@ export class ConfigStore {
     return fs.readFileSync(file, 'utf8').trim();
   }
   removeSetupCode() { fs.rmSync(path.join(this.directory, 'setup-code'), { force: true }); }
+  vapidKeys(): { publicKey: string; privateKey: string } {
+    this.ensureDirectory();
+    const file = path.join(this.directory, 'vapid.json');
+    if (fs.existsSync(file)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (parsed?.publicKey && parsed?.privateKey) return parsed;
+      } catch {
+        /* re-generate */
+      }
+    }
+    const keys = webpush.generateVAPIDKeys();
+    try {
+      fs.writeFileSync(file, JSON.stringify(keys, null, 2), { mode: 0o600 });
+    } catch (err) {
+      console.warn('[configStore] Failed to write vapid.json', err);
+    }
+    return keys;
+  }
 }
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
