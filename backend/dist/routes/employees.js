@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
+import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { EmployeeService } from '../services/EmployeeService.js';
 import { recordAudit } from '../lib/audit.js';
@@ -199,7 +199,7 @@ employeesRouter.patch('/designations/:id', requireAny('org.manage'), asyncHandle
 employeesRouter.get('/designations/:id/history', requireAny('org.manage'), asyncHandler(async (req, res) => {
     res.json({ history: await EmployeeService.designationHistory(intParam(req.params.id)) });
 }));
-employeesRouter.patch('/locations/:id', requireAny('org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.patch('/locations/:id', requireAny('locations.manage'), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({
         name: z.string().trim().min(2).max(120).optional(),
         code: z.string().trim().min(2).max(12).optional(),
@@ -222,7 +222,14 @@ employeesRouter.put('/:id/locations', requireAny('org.manage', 'employees.manage
     const body = parseBody(z.object({ locationIds: z.array(z.number().int().positive()).max(50) }), req.body);
     res.json({ locationIds: await EmployeeService.setEmployeeLocations(currentUser(req), intParam(req.params.id), body.locationIds) });
 }));
-employeesRouter.post('/locations', requireAny('org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.delete('/locations/:id', requireAny('locations.manage'), asyncHandler(async (req, res) => {
+    const raw = req.query.moveTo ?? req.body?.moveToLocationId;
+    const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
+    if (moveTo !== undefined && (!Number.isInteger(moveTo) || moveTo <= 0))
+        throw ApiError.badRequest('Invalid target location.');
+    res.json(await EmployeeService.deleteLocation(currentUser(req), intParam(req.params.id), moveTo, clientIp(req)));
+}));
+employeesRouter.post('/locations', requireAny('locations.manage'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const body = parseBody(z.object({
         name: z.string().trim().min(2).max(120),

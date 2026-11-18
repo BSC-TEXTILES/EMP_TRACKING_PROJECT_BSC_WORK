@@ -23,7 +23,7 @@ export default function OrganizationSettings() {
   if (!has('org.manage')) return <p>You do not have permission to manage organization data.</p>;
   return <div className="space-y-5"><PageHeader title="Organization data" description="Enter your actual departments, designations, locations and leave policies. Employee forms use these saved records." />
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}{message && <p role="status" className="text-sm text-emerald-700">{message}</p>}
-    <div className="flex flex-wrap gap-2">{(['departments', 'designations', 'locations', 'leave-types'] as Kind[]).map(value => <button type="button" key={value} className={kind === value ? 'btn-primary' : 'btn-secondary'} onClick={() => { setKind(value); setError(''); setMessage(''); }}>{value.replace('-', ' ')}</button>)}</div>
+    <div className="flex flex-wrap gap-2">{(['departments', 'designations', 'locations', 'leave-types'] as Kind[]).filter(value => value !== 'locations' || has('locations.manage')).map(value => <button type="button" key={value} className={kind === value ? 'btn-primary' : 'btn-secondary'} onClick={() => { setKind(value); setError(''); setMessage(''); }}>{value.replace('-', ' ')}</button>)}</div>
     <Card className="card-pad"><form key={kind} className="space-y-4" onSubmit={async event => {
       event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); const text = (key: string) => String(data.get(key) || ''); setBusy(true); setError(''); setMessage('');
       try {

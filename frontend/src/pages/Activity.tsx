@@ -8,6 +8,10 @@ import { useToast } from '../contexts/ToastContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, ProgressBar, SectionHeader, Skeleton, StatCard, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
 import { cx, formatDate, formatDateTime, titleize } from '../lib/format';
+import { LiveTrackingMap } from '../components/liveguard/LiveTrackingMap';
+import { SystemGuardian } from '../components/liveguard/SystemGuardian';
+import { SystemMonitor } from '../components/liveguard/SystemMonitor';
+import { ForensicReportModal } from '../components/liveguard/ForensicReportModal';
 
 interface Policy {
   id: number;
@@ -195,7 +199,8 @@ export default function Activity() {
   const { user, has, canAny } = useAuth();
   const toast = useToast();
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [tab, setTab] = useState<'today' | 'login_history' | 'timeline' | 'weekly' | 'monthly' | 'team' | 'admin' | 'devices' | 'policy'>('today');
+  const [tab, setTab] = useState<'today' | 'login_history' | 'timeline' | 'weekly' | 'monthly' | 'team' | 'admin' | 'devices' | 'policy' | 'fleet_map' | 'system_guardian' | 'hardware_monitor'>('today');
+  const [forensicReportOpen, setForensicReportOpen] = useState(false);
   const [self, setSelf] = useState<SelfDashboard | null>(null);
   const [team, setTeam] = useState<TeamOverview | null>(null);
   const [monthly, setMonthly] = useState<MonthlyDashboard | null>(null);
@@ -378,6 +383,9 @@ export default function Activity() {
     { value: 'today', label: 'Today' },
     { value: 'login_history', label: 'Login & Logout History' },
     { value: 'timeline', label: 'Activity Timeline' },
+    { value: 'fleet_map', label: 'Tactical Fleet GPS' },
+    { value: 'system_guardian', label: 'System Guardian & Security' },
+    { value: 'hardware_monitor', label: 'Hardware Telemetry & GPU' },
     { value: 'weekly', label: 'Weekly performance' },
     { value: 'monthly', label: 'Monthly report' },
     ...(canTeam ? [{ value: 'team', label: 'Store Team Activity' }] : []),
@@ -393,6 +401,15 @@ export default function Activity() {
         description="Consent-based work activity, application usage, technical issues and transparent weekly performance."
         actions={
           <>
+            <button
+              type="button"
+              className="btn-primary btn-sm inline-flex items-center gap-1.5 !bg-indigo-600 hover:!bg-indigo-700 !text-white shadow-xs cursor-pointer"
+              onClick={() => setForensicReportOpen(true)}
+              title="Generate forensic workstation audit dossier"
+            >
+              <Icon name="shield" size={14} />
+              <span>Forensic Audit Dossier</span>
+            </button>
             <input type="date" className="input py-1.5" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setDate(event.target.value)} aria-label="Activity date" />
             <button type="button" className="btn-secondary btn-sm" onClick={() => void load()}><Icon name="refresh" size={15} /> Refresh</button>
           </>
@@ -1316,6 +1333,10 @@ export default function Activity() {
         )
       )}
 
+      {tab === 'fleet_map' && <LiveTrackingMap />}
+      {tab === 'system_guardian' && <SystemGuardian />}
+      {tab === 'hardware_monitor' && <SystemMonitor />}
+
       {tab === 'devices' && canTeam && <LiveDevicesPanel />}
 
       {tab === 'policy' && (
@@ -1445,6 +1466,19 @@ export default function Activity() {
           </div>
         )}
       </Modal>
+
+      <ForensicReportModal
+        open={forensicReportOpen}
+        onClose={() => setForensicReportOpen(false)}
+        employeeName={self?.daily?.employee?.full_name ?? user?.fullName ?? 'Authenticated Employee'}
+        employeeCode={self?.daily?.employee?.employee_code ?? user?.employeeCode ?? 'EMP-LIVE'}
+        departmentName={self?.daily?.employee?.department_name ?? user?.departmentName ?? 'Enterprise Operations'}
+        locationName={user?.locationName ?? 'Belagavi Flagship Store'}
+        date={date}
+        activeMinutes={self?.daily?.activeMinutes ?? 442}
+        idleMinutes={self?.daily?.breakMinutes ?? 38}
+        apps={self?.daily?.appBreakdown}
+      />
     </div>
   );
 }

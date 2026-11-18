@@ -940,7 +940,7 @@ export class EmployeeService {
       query<{ id: number; name: string; code: string; city: string | null; state: string | null; address: string | null; timezone: string; latitude: number | null; longitude: number | null; geofence_radius_m: number | null; is_active: number; employee_count: number }>(
         `SELECT l.id, l.name, l.code, l.city, l.state, l.address, l.timezone, l.latitude, l.longitude, l.geofence_radius_m, l.is_active,
                 (SELECT COUNT(*) FROM employees e WHERE e.location_id = l.id AND e.status = 'active') AS employee_count
-         FROM locations l ORDER BY l.is_active DESC, l.name`,
+         FROM locations l WHERE l.is_active = 1 ORDER BY l.name`,
       ),
       query<{ id: number; name: string; slug: string; category: string; level: number; employee_count: number }>(
         `SELECT r.id, r.name, r.slug, r.category, r.level,
@@ -1177,11 +1177,23 @@ export class EmployeeService {
     actor: AuthUser,
     input: { name: string; code: string; city?: string; state?: string; address?: string; timezone?: string; latitude?: number; longitude?: number; geofenceRadiusM?: number },
   ) {
-    if (!actor.permissions.includes('org.manage')) throw ApiError.forbidden('You cannot manage the organisation structure.');
+    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can add locations.');
     const code = input.code.trim().toUpperCase();
     if (!/^[A-Z0-9]{2,12}$/.test(code)) throw ApiError.badRequest('Location codes use 2–12 letters or digits, e.g. BEL.');
-    if (await queryOne('SELECT id FROM locations WHERE code = ?', [code])) throw ApiError.conflict('That location code is already used.');
-    if (await queryOne('SELECT id FROM locations WHERE name = ?', [input.name.trim()])) throw ApiError.conflict('A location with that name already exists.');
+    if (await queryOne('SELECT id FROM locations WHERE code = ? AND is_active = 1', [code])) throw ApiError.conflict('That location code is already used.');
+    if (await queryOne('SELECT id FROM locations WHERE name = ? AND is_active = 1', [input.name.trim()])) throw ApiError.conflict('A location with that name already exists.');
+    // A previously deleted (archived) location with the same code is brought back instead of duplicated.
+    const archived = await queryOne<{ id: number }>('SELECT id FROM locations WHERE code = ? AND is_active = 0', [code]);
+    if (archived) {
+      await execute(
+        `UPDATE locations SET name = ?, city = ?, state = ?, address = ?, timezone = ?, latitude = ?, longitude = ?, geofence_radius_m = ?, is_active = 1, updated_by = ? WHERE id = ?`,
+        [input.name.trim(), input.city?.trim() || null, input.state?.trim() || null, input.address?.trim() || null, input.timezone ?? 'Asia/Kolkata',
+          input.latitude ?? null, input.longitude ?? null, input.geofenceRadiusM ?? null, actor.id, archived.id],
+      );
+      await recordAudit({ actorId: actor.id, action: 'location.restored', entityType: 'location', entityId: archived.id, after: { ...input, code } });
+      return Number(archived.id);
+    }
+    if (await queryOne('SELECT id FROM locations WHERE name = ?', [input.name.trim()])) throw ApiError.conflict('An archived location already uses that name; choose another name.');
     if ((input.latitude === undefined) !== (input.longitude === undefined)) throw ApiError.badRequest('Provide both latitude and longitude, or neither.');
     const result = await execute(
       `INSERT INTO locations (name, code, city, state, address, timezone, latitude, longitude, geofence_radius_m, created_by, updated_by)
@@ -1198,7 +1210,7 @@ export class EmployeeService {
     id: number,
     input: { name?: string; code?: string; city?: string | null; state?: string | null; address?: string | null; timezone?: string; latitude?: number | null; longitude?: number | null; geofenceRadiusM?: number | null; isActive?: boolean },
   ) {
-    if (!actor.permissions.includes('org.manage')) throw ApiError.forbidden('You cannot manage the organisation structure.');
+    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can change locations.');
     const current = await queryOne<Record<string, unknown>>('SELECT * FROM locations WHERE id = ?', [id]);
     if (!current) throw ApiError.notFound('Location not found');
     const code = input.code === undefined ? String(current.code) : input.code.trim().toUpperCase();
@@ -1226,6 +1238,57 @@ export class EmployeeService {
       before: { name: current.name, code: current.code, isActive: Boolean(current.is_active) },
       after: { ...input, name, code },
     });
+  }
+
+  /**
+   * Deletes a location. Its employees must be moved first (moveToLocationId). The row is removed
+   * when nothing else refers to it; otherwise (e.g. historical leave requests) it is archived:
+   * hidden everywhere, its code freed, and its history kept.
+   */
+  static async deleteLocation(actor: AuthUser, id: number, moveToLocationId?: number, ip?: string) {
+    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can delete locations.');
+    const location = await queryOne<{ id: number; code: string; name: string; is_active: number }>('SELECT id, code, name, is_active FROM locations WHERE id = ?', [id]);
+    if (!location || !Number(location.is_active)) throw ApiError.notFound('Location not found');
+    const remaining = await queryOne<{ total: number }>('SELECT COUNT(*) AS total FROM locations WHERE is_active = 1 AND id <> ?', [id]);
+    if (Number(remaining?.total ?? 0) === 0) throw ApiError.conflict('The last location cannot be deleted.');
+    const staff = await query<{ id: number }>("SELECT id FROM employees WHERE location_id = ? AND status NOT IN ('deleted','rejected')", [id]);
+    let target: { id: number; code: string } | null = null;
+    if (staff.length) {
+      if (!moveToLocationId) {
+        throw ApiError.conflict(`${staff.length} employee(s) are assigned to ${location.code}. Choose the location they should move to.`);
+      }
+      if (moveToLocationId === id) throw ApiError.badRequest('Choose a different location to move the employees to.');
+      target = await queryOne<{ id: number; code: string }>('SELECT id, code FROM locations WHERE id = ? AND is_active = 1', [moveToLocationId]);
+      if (!target) throw ApiError.badRequest('The location to move employees to does not exist.');
+    }
+    const outcome = await transaction(async (conn) => {
+      if (target && staff.length) {
+        const ids = staff.map((s) => Number(s.id));
+        await conn.query(`UPDATE employees SET location_id = ?, group_id = NULL WHERE id IN (${ids.map(() => '?').join(',')})`, [target.id, ...ids]);
+      }
+      await conn.query('UPDATE workforce_groups SET is_active = 0 WHERE location_id = ?', [id]).catch(() => undefined);
+      await conn.query('DELETE FROM employee_locations WHERE location_id = ?', [id]);
+      await conn.query('DELETE FROM location_hr_assignments WHERE location_id = ?', [id]).catch(() => undefined);
+      try {
+        await conn.query('SAVEPOINT before_location_delete');
+        await conn.query('DELETE FROM locations WHERE id = ?', [id]);
+        return 'removed' as const;
+      } catch (error) {
+        if ((error as { code?: string }).code !== 'ER_ROW_IS_REFERENCED_2' && (error as { code?: string }).code !== 'ER_ROW_IS_REFERENCED') throw error;
+        await conn.query('ROLLBACK TO SAVEPOINT before_location_delete');
+        await conn.query('UPDATE locations SET is_active = 0, code = ?, name = ?, updated_by = ? WHERE id = ?', [
+          `${location.code}~${id}`.slice(0, 24), `${location.name} (deleted)`.slice(0, 120), actor.id, id,
+        ]);
+        return 'archived' as const;
+      }
+    });
+    await recordAudit({
+      actorId: actor.id, action: 'location.deleted', entityType: 'location', entityId: id, ip,
+      before: { code: location.code, name: location.name, employees: staff.length },
+      after: { outcome, movedTo: target?.code ?? null, movedEmployeeIds: staff.map((s) => Number(s.id)) },
+    });
+    await HierarchyService.ensureStructure(actor.id).catch((error) => console.warn('[hierarchy] ensure failed', error));
+    return { outcome, moved: staff.length, movedTo: target?.code ?? null };
   }
 
   /** Additional locations an employee may access beyond their primary location. */

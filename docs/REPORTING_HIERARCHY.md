@@ -34,6 +34,20 @@ change it returned the whole organisation to anyone signed in.
 **Making someone a location manager:** give them the *Location Manager* role (Employees → edit),
 then, as Super Admin, use **Location managers** on the location card to grant extra locations.
 
+## Locations and location HR
+
+- **Add / delete locations** (Super Admin only, permission `locations.manage`): *Add location* in the
+  location switcher; *Delete* on each location card. Deleting asks where its employees should move,
+  keeps their reporting lines, and requires typing the code. If history refers to the location
+  (for example old leave requests), it is archived instead of removed: hidden everywhere, code freed.
+  HR can no longer add or edit locations.
+- **Location HR** (Super Admin): *Location HR* on each card. The assigned HR people handle that
+  location's leave approvals and can see its employees. HR of other locations no longer receive its
+  requests. Locations without assigned HR keep the previous behaviour (any HR at the location).
+  Table: `location_hr_assignments` (migration 031).
+- Migration 031 retired the development placeholders **AND** (Andheri Branch) and **PUN** (Pune Store);
+  their employees were moved to HQ (audited as `location.employee_moved`).
+
 ## Screens
 
 - **Root header** – Renukaradhya | Software Manager, with today's totals.

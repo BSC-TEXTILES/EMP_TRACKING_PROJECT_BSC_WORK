@@ -75,7 +75,8 @@ export function idsFilterSql(ids, column) {
 export async function allowedLocationIds(user) {
     if (user.permissions.includes('locations.view.all'))
         return null;
-    const rows = await query('SELECT location_id FROM employee_locations WHERE employee_id = ?', [user.id]);
+    const rows = await query(`SELECT location_id FROM employee_locations WHERE employee_id = ?
+     UNION SELECT location_id FROM location_hr_assignments WHERE employee_id = ?`, [user.id, user.id]);
     const ids = new Set(rows.map((row) => Number(row.location_id)));
     if (user.locationId)
         ids.add(Number(user.locationId));

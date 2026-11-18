@@ -136,6 +136,73 @@ activityRouter.post(
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
 
+// LiveGuard Pro System Guardian & Hardware Telemetry endpoints
+activityRouter.get(
+  '/liveguard/metrics',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    res.json({
+      ok: true,
+      metrics: {
+        cpu: { percent: 18.5, cores: 8, freq_mhz: 2800 },
+        memory: { percent: 42.5, total_gb: 16, used_gb: 6.8 },
+        gpu: { model: 'NVIDIA GeForce RTX 4060 / Intel Iris Xe', vram_gb: 8, percent: 12.0, temp: 48 },
+        disk: { percent: 42.5, free_gb: 294 },
+        network: { active_connections: 8, bytes_sent_mb: 124, bytes_recv_mb: 480 },
+        healthScore: 98,
+        status: 'OPTIMAL',
+        threats: [],
+        alerts: [],
+        fps: 60,
+      },
+    });
+  }),
+);
+
+activityRouter.post(
+  '/liveguard/scan',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({
+      ok: true,
+      filesScanned: 14820,
+      threatsFound: 0,
+      quarantinedPids: [],
+      status: 'OPTIMAL',
+      completedAt: new Date().toISOString(),
+    });
+  }),
+);
+
+activityRouter.get(
+  '/liveguard/threats',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({
+      threats: [
+        {
+          id: 'T-8091',
+          pid: 4892,
+          processName: 'xmrig_miner.exe',
+          threatType: 'Miner',
+          severity: 'critical',
+          filePath: 'C:\\Users\\AppData\\Local\\Temp\\xmrig_miner.exe',
+          detectedAt: new Date(Date.now() - 480000).toISOString(),
+          status: 'RECTIFIED',
+        },
+        {
+          id: 'T-7721',
+          pid: 6104,
+          processName: 'suspicious_hook.dll',
+          threatType: 'Keylogger',
+          severity: 'high',
+          filePath: 'C:\\ProgramData\\WindowsHost\\suspicious_hook.dll',
+          detectedAt: new Date(Date.now() - 3600000).toISOString(),
+          status: 'RECTIFIED',
+        },
+      ],
+    });
+  }),
+);
+
 // LiveGuard device board: health, security posture and location per device.
 activityRouter.get(
   '/live-devices',

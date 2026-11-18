@@ -12,6 +12,9 @@ export class LeaveService {
        FROM employees e LEFT JOIN locations l ON l.id = e.location_id WHERE e.id = ?`, [employeeId]);
         if (!employee)
             throw ApiError.notFound('Employee not found');
+        // When HR is assigned to the location, only they handle its requests (independent HR per location).
+        const assignedHr = employee.location_id ? await query(`SELECT e.id, e.full_name FROM location_hr_assignments lh JOIN employees e ON e.id = lh.employee_id
+       WHERE lh.location_id = ? AND e.status = 'active' AND e.id <> ? ORDER BY e.full_name`, [employee.location_id, employeeId]).catch(() => []) : [];
         const candidates = employee.location_id ? await query(`SELECT e.id, e.full_name FROM employees e WHERE e.status = 'active' AND e.id <> ?
        AND (e.location_id = ? OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.employee_id = e.id AND el.location_id = ?))
        ORDER BY e.full_name`, [employeeId, employee.location_id, employee.location_id]) : [];
@@ -22,9 +25,14 @@ export class LeaveService {
             if (Number(candidate.id) === Number(employee.manager_id) && approver?.permissions.includes('leave.approve.manager')) {
                 manager = { id: Number(candidate.id), name: candidate.full_name };
             }
-            if (approver?.permissions.includes('leave.approve.hr') && Number(candidate.id) !== Number(employee.manager_id)) {
+            if (!assignedHr.length && approver?.permissions.includes('leave.approve.hr') && Number(candidate.id) !== Number(employee.manager_id)) {
                 hrApprovers.push({ id: Number(candidate.id), name: candidate.full_name });
             }
+        }
+        for (const hr of assignedHr) {
+            const approver = await AuthService.buildUser(Number(hr.id));
+            if (approver?.permissions.includes('leave.approve.hr'))
+                hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
         }
         const issues = [
             ...(!employee.location_id ? ['Your employee record needs an assigned location.'] : []),

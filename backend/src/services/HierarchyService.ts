@@ -253,7 +253,12 @@ export class HierarchyService {
 
       // Every employee needs a location.
       let locationsAssigned = 0;
-      const hq = await txQueryOne<{ id: number }>(conn, 'SELECT id FROM locations WHERE code = ? AND is_active = 1', [DEFAULT_LOCATION_CODE]);
+      const hq = await txQueryOne<{ id: number }>(
+        conn,
+        `SELECT id FROM locations WHERE is_active = 1
+         ORDER BY code = ? DESC, id = (SELECT location_id FROM employees WHERE id = ?) DESC, id LIMIT 1`,
+        [DEFAULT_LOCATION_CODE, rootId],
+      );
       if (hq) {
         const missing = await txQuery<{ id: number }>(conn, "SELECT id FROM employees WHERE location_id IS NULL AND status NOT IN ('deleted','rejected')");
         if (missing.length) {
@@ -468,18 +473,35 @@ export class HierarchyService {
       offline: list.filter((n) => ['offline', 'not_logged_in', 'checked_out'].includes(n.workState)).length,
       managers: list.filter((n) => n.directReports > 0 && !n.isRoot).length,
     });
+    const people = permittedLocations.length
+      ? await query<{ location_id: number; kind: string; id: number; full_name: string }>(
+          `SELECT el.location_id, 'manager' AS kind, e.id, e.full_name FROM employee_locations el JOIN employees e ON e.id = el.employee_id WHERE e.status = 'active'
+           UNION ALL
+           SELECT lh.location_id, 'hr' AS kind, e.id, e.full_name FROM location_hr_assignments lh JOIN employees e ON e.id = lh.employee_id WHERE e.status = 'active'`,
+        )
+      : [];
+    const peopleAt = (locationId: number, kind: string) => people
+      .filter((p) => Number(p.location_id) === locationId && p.kind === kind)
+      .map((p) => ({ id: Number(p.id), name: p.full_name }));
     const locations = permittedLocations.map((l) => ({
       id: Number(l.id),
       code: l.code,
       name: l.name,
       city: l.city,
+      locationManagers: peopleAt(Number(l.id), 'manager'),
+      hr: peopleAt(Number(l.id), 'hr'),
       ...summarize(all.filter((n) => n.locationId === Number(l.id))),
     }));
 
     const departments = await query<{ id: number; name: string }>('SELECT id, name FROM departments WHERE is_active = 1 ORDER BY name');
 
     return {
-      scope: { mode: scope.mode, canManage: user.permissions.includes('hierarchy.manage'), allLocations: scope.locationIds === null },
+      scope: {
+        mode: scope.mode,
+        canManage: user.permissions.includes('hierarchy.manage'),
+        canManageLocations: user.permissions.includes('locations.manage'),
+        allLocations: scope.locationIds === null,
+      },
       root,
       manager,
       locations,
@@ -763,4 +785,52 @@ export class HierarchyService {
     await recordAudit({ actorId: actor.id, action: 'hierarchy.location_managers_set', entityType: 'location', entityId: locationId, before: { employeeIds: before }, after: { employeeIds: unique }, ip });
     return HierarchyService.locationManagers(actor, locationId);
   }
+
+  static async locationHr(user: AuthUser, locationId: number) {
+    const scope = await HierarchyService.scope(user);
+    if (scope.mode === 'own') throw ApiError.forbidden();
+    await HierarchyService.requestedLocation(scope, locationId);
+    const rows = await query<{ id: number; full_name: string; employee_code: string; role_name: string }>(
+      `SELECT e.id, e.full_name, e.employee_code, r.name AS role_name FROM location_hr_assignments lh
+       JOIN employees e ON e.id = lh.employee_id JOIN roles r ON r.id = e.role_id
+       WHERE lh.location_id = ? AND e.status = 'active' ORDER BY e.full_name`,
+      [locationId],
+    );
+    return rows.map((r) => ({ id: Number(r.id), name: r.full_name, employeeCode: r.employee_code, roleName: r.role_name }));
+  }
+
+  /**
+   * Sets the HR people for one location. They handle that location's leave approvals and see its
+   * employees; HR assigned elsewhere no longer receives this location's requests.
+   */
+  static async setLocationHr(actor: AuthUser, locationId: number, employeeIds: number[], ip?: string) {
+    if (!actor.permissions.includes('hierarchy.manage') && !actor.permissions.includes('locations.manage')) {
+      throw ApiError.forbidden('Only an administrator can assign HR to a location.');
+    }
+    const loc = await queryOne<{ id: number }>('SELECT id FROM locations WHERE id = ? AND is_active = 1', [locationId]);
+    if (!loc) throw ApiError.notFound('Location not found');
+    const unique = [...new Set(employeeIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (unique.length) {
+      const rows = await query<{ id: number; full_name: string; has_hr: number }>(
+        `SELECT e.id, e.full_name,
+                (EXISTS (SELECT 1 FROM role_permissions rp JOIN permissions p ON p.id = rp.permission_id WHERE rp.role_id = e.role_id AND p.code = 'leave.approve.hr')
+                 OR EXISTS (SELECT 1 FROM user_permissions up JOIN permissions p ON p.id = up.permission_id WHERE up.employee_id = e.id AND up.effect = 'grant' AND p.code = 'leave.approve.hr')) AS has_hr
+         FROM employees e WHERE e.status = 'active' AND e.id IN (${inClause(unique)})`,
+        unique,
+      );
+      if (rows.length !== unique.length) throw ApiError.badRequest('Every location HR must be an active employee.');
+      const missing = rows.filter((r) => !Number(r.has_hr));
+      if (missing.length) throw ApiError.badRequest(`${missing.map((m) => m.full_name).join(', ')} cannot approve leave as HR. Give them the HR Manager role first.`);
+    }
+    const before = (await query<{ employee_id: number }>('SELECT employee_id FROM location_hr_assignments WHERE location_id = ?', [locationId])).map((r) => Number(r.employee_id));
+    await transaction(async (conn) => {
+      await txExecute(conn, 'DELETE FROM location_hr_assignments WHERE location_id = ?', [locationId]);
+      for (const id of unique) {
+        await txExecute(conn, 'INSERT INTO location_hr_assignments (location_id, employee_id, assigned_by) VALUES (?, ?, ?)', [locationId, id, actor.id]);
+      }
+    });
+    await recordAudit({ actorId: actor.id, action: 'hierarchy.location_hr_set', entityType: 'location', entityId: locationId, before: { employeeIds: before }, after: { employeeIds: unique }, ip });
+    return HierarchyService.locationHr(actor, locationId);
+  }
+
 }

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
+import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { EmployeeService } from '../services/EmployeeService.js';
 import { recordAudit } from '../lib/audit.js';
@@ -344,7 +344,7 @@ employeesRouter.get(
 
 employeesRouter.patch(
   '/locations/:id',
-  requireAny('org.manage'),
+  requireAny('locations.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const body = parseBody(
       z.object({
@@ -383,9 +383,20 @@ employeesRouter.put(
   }),
 );
 
+employeesRouter.delete(
+  '/locations/:id',
+  requireAny('locations.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const raw = req.query.moveTo ?? (req.body as { moveToLocationId?: unknown } | undefined)?.moveToLocationId;
+    const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
+    if (moveTo !== undefined && (!Number.isInteger(moveTo) || moveTo <= 0)) throw ApiError.badRequest('Invalid target location.');
+    res.json(await EmployeeService.deleteLocation(currentUser(req), intParam(req.params.id), moveTo, clientIp(req)));
+  }),
+);
+
 employeesRouter.post(
   '/locations',
-  requireAny('org.manage'),
+  requireAny('locations.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(

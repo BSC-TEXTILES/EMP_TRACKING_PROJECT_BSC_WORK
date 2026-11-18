@@ -81,3 +81,19 @@ hierarchyRouter.post(
     res.json(await HierarchyService.ensureStructure(currentUser(req).id));
   }),
 );
+
+hierarchyRouter.get(
+  '/locations/:id/hr',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ hr: await HierarchyService.locationHr(currentUser(req), intParam(req.params.id as string)) });
+  }),
+);
+
+hierarchyRouter.put(
+  '/locations/:id/hr',
+  requireAny('hierarchy.manage', 'locations.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(z.object({ employeeIds: z.array(z.number().int().positive()).max(20) }), req.body);
+    res.json({ hr: await HierarchyService.setLocationHr(currentUser(req), intParam(req.params.id as string), body.employeeIds, clientIp(req)) });
+  }),
+);

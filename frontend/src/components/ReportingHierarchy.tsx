@@ -43,10 +43,14 @@ export interface HierarchyNode {
 }
 
 interface Summary { total: number; present: number; working: number; onBreak: number; inactive: number; onLeave: number; offline: number; managers: number }
-interface LocationSummary extends Summary { id: number; code: string; name: string; city: string | null }
+interface LocationSummary extends Summary {
+  id: number; code: string; name: string; city: string | null;
+  locationManagers: { id: number; name: string }[];
+  hr: { id: number; name: string }[];
+}
 
 interface Overview {
-  scope: { mode: 'all' | 'location' | 'team' | 'own'; canManage: boolean; allLocations: boolean };
+  scope: { mode: 'all' | 'location' | 'team' | 'own'; canManage: boolean; canManageLocations: boolean; allLocations: boolean };
   root: Partial<HierarchyNode> | null;
   manager: Partial<HierarchyNode> | null;
   locations: LocationSummary[];
@@ -139,7 +143,9 @@ export default function ReportingHierarchy() {
   const [groupBy, setGroupBy] = useState<'reporting' | 'department'>('reporting');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState<number | null>(null);
-  const [managersFor, setManagersFor] = useState<LocationSummary | null>(null);
+  const [assignFor, setAssignFor] = useState<{ location: LocationSummary; kind: 'managers' | 'hr' } | null>(null);
+  const [addingLocation, setAddingLocation] = useState(false);
+  const [deletingLocation, setDeletingLocation] = useState<LocationSummary | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -197,6 +203,7 @@ export default function ReportingHierarchy() {
             value={location}
             allLocations={data.scope.allLocations}
             onChange={setLocation}
+            onAdd={data.scope.canManageLocations ? () => setAddingLocation(true) : undefined}
           />
 
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -240,7 +247,11 @@ export default function ReportingHierarchy() {
               collapsed={collapsed}
               onToggle={toggle}
               onOpen={setDrawer}
-              onManagers={data.scope.canManage ? setManagersFor : undefined}
+              actions={{
+                onManagers: data.scope.canManage ? (l) => setAssignFor({ location: l, kind: 'managers' }) : undefined,
+                onHr: data.scope.canManage || data.scope.canManageLocations ? (l) => setAssignFor({ location: l, kind: 'hr' }) : undefined,
+                onDelete: data.scope.canManageLocations ? setDeletingLocation : undefined,
+              }}
             />
           )}
           {view === 'live' && <LiveView nodes={filtered} onOpen={setDrawer} generatedAt={data.generatedAt} onRefresh={load} />}
@@ -261,8 +272,20 @@ export default function ReportingHierarchy() {
           }}
         />
       )}
-      {managersFor && (
-        <LocationManagersModal location={managersFor} employees={data.employees} onClose={() => setManagersFor(null)} onSaved={load} />
+      {assignFor && (
+        <LocationPeopleModal location={assignFor.location} kind={assignFor.kind} employees={data.employees} onClose={() => setAssignFor(null)} onSaved={load} />
+      )}
+      {addingLocation && <AddLocationModal onClose={() => setAddingLocation(false)} onSaved={load} />}
+      {deletingLocation && (
+        <DeleteLocationModal
+          location={deletingLocation}
+          others={data.locations.filter((l) => l.id !== deletingLocation.id)}
+          onClose={() => setDeletingLocation(null)}
+          onDeleted={() => {
+            if (location === deletingLocation.id) setLocation('all');
+            void load();
+          }}
+        />
       )}
     </div>
   );
@@ -317,8 +340,8 @@ function RootHeader({ root, summary, mode }: { root: Partial<HierarchyNode> | nu
 
 // -------------------------------------------------------- location switcher
 
-function LocationSwitcher({ locations, total, value, allLocations, onChange }: {
-  locations: LocationSummary[]; total: number; value: number | 'all'; allLocations: boolean; onChange: (v: number | 'all') => void;
+function LocationSwitcher({ locations, total, value, allLocations, onChange, onAdd }: {
+  locations: LocationSummary[]; total: number; value: number | 'all'; allLocations: boolean; onChange: (v: number | 'all') => void; onAdd?: () => void;
 }) {
   const chip = (key: number | 'all', title: string, subtitle: string, count: number, working: number) => (
     <button
@@ -345,6 +368,11 @@ function LocationSwitcher({ locations, total, value, allLocations, onChange }: {
     <div className="flex gap-2 overflow-x-auto pb-1 sm:flex-wrap" role="group" aria-label="Location">
       {chip('all', allLocations ? 'All locations' : 'All my locations', 'Consolidated view', total, locations.reduce((s, l) => s + l.working, 0))}
       {locations.map((l) => chip(l.id, l.code, l.name, l.total, l.working))}
+      {onAdd && (
+        <button type="button" onClick={onAdd} className="flex min-w-[9.5rem] items-center justify-center gap-2 rounded-xl border border-dashed border-brand-300 px-3.5 py-3 text-sm font-medium text-brand-700 hover:bg-brand-50">
+          <Icon name="plus" size={16} /> Add location
+        </button>
+      )}
     </div>
   );
 }
@@ -388,9 +416,11 @@ function NodeRow({ node, depth, hasChildren, isCollapsed, onToggle, onOpen }: {
   );
 }
 
-function TreeView({ data, nodes, location, groupBy, searching, collapsed, onToggle, onOpen, onManagers }: {
+interface LocationActions { onManagers?: (l: LocationSummary) => void; onHr?: (l: LocationSummary) => void; onDelete?: (l: LocationSummary) => void }
+
+function TreeView({ data, nodes, location, groupBy, searching, collapsed, onToggle, onOpen, actions }: {
   data: Overview; nodes: HierarchyNode[]; location: number | 'all'; groupBy: 'reporting' | 'department'; searching: boolean;
-  collapsed: Set<string>; onToggle: (key: string) => void; onOpen: (id: number) => void; onManagers?: (l: LocationSummary) => void;
+  collapsed: Set<string>; onToggle: (key: string) => void; onOpen: (id: number) => void; actions: LocationActions;
 }) {
   const sections = data.locations.filter((l) => location === 'all' || l.id === location);
   const unassigned = nodes.filter((n) => !n.isRoot && !data.locations.some((l) => l.id === n.locationId));
@@ -469,13 +499,29 @@ function TreeView({ data, nodes, location, groupBy, searching, collapsed, onTogg
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-ink-900">{l.code} – {l.name}</span>
                   <span className="block text-xs text-ink-500">{l.total} employees · {l.managers} managers · {l.present} present · {l.working} working · {l.onLeave} on leave</span>
+                  <span className="block truncate text-xs text-ink-500">
+                    HR: {l.hr.length ? l.hr.map((p) => p.name).join(', ') : <span className="text-amber-600">not assigned</span>}
+                    {l.locationManagers.length > 0 && <> · Managers: {l.locationManagers.map((p) => p.name).join(', ')}</>}
+                  </span>
                 </span>
               </button>
-              {onManagers && (
-                <button type="button" className="btn-secondary btn-sm" onClick={() => onManagers(l)}>
-                  <Icon name="userCheck" size={14} /> Location managers
-                </button>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {actions.onHr && (
+                  <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onHr!(l)}>
+                    <Icon name="users" size={14} /> Location HR
+                  </button>
+                )}
+                {actions.onManagers && (
+                  <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onManagers!(l)}>
+                    <Icon name="userCheck" size={14} /> Location managers
+                  </button>
+                )}
+                {actions.onDelete && (
+                  <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => actions.onDelete!(l)} aria-label={`Delete ${l.code}`}>
+                    <Icon name="trash" size={14} /> Delete
+                  </button>
+                )}
+              </div>
             </div>
             {!isCollapsed && (
               <div className="p-3 sm:p-4">
@@ -943,31 +989,34 @@ function ProfileDrawer({ employeeId, canManage, employees, locations, onClose, o
   );
 }
 
-// ------------------------------------------------- location managers modal
+// ------------------------------------------- location managers / HR modal
 
-function LocationManagersModal({ location, employees, onClose, onSaved }: { location: LocationSummary; employees: HierarchyNode[]; onClose: () => void; onSaved: () => void }) {
+function LocationPeopleModal({ location, kind, employees, onClose, onSaved }: {
+  location: LocationSummary; kind: 'managers' | 'hr'; employees: HierarchyNode[]; onClose: () => void; onSaved: () => void;
+}) {
   const toast = useToast();
   const [selected, setSelected] = useState<Set<number> | null>(null);
   const [filter, setFilter] = useState('');
   const [saving, setSaving] = useState(false);
+  const isHr = kind === 'hr';
 
   useEffect(() => {
-    api.get<{ managers: { id: number }[] }>(`/hierarchy/locations/${location.id}/managers`)
-      .then((r) => setSelected(new Set(r.managers.map((m) => m.id))))
+    api.get<{ managers?: { id: number }[]; hr?: { id: number }[] }>(`/hierarchy/locations/${location.id}/${kind}`)
+      .then((r) => setSelected(new Set((isHr ? r.hr : r.managers)?.map((m) => m.id) ?? [])))
       .catch((caught) => { toast.error(errorMessage(caught)); setSelected(new Set()); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.id]);
+  }, [location.id, kind]);
 
   const candidates = employees
-    .filter((e) => !e.isRoot && `${e.name} ${e.employeeCode}`.toLowerCase().includes(filter.toLowerCase()))
-    .sort((a, b) => b.roleLevel - a.roleLevel || a.name.localeCompare(b.name));
+    .filter((e) => !e.isRoot && (!isHr || e.roleSlug.startsWith('hr_') || selected?.has(e.id)) && `${e.name} ${e.employeeCode}`.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => Number(b.locationId === location.id) - Number(a.locationId === location.id) || b.roleLevel - a.roleLevel || a.name.localeCompare(b.name));
 
   const save = async () => {
     if (!selected) return;
     setSaving(true);
     try {
-      await api.put(`/hierarchy/locations/${location.id}/managers`, { employeeIds: [...selected] });
-      toast.success(`Managers for ${location.code} saved`);
+      await api.put(`/hierarchy/locations/${location.id}/${kind}`, { employeeIds: [...selected] });
+      toast.success(`${isHr ? 'HR' : 'Managers'} for ${location.code} saved`);
       onSaved();
       onClose();
     } catch (caught) {
@@ -981,12 +1030,16 @@ function LocationManagersModal({ location, employees, onClose, onSaved }: { loca
     <Modal
       open
       onClose={onClose}
-      title={`Location managers – ${location.code}`}
-      description="Selected employees can track this location's employees, attendance and reports. Give them the Location Manager (or Store Manager) role in Employees so they have tracking permissions."
+      title={`${isHr ? 'Location HR' : 'Location managers'} – ${location.code}`}
+      description={isHr
+        ? `Only these HR people handle ${location.code} leave approvals and HR work, and they see ${location.code} employees. HR of other locations no longer receive ${location.code} requests. Only employees with an HR role are listed.`
+        : 'Selected employees can track this location’s employees, attendance and reports. Give them the Location Manager (or Store Manager) role in Employees so they have tracking permissions.'}
       footer={<><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button type="button" className="btn-primary" disabled={saving || !selected} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</button></>}
     >
       <input className="input mb-3" placeholder="Search employees" value={filter} onChange={(e) => setFilter(e.target.value)} />
-      {!selected ? <Skeleton lines={5} /> : (
+      {!selected ? <Skeleton lines={5} /> : candidates.length === 0 ? (
+        <p className="py-6 text-center text-sm text-ink-500">{isHr ? 'No employees with an HR role yet. Give someone the HR Manager role in Employees first.' : 'No employees match.'}</p>
+      ) : (
         <ul className="max-h-80 space-y-1 overflow-y-auto">
           {candidates.map((e) => (
             <li key={e.id}>
@@ -1006,6 +1059,82 @@ function LocationManagersModal({ location, employees, onClose, onSaved }: { loca
           ))}
         </ul>
       )}
+    </Modal>
+  );
+}
+
+// ------------------------------------------------------ add / delete location
+
+function AddLocationModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [form, setForm] = useState({ name: '', code: '', city: '', state: 'Karnataka' });
+  const [saving, setSaving] = useState(false);
+  const valid = form.name.trim().length >= 2 && /^[A-Za-z0-9]{2,12}$/.test(form.code.trim());
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.post('/employees/locations', {
+        name: form.name.trim(), code: form.code.trim().toUpperCase(), city: form.city.trim() || undefined, state: form.state.trim() || undefined, timezone: 'Asia/Kolkata',
+      });
+      toast.success(`Location ${form.code.trim().toUpperCase()} added`);
+      onSaved();
+      onClose();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal open onClose={onClose} title="Add location" description="The new location appears in the hierarchy, employee forms, attendance and analytics."
+      footer={<><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button type="button" className="btn-primary" disabled={!valid || saving} onClick={() => void save()}>{saving ? 'Saving…' : 'Add location'}</button></>}>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Name" required><input className="input" value={form.name} maxLength={120} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Hubballi Store" /></Field>
+        <Field label="Code" required hint="2–12 letters or digits"><input className="input uppercase" value={form.code} maxLength={12} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. HUB" /></Field>
+        <Field label="City"><input className="input" value={form.city} maxLength={80} onChange={(e) => setForm({ ...form, city: e.target.value })} /></Field>
+        <Field label="State"><input className="input" value={form.state} maxLength={80} onChange={(e) => setForm({ ...form, state: e.target.value })} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+function DeleteLocationModal({ location, others, onClose, onDeleted }: { location: LocationSummary; others: LocationSummary[]; onClose: () => void; onDeleted: () => void }) {
+  const toast = useToast();
+  const [moveTo, setMoveTo] = useState<string>(() => String(others.find((l) => l.code === 'HQ')?.id ?? others[0]?.id ?? ''));
+  const [confirm, setConfirm] = useState('');
+  const [saving, setSaving] = useState(false);
+  const needsTarget = location.total > 0;
+  const ok = others.length > 0 && confirm.trim().toUpperCase() === location.code.toUpperCase() && (!needsTarget || Boolean(moveTo));
+  const remove = async () => {
+    setSaving(true);
+    try {
+      const query = needsTarget ? `?moveTo=${moveTo}` : '';
+      const result = await api.del<{ outcome: 'removed' | 'archived'; moved: number; movedTo: string | null }>(`/employees/locations/${location.id}${query}`);
+      toast.success(`${location.code} deleted${result.moved ? ` · ${result.moved} employee(s) moved to ${result.movedTo}` : ''}`);
+      onDeleted();
+      onClose();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Modal open onClose={onClose} title={`Delete ${location.code} – ${location.name}`}
+      description="The location disappears from the hierarchy, forms and analytics. Attendance, leave and audit history are kept."
+      footer={<><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button type="button" className="btn-danger" disabled={!ok || saving} onClick={() => void remove()}>{saving ? 'Deleting…' : 'Delete location'}</button></>}>
+      <div className="space-y-3">
+        {others.length === 0 ? <p className="text-sm text-red-600">The last location cannot be deleted.</p> : needsTarget ? (
+          <Field label={`Move its ${location.total} employee(s) to`} required>
+            <select className="input" value={moveTo} onChange={(e) => setMoveTo(e.target.value)}>
+              {others.map((l) => <option key={l.id} value={l.id}>{l.code} – {l.name}</option>)}
+            </select>
+          </Field>
+        ) : <p className="text-sm text-ink-600">No employees are assigned to this location.</p>}
+        <Field label={`Type ${location.code} to confirm`} required>
+          <input className="input" value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" />
+        </Field>
+      </div>
     </Modal>
   );
 }
