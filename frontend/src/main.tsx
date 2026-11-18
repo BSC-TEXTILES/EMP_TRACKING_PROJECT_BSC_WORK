@@ -9,6 +9,8 @@ import { RealtimeProvider } from './contexts/RealtimeContext';
 import { NativeShell } from './components/mobile/NativeShell';
 import { initNativeSession, isNative } from './lib/native';
 import { initTheme } from './lib/theme';
+// Captures the browser's one-time install event before any screen renders.
+import './lib/installPrompt';
 
 initTheme();
 if (isNative) document.documentElement.dataset.native = '1';

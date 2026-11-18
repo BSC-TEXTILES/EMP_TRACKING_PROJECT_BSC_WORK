@@ -2,6 +2,7 @@ import { Suspense, lazy, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { AppShell } from './components/AppShell';
+import { PWAInstallPrompt } from './components/PWAInstallPrompt';
 import { CallProvider } from './components/CallInterface';
 import { Skeleton } from './components/ui';
 
@@ -134,6 +135,7 @@ export function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <PWAInstallPrompt />
     </Suspense>
   );
 }

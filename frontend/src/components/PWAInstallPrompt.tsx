@@ -1,376 +1,221 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../lib/api';
-import { Modal, Card } from './ui';
+import {
+  installPlatform,
+  markedInstalled,
+  onInstallChange,
+  promptInstall,
+  runningInstalled,
+  type InstallPlatform,
+} from '../lib/installPrompt';
 import { Icon } from './icons';
-import { cx } from '../lib/format';
 
-interface DeviceInfo {
-  type: 'windows' | 'android' | 'iphone' | 'ipad' | 'mac' | 'linux' | 'unknown';
-  browser: 'chrome' | 'edge' | 'firefox' | 'safari' | 'opera' | 'unknown';
-  isInstallable: boolean;
-  isStandalone: boolean;
-  isIOS: boolean;
-  isAndroid: boolean;
-  isWindows: boolean;
-  isMac: boolean;
+const DISMISSED_KEY = 'bsc_pwa_dismissed_at';
+const DISMISS_DAYS = 3;
+const SHOW_AFTER_MS = 4000;
+
+function dismissedRecently(): boolean {
+  try {
+    const at = Number(localStorage.getItem(DISMISSED_KEY) || 0);
+    return Date.now() - at < DISMISS_DAYS * 86_400_000;
+  } catch {
+    return false;
+  }
 }
 
-interface BeforeInstallPromptEvent extends Event {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
-
+/**
+ * "Install app" popup for the website. Appears a few seconds after the page
+ * loads when this browser can install the app, and never inside the installed
+ * app itself. "Not now" hides it for 3 days; Settings → Install app reopens it.
+ *
+ * - Chrome / Edge (Windows, Mac, Android): one-tap Install button.
+ * - iPhone / iPad Safari: Share → Add to Home Screen steps.
+ * - Other Android browsers: browser menu → Install app.
+ */
 export function PWAInstallPrompt() {
   const { user } = useAuth();
-  const [showBanner, setShowBanner] = useState(false);
-  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
-  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [installing, setInstalling] = useState(false);
-  const [installed, setInstalled] = useState(false);
-  const [showInstructions, setShowInstructions] = useState(false);
-  const dismissedRef = useRef(false);
-  const installInstructionsRef = useRef<Record<string, string>>({
-    windows: `**Windows (Chrome/Edge):**
-1. Click the **Install** button in the address bar (right side)
-2. Or click the ⋮ menu → "Install BSC Textiles Workforce"
-3. Or right-click the app tab → "Install page as app"
-4. The app will appear in Start Menu and can be pinned to Taskbar`,
-    android: `**Android (Chrome):**
-1. Tap the **Install** button in the banner below
-2. Or tap ⋮ menu → "Add to Home screen" / "Install app"
-3. Confirm the installation prompt
-4. The app icon will appear on your home screen`,
-    iphone: `**iPhone/iPad (Safari):**
-1. Tap the **Share** button (□↑) at the bottom
-2. Scroll down and tap **"Add to Home Screen"**
-3. Tap **"Add"** in the top right
-4. The app will appear on your home screen like a native app`,
-    mac: `**macOS (Chrome/Edge):**
-1. Click the **Install** button in the address bar
-2. Or click ⋮ menu → "Install BSC Textiles Workforce"
-3. The app will appear in Applications folder and Launchpad`,
-    linux: `**Linux (Chrome/Edge):**
-1. Click the **Install** button in the address bar
-2. Or click ⋮ menu → "Install BSC Textiles Workforce"
-3. The app will appear in your application menu`,
-    unknown: `**General Installation:**
-1. Look for an **Install** button in your browser's address bar
-2. Or check the browser menu (⋮) for "Install" or "Add to Home Screen"
-3. Follow your browser's specific installation steps`,
-  });
+  const [platform, setPlatform] = useState<InstallPlatform>(() => installPlatform());
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
 
-  // Detect device and browser
+  // Track the browser's install capability (the install event can arrive at any time).
+  useEffect(() => onInstallChange(() => setPlatform(installPlatform())), []);
+
+  // Show automatically once, a few seconds after load, unless dismissed or installed.
   useEffect(() => {
-    if (!user) return;
+    if (runningInstalled()) return;
+    const timer = window.setTimeout(() => {
+      const p = installPlatform();
+      setPlatform(p);
+      if (p !== 'none' && !dismissedRecently() && !(markedInstalled() && p !== 'one-tap')) setOpen(true);
+    }, SHOW_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
 
-    const ua = navigator.userAgent;
-    const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    const isAndroid = /Android/.test(ua);
-    const isWindows = /Windows NT/.test(ua);
-    const isMac = /Macintosh/.test(ua) && !isIOS;
-    const isLinux = /Linux/.test(ua) && !isAndroid;
-
-    let browser: DeviceInfo['browser'] = 'unknown';
-    if (/Edg\//.test(ua)) browser = 'edge';
-    else if (/Chrome\//.test(ua) && !/Edg\//.test(ua) && !/OPR\//.test(ua)) browser = 'chrome';
-    else if (/Firefox\//.test(ua)) browser = 'firefox';
-    else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) browser = 'safari';
-    else if (/OPR\//.test(ua)) browser = 'opera';
-
-    let type: DeviceInfo['type'] = 'unknown';
-    if (isIOS && /iPad/.test(ua)) type = 'ipad';
-    else if (isIOS && /iPhone|iPod/.test(ua)) type = 'iphone';
-    else if (isAndroid && /Mobile/.test(ua)) type = 'android';
-    else if (isAndroid && !/Mobile/.test(ua)) type = 'android'; // tablet
-    else if (isWindows) type = 'windows';
-    else if (isMac) type = 'mac';
-    else if (isLinux) type = 'linux';
-
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as any).standalone === true;
-
-    const info: DeviceInfo = {
-      type,
-      browser,
-      isInstallable: false,
-      isStandalone,
-      isIOS,
-      isAndroid,
-      isWindows,
-      isMac,
+  // Opened on request (Settings) and closed when the browser reports the install.
+  useEffect(() => {
+    const show = () => {
+      setPlatform(installPlatform());
+      setDone(false);
+      setOpen(true);
     };
-
-    setDeviceInfo(info);
-
-    // Check if already installed (via localStorage flag or standalone mode)
-    const wasInstalled = localStorage.getItem('bsc_pwa_installed') === 'true' || isStandalone;
-    if (wasInstalled) {
-      setInstalled(true);
-      return;
-    }
-
-    // Check if user dismissed recently (24 hours)
-    const dismissedAt = localStorage.getItem('bsc_pwa_dismissed_at');
-    if (dismissedAt && Date.now() - parseInt(dismissedAt) < 24 * 60 * 60 * 1000) {
-      dismissedRef.current = true;
-      return;
-    }
-
-    // Listen for beforeinstallprompt event (Chrome/Edge on Android/Desktop)
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      const promptEvent = e as BeforeInstallPromptEvent;
-      setDeferredPrompt(promptEvent);
-      setDeviceInfo(prev => prev ? { ...prev, isInstallable: true } : null);
-      if (!isStandalone && !dismissedRef.current) {
-        setShowBanner(true);
+    const installed = () => {
+      setOpen(false);
+      setDone(true);
+      if (user) {
+        void api.post('/devices/register', {
+          deviceType: /Android/.test(navigator.userAgent) ? 'android' : /iPhone|iPad/.test(navigator.userAgent) ? 'iphone' : 'desktop',
+          isInstalled: true,
+          isStandalone: false,
+          userAgent: navigator.userAgent,
+          screenWidth: screen.width,
+          screenHeight: screen.height,
+          pixelRatio: window.devicePixelRatio,
+        }).catch(() => undefined);
       }
     };
-
-    // Listen for appinstalled event
-    const handleAppInstalled = () => {
-      setInstalled(true);
-      setShowBanner(false);
-      localStorage.setItem('bsc_pwa_installed', 'true');
-      localStorage.removeItem('bsc_pwa_dismissed_at');
-      // Register device as installed
-      registerDevice({ ...info, installed: true });
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    // For iOS, show banner if not in standalone mode
-    if (isIOS && !isStandalone && !dismissedRef.current) {
-      setShowBanner(true);
-    }
-
-    // For browsers that don't fire beforeinstallprompt but support installation
-    // (Firefox, Safari on desktop), show banner after a delay
-    if (!isIOS && !['chrome', 'edge'].includes(browser) && !isStandalone && !dismissedRef.current) {
-      const timer = setTimeout(() => setShowBanner(true), 3000);
-      return () => clearTimeout(timer);
-    }
-
+    window.addEventListener('pwa:open-install', show);
+    window.addEventListener('pwa:installed', installed);
     return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('pwa:open-install', show);
+      window.removeEventListener('pwa:installed', installed);
     };
   }, [user]);
 
-  // Register device with backend
-  const registerDevice = async (info: DeviceInfo & { installed?: boolean }) => {
+  // Success note disappears on its own.
+  useEffect(() => {
+    if (!done) return;
+    const timer = window.setTimeout(() => setDone(false), 8000);
+    return () => window.clearTimeout(timer);
+  }, [done]);
+
+  const notNow = () => {
+    setOpen(false);
     try {
-      await api.post('/devices/register', {
-        deviceType: info.type,
-        browser: info.browser,
-        os: getOSName(info),
-        isInstalled: info.installed ?? false,
-        isStandalone: info.isStandalone,
-        userAgent: navigator.userAgent,
-        screenWidth: screen.width,
-        screenHeight: screen.height,
-        pixelRatio: window.devicePixelRatio,
-      });
+      localStorage.setItem(DISMISSED_KEY, String(Date.now()));
     } catch {
-      // Silently fail - device registration is not critical
+      /* storage blocked */
     }
   };
 
-  const getOSName = (info: DeviceInfo): string => {
-    if (info.isIOS) return info.type === 'ipad' ? 'iPadOS' : 'iOS';
-    if (info.isAndroid) return 'Android';
-    if (info.isWindows) return 'Windows';
-    if (info.isMac) return 'macOS';
-    return 'Linux';
-  };
-
-  const handleInstall = async () => {
-    if (!deferredPrompt) {
-      // For iOS or browsers without beforeinstallprompt, show instructions
-      setShowInstructions(true);
-      return;
-    }
-
-    setInstalling(true);
+  const install = async () => {
+    setBusy(true);
     try {
-      await deferredPrompt.prompt();
-      const choice = await deferredPrompt.userChoice;
-      if (choice.outcome === 'accepted') {
-        setInstalled(true);
-        setShowBanner(false);
-        localStorage.setItem('bsc_pwa_installed', 'true');
-        if (deviceInfo) {
-          registerDevice({ ...deviceInfo, installed: true });
-        }
+      const accepted = await promptInstall();
+      if (accepted) {
+        setOpen(false);
+        setDone(true);
+      } else {
+        notNow();
       }
-      setDeferredPrompt(null);
-    } catch {
-      setShowInstructions(true);
     } finally {
-      setInstalling(false);
+      setBusy(false);
     }
   };
 
-  const handleNotNow = () => {
-    setShowBanner(false);
-    dismissedRef.current = true;
-    localStorage.setItem('bsc_pwa_dismissed_at', String(Date.now()));
-  };
-
-  const handleInstructions = () => {
-    setShowInstructions(true);
-  };
-
-  const handleInstructionsClose = () => {
-    setShowInstructions(false);
-  };
-
-  if (!deviceInfo || deviceInfo.isStandalone || installed || !showBanner) {
-    return null;
+  if (done) {
+    return (
+      <Popup>
+        <div className="flex items-center gap-3 p-4">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
+            <Icon name="checkCircle" size={20} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-ink-900">App installed</p>
+            <p className="text-xs text-ink-500">Open BSC Workforce from your home screen, Start menu or app launcher.</p>
+          </div>
+          <CloseButton onClick={() => setDone(false)} />
+        </div>
+      </Popup>
+    );
   }
 
-  const instructions = installInstructionsRef.current[deviceInfo.type] || installInstructionsRef.current.unknown;
+  if (!open || platform === 'none') return null;
 
   return (
-    <>
-      {/* Installation Banner */}
-      <div className={cx('fixed bottom-0 left-0 right-0 z-50 px-4 pb-4 sm:px-6 sm:pb-6', installed && 'hidden')}>
-        <div className="max-w-xl mx-auto">
-          <Card className="overflow-hidden shadow-xl border-ink-200 bg-white animate-slide-up">
-            <div className="flex items-start gap-3 p-4">
-              <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-brand-100 flex items-center justify-center">
-                <Icon name="downloadCloud" size={24} className="text-brand-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-ink-900">Install BSC Textiles Workforce App</h3>
-                <p className="mt-1 text-xs text-ink-600">
-                  Install the application for faster access to employee activities, calls, meetings, notifications, tasks and collaboration.
-                </p>
-              </div>
-              <button
-                type="button"
-                className="flex-shrink-0 rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-600"
-                onClick={handleNotNow}
-                aria-label="Dismiss"
-              >
-                <Icon name="x" size={16} />
-              </button>
-            </div>
-            <div className="border-t border-ink-100 px-4 py-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="btn-primary btn-sm flex-1 sm:flex-none"
-                onClick={handleInstall}
-                disabled={installing}
-              >
-                {installing ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                    Installing...
-                  </>
-                ) : (
-                  <>
-                    <Icon name="downloadCloud" size={14} />
-                    Install App
-                  </>
-                )}
-              </button>
-              <button
-                type="button"
-                className="btn-secondary btn-sm flex-1 sm:flex-none"
-                onClick={handleInstructions}
-              >
-                <Icon name="helpCircle" size={14} />
-                Instructions
-              </button>
-              <button
-                type="button"
-                className="btn-ghost btn-sm flex-1 sm:flex-none text-ink-500"
-                onClick={handleNotNow}
-              >
-                Not Now
-              </button>
-            </div>
-          </Card>
+    <Popup labelledBy="pwa-install-title">
+      <div className="flex items-start gap-3 p-4">
+        <img src="/icons/icon-192.png" alt="" width={48} height={48} className="h-12 w-12 shrink-0 rounded-xl shadow-sm" />
+        <div className="min-w-0 flex-1">
+          <p id="pwa-install-title" className="text-sm font-semibold text-ink-900">Install the BSC Workforce app</p>
+          <p className="mt-0.5 text-xs text-ink-500">Opens in its own window from your home screen or desktop, starts faster, and keeps you signed in.</p>
         </div>
+        <CloseButton onClick={notNow} />
       </div>
 
-      {/* Installation Instructions Modal */}
-      <Modal
-        open={showInstructions}
-        onClose={handleInstructionsClose}
-        title="Installation Instructions"
-        size="lg"
-      >
-        <div className="space-y-4">
-          <div className="rounded-lg bg-brand-50 p-3">
-            <p className="text-sm font-medium text-brand-800">Detected Device</p>
-            <p className="mt-1 text-sm text-brand-700">
-              {getDeviceDisplayName(deviceInfo)} · {deviceInfo.browser.charAt(0).toUpperCase() + deviceInfo.browser.slice(1)}
-            </p>
-          </div>
-          <div className="prose prose-sm max-w-none text-sm text-ink-700 whitespace-pre-line">
-            {instructions}
-          </div>
-          {deviceInfo.isIOS && (
-            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
-              <p className="text-sm font-medium text-amber-800">iOS Note</p>
-              <p className="mt-1 text-sm text-amber-700">
-                Safari does not support automatic installation prompts. You must use the Share button method described above.
-                Web Push notifications require iOS 16.4+ and adding the app to Home Screen.
-              </p>
-            </div>
-          )}
-          <div className="flex justify-end pt-2">
-            <button type="button" className="btn-primary" onClick={handleInstructionsClose}>
-              Got It
-            </button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Success Toast */}
-      {installed && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 px-4 pb-4 sm:px-6 sm:pb-6 animate-slide-down">
-          <div className="max-w-xl mx-auto">
-            <Card className="shadow-xl border-emerald-200 bg-emerald-50">
-              <div className="flex items-center gap-3 p-4">
-                <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
-                  <Icon name="checkCircle" size={20} className="text-emerald-600" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-sm font-semibold text-emerald-900">Application Installed Successfully</h3>
-                  <p className="mt-0.5 text-xs text-emerald-700">
-                    BSC Textiles Workforce is now available on your device. Access it from your home screen or app launcher.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className="flex-shrink-0 rounded-lg p-1.5 text-emerald-500 hover:bg-emerald-100"
-                  onClick={() => setInstalled(false)}
-                  aria-label="Dismiss"
-                >
-                  <Icon name="x" size={16} />
-                </button>
-              </div>
-            </Card>
-          </div>
-        </div>
+      {platform === 'ios' && (
+        <ol className="mx-4 mb-3 space-y-1.5 rounded-lg bg-ink-50 p-3 text-xs text-ink-700">
+          <li className="flex items-center gap-2">
+            <Step n={1} /> Tap <b>Share</b> <ShareGlyph /> in Safari's toolbar
+          </li>
+          <li className="flex items-center gap-2">
+            <Step n={2} /> Choose <b>Add to Home Screen</b>
+          </li>
+          <li className="flex items-center gap-2">
+            <Step n={3} /> Tap <b>Add</b>
+          </li>
+        </ol>
       )}
-    </>
+      {platform === 'android-menu' && (
+        <ol className="mx-4 mb-3 space-y-1.5 rounded-lg bg-ink-50 p-3 text-xs text-ink-700">
+          <li className="flex items-center gap-2">
+            <Step n={1} /> Open the browser menu <b>⋮</b>
+          </li>
+          <li className="flex items-center gap-2">
+            <Step n={2} /> Tap <b>Install app</b> or <b>Add to Home screen</b>
+          </li>
+        </ol>
+      )}
+
+      <div className="flex items-center justify-end gap-2 border-t border-ink-100 px-4 py-3">
+        <button type="button" className="btn-ghost btn-sm" onClick={notNow}>Not now</button>
+        {platform === 'one-tap' ? (
+          <button type="button" className="btn-primary btn-sm" onClick={() => void install()} disabled={busy}>
+            <Icon name="download" size={14} /> {busy ? 'Installing…' : 'Install'}
+          </button>
+        ) : (
+          <button type="button" className="btn-primary btn-sm" onClick={notNow}>Got it</button>
+        )}
+      </div>
+    </Popup>
   );
 }
 
-function getDeviceDisplayName(info: DeviceInfo): string {
-  switch (info.type) {
-    case 'windows': return 'Windows Desktop';
-    case 'android': return 'Android';
-    case 'iphone': return 'iPhone';
-    case 'ipad': return 'iPad';
-    case 'mac': return 'macOS';
-    case 'linux': return 'Linux';
-    default: return 'Unknown Device';
-  }
+function Popup({ children, labelledBy }: { children: React.ReactNode; labelledBy?: string }) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby={labelledBy}
+      className="no-print fixed inset-x-3 bottom-3 z-[60] sm:inset-x-auto sm:bottom-5 sm:right-5 sm:w-[380px] safe-bottom"
+    >
+      <div className="overflow-hidden rounded-xl border border-ink-200 bg-surface shadow-2xl animate-[pwa-in_.25s_ease-out]">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function CloseButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} aria-label="Close" className="shrink-0 rounded-md p-1 text-ink-400 hover:bg-ink-100 hover:text-ink-600">
+      <Icon name="x" size={16} />
+    </button>
+  );
+}
+
+function Step({ n }: { n: number }) {
+  return <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-100 text-[10px] font-bold text-brand-700">{n}</span>;
+}
+
+/** The iOS share icon (square with an up arrow). */
+function ShareGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-brand-700" aria-label="Share icon">
+      <path d="M12 3v12M8 7l4-4 4 4" />
+      <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" />
+    </svg>
+  );
 }
