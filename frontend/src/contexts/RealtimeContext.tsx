@@ -4,7 +4,7 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { ensureFreshAccess } from '../lib/api';
 import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
-import { showDesktopNotification } from '../lib/notifications';
+import { showDesktopNotification, playMessageSound } from '../lib/notifications';
 
 type Handler = (payload: unknown) => void;
 type ConnectionStatus = 'connecting' | 'online' | 'offline';
@@ -168,6 +168,26 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         });
       }
       window.dispatchEvent(new CustomEvent('notifications:changed'));
+    });
+
+    socket.on('message:new', (payload: { senderId?: number; senderName?: string; body?: string | null; conversationId?: number; id?: number }) => {
+      if (payload && payload.senderId !== user?.id) {
+        // Play the signature crisp messaging tone
+        playMessageSound();
+
+        // If the window is hidden or user is not viewing this specific chat, display desktop notification
+        const isCurrentChatOpen =
+          window.location.pathname.startsWith('/chat') &&
+          new URLSearchParams(window.location.search).get('c') === String(payload.conversationId);
+
+        if (document.visibilityState !== 'visible' || !isCurrentChatOpen) {
+          void showDesktopNotification(payload.senderName || 'New Chat Message', {
+            body: payload.body || 'You received a new message.',
+            link: `/chat?c=${payload.conversationId}`,
+            tag: `chat_msg_${payload.conversationId}`,
+          });
+        }
+      }
     });
 
     for (const event of CONNECTION_EVENTS) {

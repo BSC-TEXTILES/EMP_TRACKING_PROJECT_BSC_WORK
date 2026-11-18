@@ -6,7 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import { Avatar } from './ui';
 import { Icon } from './icons';
 import { cx } from '../lib/format';
-import { showDesktopNotification } from '../lib/notifications';
+import { showDesktopNotification, PhoneRingtone } from '../lib/notifications';
 
 export type CallType = 'audio' | 'video';
 
@@ -57,94 +57,7 @@ const CallContext = createContext<CallContextValue | null>(null);
 const DEFAULT_ICE: IceServerConfig[] = [{ urls: 'stun:stun.l.google.com:19302' }];
 const RING_TIMEOUT_MS = 45_000;
 
-/** Generated beep used only when WebAudio is blocked by the browser. */
-function ringtoneDataUri(): string {
-  const sampleRate = 8000;
-  const samples = sampleRate;
-  const buffer = new ArrayBuffer(44 + samples * 2);
-  const view = new DataView(buffer);
-  const write = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-  };
-  write(0, 'RIFF');
-  view.setUint32(4, 36 + samples * 2, true);
-  write(8, 'WAVE');
-  write(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  write(36, 'data');
-  view.setUint32(40, samples * 2, true);
-  for (let i = 0; i < samples; i += 1) {
-    const envelope = Math.min(1, i / 200, (samples - i) / 400);
-    const value = Math.sin((2 * Math.PI * 880 * i) / sampleRate) * 0.35 * envelope;
-    view.setInt16(44 + i * 2, Math.round(value * 32767), true);
-  }
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  for (let i = 0; i < bytes.length; i += 1) binary += String.fromCharCode(bytes[i]);
-  return `data:audio/wav;base64,${btoa(binary)}`;
-}
-
-class Ringtone {
-  private context: AudioContext | null = null;
-  private timer: number | null = null;
-  private audio: HTMLAudioElement | null = null;
-
-  start(kind: 'incoming' | 'outgoing'): void {
-    this.stop();
-    try {
-      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctor) throw new Error('unsupported');
-      const context = new Ctor();
-      this.context = context;
-      void context.resume().catch(() => undefined);
-      const beep = () => {
-        if (!this.context) return;
-        const now = this.context.currentTime;
-        const oscillator = this.context.createOscillator();
-        const gain = this.context.createGain();
-        oscillator.type = 'sine';
-        oscillator.frequency.value = kind === 'incoming' ? 880 : 440;
-        gain.gain.setValueAtTime(0.0001, now);
-        gain.gain.exponentialRampToValueAtTime(kind === 'incoming' ? 0.15 : 0.07, now + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
-        oscillator.connect(gain);
-        gain.connect(this.context.destination);
-        oscillator.start(now);
-        oscillator.stop(now + 0.75);
-      };
-      beep();
-      this.timer = window.setInterval(beep, kind === 'incoming' ? 1900 : 2600);
-    } catch {
-      const audio = new Audio(ringtoneDataUri());
-      audio.loop = true;
-      audio.volume = 0.5;
-      void audio.play().catch(() => undefined);
-      this.audio = audio;
-    }
-  }
-
-  stop(): void {
-    if (this.timer !== null) {
-      window.clearInterval(this.timer);
-      this.timer = null;
-    }
-    if (this.context) {
-      void this.context.close().catch(() => undefined);
-      this.context = null;
-    }
-    if (this.audio) {
-      this.audio.pause();
-      this.audio.removeAttribute('src');
-      this.audio = null;
-    }
-  }
-}
+// Phone ringing and ringback audio synthesized via PhoneRingtone in sound.ts
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
@@ -198,7 +111,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const offerSentRef = useRef(false);
   const ringTimeoutRef = useRef<number | null>(null);
-  const ringtoneRef = useRef(new Ringtone());
+  const ringtoneRef = useRef(new PhoneRingtone());
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const restartAttemptedRef = useRef(false);

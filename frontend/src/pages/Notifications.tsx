@@ -8,7 +8,14 @@ import { useToast } from '../contexts/ToastContext';
 import { Badge, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, Skeleton, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
 import { cx, formatDateTime, titleize } from '../lib/format';
-import { getNotificationPermission, requestNotificationPermission, type NotificationPermissionState } from '../lib/notifications';
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  type NotificationPermissionState,
+  playNotificationSound,
+  playMessageSound,
+  PhoneRingtone,
+} from '../lib/notifications';
 import type { NotificationItem } from '../lib/types';
 
 interface Announcement {
@@ -83,6 +90,14 @@ export default function Notifications() {
   const [devices, setDevices] = useState<PushDevice[]>([]);
   const [testingPush, setTestingPush] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
+  const [activeTestRing, setActiveTestRing] = useState<'incoming' | 'outgoing' | null>(null);
+  const testRingtoneRef = useState(() => new PhoneRingtone())[0];
+
+  useEffect(() => {
+    return () => {
+      testRingtoneRef.stop();
+    };
+  }, [testRingtoneRef]);
 
   useEffect(() => {
     setPermissionState(getNotificationPermission());
@@ -430,6 +445,123 @@ export default function Notifications() {
                     disabled={testingPush}
                   >
                     {testingPush ? 'Sending…' : 'Send Test Notification'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Audio Tones & Ringtone Card */}
+            <div className="rounded-xl border border-ink-200 bg-white p-4 shadow-sm">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-600 text-white">
+                  <Icon name="volume" size={20} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-ink-900">Audio, Phone Ringing & Messaging Tones</h4>
+                  <p className="text-xs text-ink-500">
+                    Test and verify real-time telephone ringing, outgoing ringback, chat messaging chimes, and system alert sounds.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 pt-2">
+                {/* Incoming Phone Ring */}
+                <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-ink-800">Phone Ring (Incoming)</span>
+                      <Icon name="phone" size={16} className="text-emerald-600" />
+                    </div>
+                    <p className="text-[11px] text-ink-500 mt-1">Dual-tone cadence for incoming user calls</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={cx(
+                      'mt-3 btn-sm w-full',
+                      activeTestRing === 'incoming' ? 'btn-danger' : 'btn-secondary',
+                    )}
+                    onClick={() => {
+                      if (activeTestRing === 'incoming') {
+                        testRingtoneRef.stop();
+                        setActiveTestRing(null);
+                      } else {
+                        testRingtoneRef.start('incoming');
+                        setActiveTestRing('incoming');
+                      }
+                    }}
+                  >
+                    {activeTestRing === 'incoming' ? '⏹ Stop Ringing' : '▶ Play Phone Ring'}
+                  </button>
+                </div>
+
+                {/* Outgoing Ringback */}
+                <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-ink-800">Ringback (Outgoing)</span>
+                      <Icon name="phone" size={16} className="text-blue-600" />
+                    </div>
+                    <p className="text-[11px] text-ink-500 mt-1">Calling pulse tone while waiting for answer</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={cx(
+                      'mt-3 btn-sm w-full',
+                      activeTestRing === 'outgoing' ? 'btn-danger' : 'btn-secondary',
+                    )}
+                    onClick={() => {
+                      if (activeTestRing === 'outgoing') {
+                        testRingtoneRef.stop();
+                        setActiveTestRing(null);
+                      } else {
+                        testRingtoneRef.start('outgoing');
+                        setActiveTestRing('outgoing');
+                      }
+                    }}
+                  >
+                    {activeTestRing === 'outgoing' ? '⏹ Stop Ringback' : '▶ Play Ringback'}
+                  </button>
+                </div>
+
+                {/* Messaging Tone */}
+                <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-ink-800">Chat Messaging Tone</span>
+                      <Icon name="chat" size={16} className="text-violet-600" />
+                    </div>
+                    <p className="text-[11px] text-ink-500 mt-1">Crisp ascending chime for new messages</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-3 btn-secondary btn-sm w-full"
+                    onClick={() => {
+                      playMessageSound();
+                      toast.info('Played messaging tone');
+                    }}
+                  >
+                    ▶ Play Message Tone
+                  </button>
+                </div>
+
+                {/* System Notification Chime */}
+                <div className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-ink-800">Workforce Alert Chime</span>
+                      <Icon name="bell" size={16} className="text-amber-600" />
+                    </div>
+                    <p className="text-[11px] text-ink-500 mt-1">Notification sound for tasks & reports</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-3 btn-secondary btn-sm w-full"
+                    onClick={() => {
+                      playNotificationSound('chime');
+                      toast.info('Played notification chime');
+                    }}
+                  >
+                    ▶ Play Alert Chime
                   </button>
                 </div>
               </div>
