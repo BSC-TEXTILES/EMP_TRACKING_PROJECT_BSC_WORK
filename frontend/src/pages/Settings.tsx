@@ -216,7 +216,7 @@ export default function Settings() {
             <div className="px-4 py-4 space-y-3">
               <button type="button" className="btn-secondary w-full sm:w-auto" onClick={async () => {
                 try {
-                  await api.post('/api/me/export-data');
+                  await api.post('/me/export-data');
                   toast.success('Data export started. You will receive an email when ready.');
                 } catch (caught) { toast.error(errorMessage(caught)); }
               }}>

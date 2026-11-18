@@ -162,7 +162,7 @@ export function PWAInstallPrompt() {
   // Register device with backend
   const registerDevice = async (info: DeviceInfo & { installed?: boolean }) => {
     try {
-      await api.post('/api/devices/register', {
+      await api.post('/devices/register', {
         deviceType: info.type,
         browser: info.browser,
         os: getOSName(info),

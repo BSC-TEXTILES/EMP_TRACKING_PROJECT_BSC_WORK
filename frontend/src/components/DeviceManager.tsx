@@ -31,7 +31,7 @@ export function DeviceManager() {
 
   const loadDevices = async () => {
     try {
-      const result = await api.get<{ devices: RegisteredDevice[] }>('/api/devices');
+      const result = await api.get<{ devices: RegisteredDevice[] }>('/devices');
       setDevices(result.devices);
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -47,7 +47,7 @@ export function DeviceManager() {
   const handleRevoke = async (deviceId: number) => {
     setRevokingId(deviceId);
     try {
-      await api.post(`/api/devices/${deviceId}/revoke`);
+      await api.post(`/devices/${deviceId}/revoke`);
       toast.success('Device access revoked');
       await loadDevices();
     } catch (caught) {
@@ -64,7 +64,7 @@ export function DeviceManager() {
     
     for (const device of otherDevices) {
       try {
-        await api.post(`/api/devices/${device.id}/revoke`);
+        await api.post(`/devices/${device.id}/revoke`);
       } catch {
         // Continue with others
       }
