@@ -25,6 +25,7 @@ const Leave = lazy(() => import('./pages/Leave'));
 const Projects = lazy(() => import('./pages/Projects'));
 const Collections = lazy(() => import('./pages/Collections'));
 const Employees = lazy(() => import('./pages/Employees'));
+const Groups = lazy(() => import('./pages/Groups'));
 const OrganizationSettings = lazy(() => import('./pages/OrganizationSettings'));
 const Organization = lazy(() => import('./pages/Organization'));
 const Analytics = lazy(() => import('./pages/Analytics'));
@@ -115,6 +116,7 @@ export function App() {
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
           <Route path="collections" element={<Collections />} />
+          <Route path="groups" element={<Groups />} />
           <Route path="admin/employees" element={<Employees />} />
           <Route path="organization" element={<Organization />} />
           <Route path="admin/organization" element={<OrganizationSettings />} />

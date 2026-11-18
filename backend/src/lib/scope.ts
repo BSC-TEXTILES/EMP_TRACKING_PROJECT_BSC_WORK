@@ -7,7 +7,7 @@ export async function subtreeIds(rootId: number): Promise<number[]> {
   const rows = await query<{ id: number }>(
     `WITH RECURSIVE subtree AS (
        SELECT id FROM employees WHERE id = ?
-       UNION ALL
+       UNION
        SELECT e.id FROM employees e JOIN subtree s ON e.manager_id = s.id
      )
      SELECT id FROM subtree`,

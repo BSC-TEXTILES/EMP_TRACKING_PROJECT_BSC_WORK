@@ -135,6 +135,9 @@ export function AppShell() {
       [/^\/$/, 'Dashboard'],
     ];
     const module = modules.find(([pattern]) => pattern.test(location.pathname))?.[1] ?? 'Platform';
+    // Tells supervisors which section is open (the route name only, e.g. 'tasks').
+    const section = location.pathname.split('/').filter(Boolean).slice(0, location.pathname.startsWith('/admin/') ? 2 : 1).join('-') || 'dashboard';
+    if (document.visibilityState === 'visible') void api.post('/presence/ping', { module: section.slice(0, 48) }).catch(() => undefined);
     // Only time while the page is visible AND the user interacted recently is
     // active work. Hidden tabs and idle periods are never counted. Interaction
     // is just a timestamp: no keys, clicks targets or content are recorded.
@@ -226,6 +229,12 @@ export function AppShell() {
       {
         label: 'Administration',
         items: [
+          {
+            to: '/groups',
+            label: 'Groups & Teams',
+            icon: 'users',
+            show: canAny('groups.view.own', 'groups.view.all', 'groups.manage', 'employees.view.team', 'employees.view.all'),
+          },
           {
             to: '/admin/employees',
             label: 'Employees',
@@ -557,7 +566,7 @@ export function AppShell() {
               </div>
 
               <div className="relative" ref={profileRef}>
-                <button type="button" className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-ink-100 transition-colors" onClick={() => setProfileOpen((open) => !open)}>
+                <button type="button" className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-ink-100 transition-colors cursor-pointer" onClick={() => setProfileOpen((open) => !open)}>
                   <div className="relative">
                     <Avatar name={user.fullName} src={user.photoUrl} size={32} />
                     <span className={cx('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white', currentPresence.dot)} />
@@ -570,12 +579,16 @@ export function AppShell() {
                 {profileOpen && (
                   <div className="absolute right-0 mt-2 w-64 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-xl z-50">
                     <div className="border-b border-ink-100 p-3.5 bg-ink-50/50">
-                      <div className="flex items-center gap-2.5">
+                      <Link
+                        to="/profile"
+                        onClick={() => setProfileOpen(false)}
+                        className="flex items-center gap-2.5 hover:opacity-90 transition-opacity cursor-pointer group"
+                      >
                         <Avatar name={user.fullName} src={user.photoUrl} size={38} />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-bold text-ink-900 truncate">{user.fullName}</p>
+                          <p className="text-sm font-bold text-ink-900 truncate group-hover:text-blue-600 transition-colors">{user.fullName}</p>
                           <p className="text-xs text-ink-500 truncate font-mono">{user.employeeCode} · {user.email}</p>
-                          <div className="mt-1 flex items-center gap-1.5">
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <Badge tone="brand">{user.roleName}</Badge>
                             <span className={cx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border', currentPresence.color)}>
                               <span className={cx('h-1.5 w-1.5 rounded-full', currentPresence.dot)} />
@@ -583,15 +596,15 @@ export function AppShell() {
                             </span>
                           </div>
                         </div>
-                      </div>
+                      </Link>
 
                       {/* Availability Selector */}
-                      <div className="mt-3 pt-2.5 border-t border-ink-200/60">
+                      <div className="mt-3 pt-2.5 border-t border-ink-200/60" onMouseDown={(e) => e.stopPropagation()}>
                         <label className="text-[10px] font-bold text-ink-500 uppercase tracking-wider block mb-1">Set Availability Status</label>
                         <select
                           value={presenceStatus}
                           onChange={(e) => void updatePresence(e.target.value)}
-                          className="input text-xs py-1 px-2 w-full font-medium"
+                          className="input text-xs py-1.5 px-2 w-full font-medium cursor-pointer"
                         >
                           {AVAILABILITY_OPTIONS.map((opt) => (
                             <option key={opt.key} value={opt.key}>{opt.label}</option>
@@ -601,21 +614,21 @@ export function AppShell() {
                     </div>
 
                     <div className="py-1">
-                      <Link to="/profile" onClick={() => setProfileOpen(false)} className="flex items-center gap-2.5 px-4 py-2 text-sm text-ink-700 hover:bg-ink-50">
-                        <Icon name="user" size={15} className="text-ink-500" />
+                      <Link to="/profile" onClick={() => setProfileOpen(false)} className="flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-50 cursor-pointer transition">
+                        <Icon name="user" size={16} className="text-ink-500" />
                         <span>View My Profile</span>
                       </Link>
                       <button
                         type="button"
                         onClick={() => { setProfileOpen(false); setPasswordModalOpen(true); }}
-                        className="flex w-full items-center gap-2.5 px-4 py-2 text-sm text-ink-700 hover:bg-ink-50 text-left"
+                        className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-50 text-left cursor-pointer transition"
                       >
-                        <Icon name="lock" size={15} className="text-ink-500" />
+                        <Icon name="lock" size={16} className="text-ink-500" />
                         <span>Update Password</span>
                       </button>
-                      <Link to="/notifications" onClick={() => setProfileOpen(false)} className="flex items-center justify-between px-4 py-2 text-sm text-ink-700 hover:bg-ink-50">
+                      <Link to="/notifications" onClick={() => setProfileOpen(false)} className="flex items-center justify-between px-4 py-2.5 text-sm font-medium text-ink-700 hover:bg-ink-50 cursor-pointer transition">
                         <div className="flex items-center gap-2.5">
-                          <Icon name="bell" size={15} className="text-ink-500" />
+                          <Icon name="bell" size={16} className="text-ink-500" />
                           <span>Notifications</span>
                         </div>
                         {unreadNotifications > 0 && (
@@ -626,13 +639,13 @@ export function AppShell() {
                       </Link>
                     </div>
 
-                    <div className="border-t border-ink-100 p-1">
+                    <div className="border-t border-ink-100 p-1.5">
                       <button
                         type="button"
                         onClick={() => { setProfileOpen(false); setSignOutModalOpen(true); }}
-                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-lg text-left"
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-sm font-semibold text-rose-600 hover:bg-rose-50 rounded-lg text-left cursor-pointer transition"
                       >
-                        <Icon name="logout" size={15} />
+                        <Icon name="logout" size={16} />
                         <span>Sign Out</span>
                       </button>
                     </div>

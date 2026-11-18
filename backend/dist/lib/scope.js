@@ -4,7 +4,7 @@ import { ApiError } from './http.js';
 export async function subtreeIds(rootId) {
     const rows = await query(`WITH RECURSIVE subtree AS (
        SELECT id FROM employees WHERE id = ?
-       UNION ALL
+       UNION
        SELECT e.id FROM employees e JOIN subtree s ON e.manager_id = s.id
      )
      SELECT id FROM subtree`, [rootId]);

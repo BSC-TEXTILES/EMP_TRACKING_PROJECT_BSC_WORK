@@ -36,6 +36,13 @@ export interface AuthUser {
   managerName: string | null;
   locationId: number | null;
   locationName: string | null;
+  locationCode?: string | null;
+  groupId?: number | null;
+  groupName?: string | null;
+  groupCode?: string | null;
+  teamLeaderId?: number | null;
+  teamLeaderName?: string | null;
+  allowedLocations?: Array<{ id: number; name: string; code: string; city: string | null }>;
   employmentType: string;
   joiningDate: string | null;
   permissions: string[];
@@ -59,6 +66,8 @@ interface EmployeeRow {
   designation_id: number | null;
   manager_id: number | null;
   location_id: number | null;
+  group_id?: number | null;
+  team_leader_id?: number | null;
   employment_type: string;
   joining_date: string | null;
   must_change_password: number;
@@ -74,13 +83,17 @@ interface EmployeeRow {
 const EMPLOYEE_SELECT = `
   SELECT e.*, r.slug AS role_slug, r.name AS role_name, r.level AS role_level,
          d.name AS department_name, dg.title AS designation_title,
-         m.full_name AS manager_name, l.name AS location_name
+         m.full_name AS manager_name, l.name AS location_name, l.code AS location_code,
+         wg.name AS group_name, wg.code AS group_code,
+         tl.full_name AS team_leader_name
   FROM employees e
   JOIN roles r ON r.id = e.role_id
   LEFT JOIN departments d ON d.id = e.department_id
   LEFT JOIN designations dg ON dg.id = e.designation_id
   LEFT JOIN employees m ON m.id = e.manager_id
   LEFT JOIN locations l ON l.id = e.location_id
+  LEFT JOIN workforce_groups wg ON wg.id = e.group_id
+  LEFT JOIN employees tl ON tl.id = e.team_leader_id
 `;
 
 const OTP_WINDOW_MAX = 5;
@@ -95,6 +108,10 @@ type EmployeeWithJoins = EmployeeRow & {
   designation_title: string | null;
   manager_name: string | null;
   location_name: string | null;
+  location_code: string | null;
+  group_name: string | null;
+  group_code: string | null;
+  team_leader_name: string | null;
 };
 
 function deviceFromUserAgent(ua: string): string {
@@ -172,6 +189,24 @@ export class AuthService {
     const row = await queryOne<EmployeeWithJoins>(`${EMPLOYEE_SELECT} WHERE e.id = ?`, [employeeId]);
     if (!row) return null;
     const permissions = await AuthService.permissionsFor(Number(row.id), Number(row.role_id));
+
+    // Determine allowed locations for the user
+    let allowedLocations: Array<{ id: number; name: string; code: string; city: string | null }> = [];
+    if (permissions.includes('locations.view.all') || Number(row.role_level) >= 90) {
+      allowedLocations = await query<{ id: number; name: string; code: string; city: string | null }>(
+        "SELECT id, name, code, city FROM locations WHERE is_active = 1 AND code IN ('BEL', 'DAV', 'SHI', 'HQ') ORDER BY name",
+      );
+    } else {
+      allowedLocations = await query<{ id: number; name: string; code: string; city: string | null }>(
+        `SELECT l.id, l.name, l.code, l.city 
+         FROM locations l 
+         WHERE l.is_active = 1 
+           AND (l.id = ? OR l.id IN (SELECT el.location_id FROM employee_locations el WHERE el.employee_id = ?))
+         ORDER BY l.name`,
+        [row.location_id ?? 0, row.id],
+      );
+    }
+
     return {
       id: Number(row.id),
       employeeCode: row.employee_code,
@@ -192,6 +227,13 @@ export class AuthService {
       managerName: row.manager_name,
       locationId: row.location_id ? Number(row.location_id) : null,
       locationName: row.location_name,
+      locationCode: row.location_code ?? null,
+      groupId: row.group_id ? Number(row.group_id) : null,
+      groupName: row.group_name ?? null,
+      groupCode: row.group_code ?? null,
+      teamLeaderId: row.team_leader_id ? Number(row.team_leader_id) : null,
+      teamLeaderName: row.team_leader_name ?? null,
+      allowedLocations,
       employmentType: row.employment_type,
       joiningDate: row.joining_date,
       permissions,
@@ -605,7 +647,9 @@ export class AuthService {
       if (payload?.sid) {
         const hash = sha256(payload.sid);
         const session = await queryOne<{ id: number; employee_id: number; created_at: string }>(
-          'SELECT id, employee_id, created_at FROM employee_sessions WHERE token_hash = ? AND revoked_at IS NULL',
+          // Not filtered on revoked_at: the refresh-token logout runs first and has already revoked
+          // the session, and the logout time must still be recorded.
+          'SELECT id, employee_id, created_at FROM employee_sessions WHERE token_hash = ?',
           [hash],
         );
         await execute(

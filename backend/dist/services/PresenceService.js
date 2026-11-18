@@ -115,8 +115,13 @@ export class PresenceService {
         return PresenceService.refresh(employeeId, 'manual');
     }
     /** Records that real user activity happened. Returns the new effective status. */
-    static async ping(employeeId) {
-        await execute('UPDATE employees SET last_active_at = NOW(3), last_seen_at = NOW(3) WHERE id = ?', [employeeId]);
+    static async ping(employeeId, module) {
+        if (module) {
+            await execute('UPDATE employees SET last_active_at = NOW(3), last_seen_at = NOW(3), current_module = ?, current_module_at = NOW(3) WHERE id = ?', [module, employeeId]);
+        }
+        else {
+            await execute('UPDATE employees SET last_active_at = NOW(3), last_seen_at = NOW(3) WHERE id = ?', [employeeId]);
+        }
         return PresenceService.refresh(employeeId);
     }
     /** Clears a manual status at explicit sign-out so it does not stick to the next day. */

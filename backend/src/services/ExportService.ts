@@ -3,7 +3,7 @@ import PDFDocument from 'pdfkit';
 import { query } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { addDays, endOfMonth, startOfMonth, today } from '../lib/dates.js';
-import { subtreeIds } from '../lib/scope.js';
+import { allowedLocationIds, requestedLocation, subtreeIds } from '../lib/scope.js';
 import type { AuthUser } from './AuthService.js';
 
 export type ExportType = 'attendance' | 'tasks' | 'kpi' | 'tickets' | 'leave' | 'daily-reports' | 'employees' | 'collections';
@@ -46,6 +46,12 @@ export class ExportService {
     const placeholders = teamIds === null ? null : teamIds.map(() => '?').join(',') || '0';
     const from = filters.from ?? startOfMonth(today());
     const to = filters.to ?? endOfMonth(today());
+
+    let targetLocationId: number | null = null;
+    if (filters.locationId) {
+      targetLocationId = await requestedLocation(user, filters.locationId);
+    }
+    const allowedLocs = await allowedLocationIds(user);
 
     switch (type) {
       case 'attendance': {
@@ -233,9 +239,17 @@ export class ExportService {
         if (!user.permissions.includes('employees.view.all') && !user.permissions.includes('employees.view.team')) {
           throw ApiError.forbidden('You cannot export employee records.');
         }
+        const locCondition = targetLocationId
+          ? `AND e.location_id = ${targetLocationId}`
+          : allowedLocs !== null
+            ? allowedLocs.length > 0
+              ? `AND (e.location_id IN (${allowedLocs.join(',')}) OR e.location_id IS NULL)`
+              : 'AND 1=0'
+            : '';
         const rows = await query<Record<string, unknown>>(
           `SELECT e.employee_code AS code, e.full_name AS employee, e.email, e.mobile, d.name AS department,
                   dg.title AS designation, r.name AS role, m.full_name AS manager, l.name AS location,
+                  wg.name AS group_name, tl.full_name AS team_leader,
                   e.employment_type, e.status, e.joining_date
            FROM employees e
            JOIN roles r ON r.id = e.role_id
@@ -243,7 +257,9 @@ export class ExportService {
            LEFT JOIN designations dg ON dg.id = e.designation_id
            LEFT JOIN employees m ON m.id = e.manager_id
            LEFT JOIN locations l ON l.id = e.location_id
-           WHERE e.status NOT IN ('rejected','deleted') ${placeholders ? `AND e.id IN (${placeholders})` : ''}
+           LEFT JOIN workforce_groups wg ON wg.id = e.group_id
+           LEFT JOIN employees tl ON tl.id = e.team_leader_id
+           WHERE e.status NOT IN ('rejected','deleted') ${placeholders ? `AND e.id IN (${placeholders})` : ''} ${locCondition}
            ORDER BY e.full_name`,
           placeholders ? teamIds! : [],
         );
@@ -256,9 +272,11 @@ export class ExportService {
             { header: 'Mobile', key: 'mobile', width: 16 },
             { header: 'Department', key: 'department', width: 20 },
             { header: 'Designation', key: 'designation', width: 24 },
+            { header: 'Location', key: 'location', width: 18 },
+            { header: 'Group', key: 'group_name', width: 18 },
+            { header: 'Team Leader', key: 'team_leader', width: 22 },
             { header: 'Role', key: 'role', width: 20 },
             { header: 'Manager', key: 'manager', width: 22 },
-            { header: 'Location', key: 'location', width: 18 },
             { header: 'Type', key: 'employment_type', width: 14 },
             { header: 'Status', key: 'status', width: 16 },
             { header: 'Joined', key: 'joining_date', width: 12 },

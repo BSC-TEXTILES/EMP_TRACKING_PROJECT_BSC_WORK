@@ -46,6 +46,11 @@ export default function Employees() {
   const debounced = useDebounced(search);
   const [status, setStatus] = useState('');
   const [departmentId, setDepartmentId] = useState('');
+  const [locationId, setLocationId] = useState('');
+  const [groupId, setGroupId] = useState('');
+  const [allowedLocations, setAllowedLocations] = useState<Array<{ id: number; code: string; name: string }>>([]);
+  const [locationGroups, setLocationGroups] = useState<Array<{ id: number; code: string; name: string }>>([]);
+
   const [page, setPage] = useState(1);
   const [data, setData] = useState<{ items: EmployeeRow[]; total: number } | null>(null);
   const [structure, setStructure] = useState<Structure | null>(null);
@@ -53,11 +58,33 @@ export default function Employees() {
   const [modalTab, setModalTab] = useState<'overview' | 'edit' | 'performance'>('overview');
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
-  const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: '' });
+  const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', groupId: '', teamLeaderId: '', employmentType: '' });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '' });
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
+
+  // Approval modal state
+  const [approveTarget, setApproveTarget] = useState<EmployeeRow | null>(null);
+  const [approveForm, setApproveForm] = useState({
+    locationId: '',
+    groupId: '',
+    roleId: '',
+    departmentId: '',
+    managerId: '',
+  });
+  const [approvingBusy, setApprovingBusy] = useState(false);
+
+  // Transfer modal state
+  const [transferTarget, setTransferTarget] = useState<EmployeeRow | null>(null);
+  const [transferForm, setTransferForm] = useState({
+    locationId: '',
+    groupId: '',
+    teamLeaderId: '',
+    reason: '',
+  });
+  const [transferringBusy, setTransferringBusy] = useState(false);
+  const [targetLocationGroups, setTargetLocationGroups] = useState<Array<{ id: number; code: string; name: string }>>([]);
 
   // Role hierarchy: mirror the server rule so people only see actions they may take.
   const myLevel = user?.roleLevel ?? 0;
@@ -66,6 +93,8 @@ export default function Employees() {
     structure?.roles.find((r) => r.id === roleIdOrName || r.name === roleIdOrName)?.level ?? Number.MAX_SAFE_INTEGER;
   const canManage = (employeeId: number, roleIdOrName: number | string | null | undefined) =>
     employeeId !== user?.id && (isElevatedAdmin || roleLevelOf(roleIdOrName) < myLevel);
+  const canTransfer = (employeeId: number) =>
+    employeeId !== user?.id && (user?.roleSlug === 'super_admin' || (user?.roleLevel ?? 0) >= 70 || has('employees.manage') || has('employees.transfer'));
   const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
 
   const confirmDeleteEmployee = async () => {
@@ -94,12 +123,98 @@ export default function Employees() {
     setDeleteConfirmText('');
   };
 
+  const openApproveModal = (emp: EmployeeRow) => {
+    setApproveTarget(emp);
+    const defaultLoc = emp.locationId ? String(emp.locationId) : (allowedLocations[0]?.id ? String(allowedLocations[0].id) : '');
+    setApproveForm({
+      locationId: defaultLoc,
+      groupId: emp.groupId ? String(emp.groupId) : '',
+      roleId: emp.roleName ? String(structure?.roles.find((r) => r.name === emp.roleName)?.id ?? '') : '',
+      departmentId: emp.departmentId ? String(emp.departmentId) : '',
+      managerId: emp.managerId ? String(emp.managerId) : '',
+    });
+    if (defaultLoc) {
+      api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${defaultLoc}`)
+        .then((res) => setTargetLocationGroups(res.items))
+        .catch(() => setTargetLocationGroups([]));
+    }
+  };
+
+  const handleConfirmApprove = async () => {
+    if (!approveTarget) return;
+    setApprovingBusy(true);
+    try {
+      await api.post(`/employees/${approveTarget.id}/approve`, {
+        locationId: approveForm.locationId ? Number(approveForm.locationId) : undefined,
+        groupId: approveForm.groupId ? Number(approveForm.groupId) : undefined,
+        roleId: approveForm.roleId ? Number(approveForm.roleId) : undefined,
+        departmentId: approveForm.departmentId ? Number(approveForm.departmentId) : undefined,
+        managerId: approveForm.managerId ? Number(approveForm.managerId) : undefined,
+      });
+      toast.success(`Registration approved! ${approveTarget.fullName} is now verified & active.`);
+      setApproveTarget(null);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setApprovingBusy(false);
+    }
+  };
+
+  const rejectEmployee = async (employeeId: number, fullName: string) => {
+    const reason = window.prompt(`Reason for rejecting ${fullName}'s registration (min 5 characters):`);
+    if (!reason || reason.trim().length < 5) {
+      if (reason) toast.error('Rejection reason must be at least 5 characters.');
+      return;
+    }
+    try {
+      await api.post(`/employees/${employeeId}/reject`, { reason: reason.trim() });
+      toast.success(`Registration rejected for ${fullName}.`);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
+
+  const openTransferModal = (emp: EmployeeRow) => {
+    setTransferTarget(emp);
+    setTransferForm({
+      locationId: '',
+      groupId: '',
+      teamLeaderId: '',
+      reason: '',
+    });
+    setTargetLocationGroups([]);
+  };
+
+  const handleConfirmTransfer = async () => {
+    if (!transferTarget || !transferForm.locationId) return;
+    setTransferringBusy(true);
+    try {
+      await api.post(`/employees/${transferTarget.id}/transfer`, {
+        locationId: Number(transferForm.locationId),
+        groupId: transferForm.groupId ? Number(transferForm.groupId) : null,
+        teamLeaderId: transferForm.teamLeaderId ? Number(transferForm.teamLeaderId) : null,
+        reason: transferForm.reason.trim() || 'Store relocation by authorized administrator',
+      });
+      toast.success(`${transferTarget.fullName} transferred successfully.`);
+      setTransferTarget(null);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setTransferringBusy(false);
+    }
+  };
+
   const load = async () => {
     try {
       const query = new URLSearchParams({ page: String(page), pageSize: '25' });
       if (debounced) query.set('search', debounced);
       if (status) query.set('status', status);
       if (departmentId) query.set('departmentId', departmentId);
+      if (locationId) query.set('locationId', locationId);
+      if (groupId) query.set('groupId', groupId);
       const result = await api.get<{ items: EmployeeRow[]; total: number }>(`/employees?${query.toString()}`);
       setData(result);
     } catch (caught) {
@@ -110,11 +225,24 @@ export default function Employees() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, debounced, status, departmentId]);
+  }, [page, debounced, status, departmentId, locationId, groupId]);
 
   useEffect(() => {
     api.get<Structure>('/employees/structure').then(setStructure).catch(() => undefined);
+    api.get<{ locations: Array<{ id: number; code: string; name: string }> }>('/employees/allowed-locations')
+      .then((res) => setAllowedLocations(res.locations))
+      .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (locationId) {
+      api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locationId}`)
+        .then((res) => setLocationGroups(res.items))
+        .catch(() => setLocationGroups([]));
+    } else {
+      setLocationGroups([]);
+    }
+  }, [locationId]);
 
   const openDetail = async (id: number, tab: 'overview' | 'edit' | 'performance' = 'overview') => {
     try {
@@ -127,6 +255,8 @@ export default function Employees() {
         designationId: result.designationId ? String(result.designationId) : '',
         managerId: result.managerId ? String(result.managerId) : '',
         locationId: result.locationId ? String(result.locationId) : '',
+        groupId: result.groupId ? String(result.groupId) : '',
+        teamLeaderId: result.teamLeaderId ? String(result.teamLeaderId) : '',
         employmentType: result.employmentType,
       });
       setEditForm({
@@ -172,8 +302,12 @@ export default function Employees() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <StatCard label="Employees in scope" value={employeesList.length} icon={<Icon name="users" size={18} />} />
-        <StatCard label="Pending approval" value={pending.length} tone="warning" icon={<Icon name="clock" size={18} />} />
+        <div className="cursor-pointer" onClick={() => { setStatus(''); setLocationId(''); setGroupId(''); setDepartmentId(''); setPage(1); }} title="Show all employees in scope">
+          <StatCard label="Employees in scope" value={employeesList.length} icon={<Icon name="users" size={18} />} />
+        </div>
+        <div className="cursor-pointer" onClick={() => { setStatus(status === 'pending_approval' ? '' : 'pending_approval'); setPage(1); }} title="Click to filter pending approvals">
+          <StatCard label="Pending approval" value={pending.length} tone={pending.length > 0 ? 'warning' : 'neutral'} icon={<Icon name="clock" size={18} />} />
+        </div>
         <StatCard label="Departments" value={structure?.departments.length ?? '—'} tone="neutral" icon={<Icon name="building" size={18} />} />
       </div>
 
@@ -183,11 +317,21 @@ export default function Employees() {
             <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
             <input className="input pl-9" placeholder="Search name, code, email, mobile" value={search} onChange={(event) => { setSearch(event.target.value); setParams(event.target.value ? { search: event.target.value } : {}); setPage(1); }} />
           </div>
+          <select className="input w-auto font-medium" value={locationId} onChange={(event) => { setLocationId(event.target.value); setGroupId(''); setPage(1); }}>
+            <option value="">All locations</option>
+            {allowedLocations.map((loc) => <option key={loc.id} value={loc.id}>{loc.code} – {loc.name}</option>)}
+          </select>
+          {locationId && (
+            <select className="input w-auto font-medium" value={groupId} onChange={(event) => { setGroupId(event.target.value); setPage(1); }}>
+              <option value="">All groups</option>
+              {locationGroups.map((g) => <option key={g.id} value={g.id}>{g.code} – {g.name}</option>)}
+            </select>
+          )}
           <select className="input w-auto" value={departmentId} onChange={(event) => { setDepartmentId(event.target.value); setPage(1); }}>
             <option value="">All departments</option>
             {structure?.departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
           </select>
-          <select className="input w-auto" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
+          <select className="input w-auto font-medium" value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
             <option value="">All statuses</option>
             {['active', 'pending_approval', 'pending_verification', 'inactive'].map((value) => <option key={value} value={value}>{titleize(value)}</option>)}
           </select>
@@ -204,6 +348,7 @@ export default function Employees() {
                 <thead>
                   <tr>
                     <th>Employee</th>
+                    <th>Location & Group</th>
                     <th>Role</th>
                     <th>Department</th>
                     <th>Manager</th>
@@ -225,6 +370,17 @@ export default function Employees() {
                           </div>
                         </div>
                       </td>
+                      <td>
+                        <div className="flex flex-col gap-0.5">
+                          <span className="inline-flex items-center gap-1 font-mono font-bold text-xs text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 w-fit">
+                            <Icon name="building" size={11} />
+                            {employee.locationCode || employee.locationName || 'Unassigned'}
+                          </span>
+                          <span className="text-xs text-ink-600 font-medium truncate max-w-[140px]">
+                            {employee.groupName || <span className="text-ink-400 italic">No group</span>}
+                          </span>
+                        </div>
+                      </td>
                       <td className="text-ink-600">{employee.roleName}</td>
                       <td className="text-ink-600">{employee.departmentName ?? '—'}</td>
                       <td className="text-ink-600">{employee.managerName ?? '—'}</td>
@@ -232,23 +388,16 @@ export default function Employees() {
                       <td className="text-ink-700">{employee.openTasks}</td>
                       <td><StatusBadge status={employee.status} /></td>
                       <td className="text-right" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center justify-end gap-1.5">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
                           {['pending_approval', 'pending_verification'].includes(employee.status) && has('employees.approve', 'employees.manage') && (
                             <>
                               <button
                                 type="button"
                                 title="Approve registration & activate"
-                                className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 shadow-sm"
-                                onClick={async (e) => {
+                                className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 shadow-sm cursor-pointer"
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  if (!window.confirm(`Approve registration for ${employee.fullName} (${employee.employeeCode})? This will verify and activate their account immediately.`)) return;
-                                  try {
-                                    await api.post(`/employees/${employee.id}/approve`, {});
-                                    toast.success(`Registration approved! ${employee.fullName} is now active.`);
-                                    await load();
-                                  } catch (caught) {
-                                    toast.error(errorMessage(caught));
-                                  }
+                                  openApproveModal(employee);
                                 }}
                               >
                                 <Icon name="check" size={13} />
@@ -257,18 +406,10 @@ export default function Employees() {
                               <button
                                 type="button"
                                 title="Reject registration"
-                                className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
-                                onClick={async (e) => {
+                                className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50 cursor-pointer"
+                                onClick={(e) => {
                                   e.stopPropagation();
-                                  const reason = window.prompt(`Reason for rejecting ${employee.fullName}'s registration (min 5 characters):`);
-                                  if (!reason) return;
-                                  try {
-                                    await api.post(`/employees/${employee.id}/reject`, { reason });
-                                    toast.success(`Registration rejected for ${employee.fullName}.`);
-                                    await load();
-                                  } catch (caught) {
-                                    toast.error(errorMessage(caught));
-                                  }
+                                  void rejectEmployee(employee.id, employee.fullName);
                                 }}
                               >
                                 <Icon name="x" size={13} />
@@ -279,7 +420,7 @@ export default function Employees() {
                           <button
                             type="button"
                             title="View full details"
-                            className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+                            className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold cursor-pointer"
                             onClick={() => void openDetail(employee.id, 'overview')}
                           >
                             <Icon name="eye" size={13} />
@@ -288,17 +429,31 @@ export default function Employees() {
                           <button
                             type="button"
                             title="Edit employee"
-                            className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold"
+                            className="btn-primary btn-xs inline-flex items-center gap-1 font-semibold cursor-pointer"
                             onClick={() => void openDetail(employee.id, 'edit')}
                           >
                             <Icon name="edit" size={13} />
                             <span>Edit</span>
                           </button>
+                          {canTransfer(employee.id) && (
+                            <button
+                              type="button"
+                              title="Transfer Location / Group"
+                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openTransferModal(employee);
+                              }}
+                            >
+                              <Icon name="send" size={13} />
+                              <span>Transfer</span>
+                            </button>
+                          )}
                           {canManage(employee.id, employee.roleName) && (
                             <button
                               type="button"
                               title="Delete employee"
-                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
+                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50 cursor-pointer"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 deleteEmployee(employee.id, employee.fullName, employee.employeeCode);
@@ -640,7 +795,14 @@ export default function Employees() {
         )}
       </Modal>
 
-      <CreateEmployee open={createOpen} onClose={() => setCreateOpen(false)} structure={structure} employees={employeesList} onCreated={() => { setCreateOpen(false); void load(); }} />
+      <CreateEmployee
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        structure={structure}
+        allowedLocations={allowedLocations}
+        employees={employeesList}
+        onCreated={() => { setCreateOpen(false); void load(); }}
+      />
 
       {/* Delete Employee Confirmation Modal */}
       <Modal
@@ -699,18 +861,270 @@ export default function Employees() {
           </div>
         )}
       </Modal>
+
+      {/* Approve Registration Modal */}
+      <Modal
+        open={Boolean(approveTarget)}
+        onClose={() => setApproveTarget(null)}
+        title={`Approve Registration: ${approveTarget?.fullName ?? ''}`}
+        description="Verify and assign the employee's store location, group, role, and reporting line to activate their account."
+        size="md"
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setApproveTarget(null)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary !bg-emerald-600 hover:!bg-emerald-700 !text-white !border-emerald-600 cursor-pointer"
+              disabled={approvingBusy || !approveForm.locationId}
+              onClick={() => void handleConfirmApprove()}
+            >
+              {approvingBusy ? 'Approving…' : 'Confirm & Activate'}
+            </button>
+          </>
+        }
+      >
+        <div className="space-y-3.5">
+          <div className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-800 border border-emerald-200">
+            Approving this registration will grant access to the system. Assign the store location and group to enforce location boundaries.
+          </div>
+
+          <Field label="Store Location" required hint="BEL, DAV, SHI, or HQ">
+            <select
+              className="input font-medium"
+              value={approveForm.locationId}
+              onChange={(e) => {
+                const locId = e.target.value;
+                setApproveForm({ ...approveForm, locationId: locId, groupId: '' });
+                if (locId) {
+                  api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locId}`)
+                    .then((res) => setTargetLocationGroups(res.items))
+                    .catch(() => setTargetLocationGroups([]));
+                } else {
+                  setTargetLocationGroups([]);
+                }
+              }}
+              required
+            >
+              <option value="">Select Location</option>
+              {allowedLocations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.code} – {l.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Workforce Group">
+            <select
+              className="input"
+              value={approveForm.groupId}
+              onChange={(e) => setApproveForm({ ...approveForm, groupId: e.target.value })}
+            >
+              <option value="">Select Group (Optional)</option>
+              {targetLocationGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.code} – {g.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Role" required>
+              <select
+                className="input"
+                value={approveForm.roleId}
+                onChange={(e) => setApproveForm({ ...approveForm, roleId: e.target.value })}
+                required
+              >
+                <option value="">Select Role</option>
+                {assignableRoles.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Department" required>
+              <select
+                className="input"
+                value={approveForm.departmentId}
+                onChange={(e) => setApproveForm({ ...approveForm, departmentId: e.target.value })}
+                required
+              >
+                <option value="">Select Department</option>
+                {structure?.departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Reporting Manager">
+            <select
+              className="input"
+              value={approveForm.managerId}
+              onChange={(e) => setApproveForm({ ...approveForm, managerId: e.target.value })}
+            >
+              <option value="">Select Manager</option>
+              {employeesList
+                .filter((e) => e.id !== approveTarget?.id)
+                .map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.fullName} ({e.employeeCode})
+                  </option>
+                ))}
+            </select>
+          </Field>
+        </div>
+      </Modal>
+
+      {/* Transfer Location Modal */}
+      <Modal
+        open={Boolean(transferTarget)}
+        onClose={() => setTransferTarget(null)}
+        title={`Transfer Employee: ${transferTarget?.fullName ?? ''}`}
+        description="Transfer employee to another store location and assign their new team group."
+        size="md"
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setTransferTarget(null)}>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="transfer-employee-form"
+              className="btn-primary"
+              disabled={transferringBusy || !transferForm.locationId}
+            >
+              {transferringBusy ? 'Transferring…' : 'Confirm Transfer'}
+            </button>
+          </>
+        }
+      >
+        <form
+          id="transfer-employee-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void handleConfirmTransfer();
+          }}
+          className="space-y-3.5"
+        >
+          <Field label="Current Location">
+            <input
+              className="input bg-ink-100 font-mono"
+              value={`${transferTarget?.locationName ?? 'Unassigned'} (${transferTarget?.locationCode ?? '—'})`}
+              disabled
+            />
+          </Field>
+
+          <Field label="Destination Store Location" required>
+            <select
+              className="input font-medium"
+              value={transferForm.locationId}
+              onChange={(e) => {
+                const locId = e.target.value;
+                setTransferForm({ ...transferForm, locationId: locId, groupId: '' });
+                if (locId) {
+                  api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locId}`)
+                    .then((res) => setTargetLocationGroups(res.items))
+                    .catch(() => setTargetLocationGroups([]));
+                } else {
+                  setTargetLocationGroups([]);
+                }
+              }}
+              required
+            >
+              <option value="">Select New Store Location</option>
+              {allowedLocations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.code} – {l.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="New Workforce Group">
+            <select
+              className="input"
+              value={transferForm.groupId}
+              onChange={(e) => setTransferForm({ ...transferForm, groupId: e.target.value })}
+            >
+              <option value="">Select Group in Destination Store (Optional)</option>
+              {targetLocationGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.code} – {g.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Reason for Transfer" required hint="Mandatory audit trail log">
+            <textarea
+              className="input min-h-[70px]"
+              placeholder="e.g. Relocation to Davanagere Store per branch requirement."
+              value={transferForm.reason}
+              onChange={(e) => setTransferForm({ ...transferForm, reason: e.target.value })}
+              required
+            />
+          </Field>
+        </form>
+      </Modal>
     </div>
   );
 }
 
-function CreateEmployee({ open, onClose, structure, employees, onCreated }: { open: boolean; onClose: () => void; structure: Structure | null; employees: EmployeeRow[]; onCreated: () => void }) {
+function CreateEmployee({
+  open,
+  onClose,
+  structure,
+  allowedLocations,
+  employees,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  structure: Structure | null;
+  allowedLocations: Array<{ id: number; code: string; name: string }>;
+  employees: EmployeeRow[];
+  onCreated: () => void;
+}) {
   const toast = useToast();
   const { user } = useAuth();
   const myLevel = user?.roleLevel ?? 0;
   const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
-  const [form, setForm] = useState({ fullName: '', email: '', mobile: '', employeeCode: '', roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: 'full_time', password: '' });
+  const [form, setForm] = useState({
+    fullName: '',
+    email: '',
+    mobile: '',
+    employeeCode: '',
+    roleId: '',
+    departmentId: '',
+    designationId: '',
+    managerId: '',
+    locationId: '',
+    groupId: '',
+    employmentType: 'full_time',
+    password: '',
+  });
+  const [availableGroups, setAvailableGroups] = useState<Array<{ id: number; code: string; name: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<{ employeeCode: string } | null>(null);
+
+  useEffect(() => {
+    if (form.locationId) {
+      api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${form.locationId}`)
+        .then((res) => setAvailableGroups(res.items))
+        .catch(() => setAvailableGroups([]));
+    } else {
+      setAvailableGroups([]);
+    }
+  }, [form.locationId]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -724,6 +1138,7 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
         designationId: form.designationId ? Number(form.designationId) : null,
         managerId: form.managerId ? Number(form.managerId) : null,
         locationId: form.locationId ? Number(form.locationId) : null,
+        groupId: form.groupId ? Number(form.groupId) : null,
       });
       setCreated(result);
       toast.success(`Employee ${result.employeeCode} created.`);
@@ -736,8 +1151,25 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Add employee" size="lg" description="Creates an active account with the selected role. Share the temporary password securely."
-      footer={<><button className="btn-secondary" onClick={onClose}>Close</button>{!created && <button className="btn-primary" form="employee-form" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create employee'}</button>}</>}>
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Add employee"
+      size="lg"
+      description="Creates an active account with the selected store location and role. Share the temporary password securely."
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Close
+          </button>
+          {!created && (
+            <button className="btn-primary" form="employee-form" type="submit" disabled={busy}>
+              {busy ? 'Creating…' : 'Create employee'}
+            </button>
+          )}
+        </>
+      }
+    >
       {created ? (
         <div className="rounded-lg bg-emerald-50 p-4 text-sm text-emerald-800">
           Employee created with code <strong>{created.employeeCode}</strong>. They can sign in with their email and the password you set.
@@ -745,47 +1177,158 @@ function CreateEmployee({ open, onClose, structure, employees, onCreated }: { op
       ) : (
         <form id="employee-form" onSubmit={submit} className="space-y-3">
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Full name" required><input className="input" value={form.fullName} onChange={(event) => setForm({ ...form, fullName: event.target.value })} required /></Field>
-            <Field label="Employee code"><input className="input" value={form.employeeCode} onChange={(event) => setForm({ ...form, employeeCode: event.target.value })} placeholder="Auto" /></Field>
-            <Field label="Email" required><input type="email" className="input" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required /></Field>
-            <Field label="Mobile" required><input className="input" value={form.mobile} onChange={(event) => setForm({ ...form, mobile: event.target.value })} required /></Field>
+            <Field label="Full name" required>
+              <input
+                className="input"
+                value={form.fullName}
+                onChange={(event) => setForm({ ...form, fullName: event.target.value })}
+                required
+              />
+            </Field>
+            <Field label="Employee code">
+              <input
+                className="input"
+                value={form.employeeCode}
+                onChange={(event) => setForm({ ...form, employeeCode: event.target.value })}
+                placeholder="Auto"
+              />
+            </Field>
+            <Field label="Email" required>
+              <input
+                type="email"
+                className="input"
+                value={form.email}
+                onChange={(event) => setForm({ ...form, email: event.target.value })}
+                required
+              />
+            </Field>
+            <Field label="Mobile" required>
+              <input
+                className="input"
+                value={form.mobile}
+                onChange={(event) => setForm({ ...form, mobile: event.target.value })}
+                required
+              />
+            </Field>
+
+            <Field label="Store Location" required hint="BEL, DAV, SHI, HQ">
+              <select
+                className="input font-medium"
+                value={form.locationId}
+                onChange={(event) => setForm({ ...form, locationId: event.target.value, groupId: '' })}
+                required
+              >
+                <option value="">Select Location</option>
+                {allowedLocations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.code} – {loc.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Workforce Group">
+              <select
+                className="input"
+                value={form.groupId}
+                onChange={(event) => setForm({ ...form, groupId: event.target.value })}
+              >
+                <option value="">Select Group (Optional)</option>
+                {availableGroups.map((grp) => (
+                  <option key={grp.id} value={grp.id}>
+                    {grp.code} – {grp.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
             <Field label="Role" required>
-              <select className="input" value={form.roleId} onChange={(event) => setForm({ ...form, roleId: event.target.value })} required>
+              <select
+                className="input"
+                value={form.roleId}
+                onChange={(event) => setForm({ ...form, roleId: event.target.value })}
+                required
+              >
                 <option value="">Select role</option>
-                {assignableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+                {assignableRoles.map((role) => (
+                  <option key={role.id} value={role.id}>
+                    {role.name}
+                  </option>
+                ))}
               </select>
             </Field>
+
             <Field label="Department" required>
-              <select className="input" value={form.departmentId} onChange={(event) => setForm({ ...form, departmentId: event.target.value })} required>
+              <select
+                className="input"
+                value={form.departmentId}
+                onChange={(event) => setForm({ ...form, departmentId: event.target.value })}
+                required
+              >
                 <option value="">Select department</option>
-                {structure?.departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+                {structure?.departments.map((department) => (
+                  <option key={department.id} value={department.id}>
+                    {department.name}
+                  </option>
+                ))}
               </select>
             </Field>
+
             <Field label="Designation">
-              <select className="input" value={form.designationId} onChange={(event) => setForm({ ...form, designationId: event.target.value })}>
+              <select
+                className="input"
+                value={form.designationId}
+                onChange={(event) => setForm({ ...form, designationId: event.target.value })}
+              >
                 <option value="">Select designation</option>
-                {structure?.designations.map((designation) => <option key={designation.id} value={designation.id}>{designation.title}</option>)}
+                {structure?.designations.map((designation) => (
+                  <option key={designation.id} value={designation.id}>
+                    {designation.title}
+                  </option>
+                ))}
               </select>
             </Field>
+
             <Field label="Reporting manager">
-              <select className="input" value={form.managerId} onChange={(event) => setForm({ ...form, managerId: event.target.value })}>
+              <select
+                className="input"
+                value={form.managerId}
+                onChange={(event) => setForm({ ...form, managerId: event.target.value })}
+              >
                 <option value="">Select manager</option>
-                {employees.filter((e) => e.fullName.toLowerCase().includes('gagan') || e.fullName.toLowerCase().includes('chetan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
+                {employees
+                  .filter((e) => e.fullName.toLowerCase().includes('gagan') || e.fullName.toLowerCase().includes('chetan') || (user?.roleLevel ?? 0) >= 70)
+                  .map((employee) => (
+                    <option key={employee.id} value={employee.id}>
+                      {employee.fullName} ({employee.employeeCode})
+                    </option>
+                  ))}
               </select>
             </Field>
-            <Field label="Location">
-              <select className="input" value={form.locationId} onChange={(event) => setForm({ ...form, locationId: event.target.value })}>
-                <option value="">Select location</option>
-                {structure?.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
-              </select>
-            </Field>
+
             <Field label="Employment type">
-              <select className="input" value={form.employmentType} onChange={(event) => setForm({ ...form, employmentType: event.target.value })}>
-                {['full_time', 'part_time', 'contract', 'intern', 'probation'].map((value) => <option key={value} value={value}>{titleize(value)}</option>)}
+              <select
+                className="input"
+                value={form.employmentType}
+                onChange={(event) => setForm({ ...form, employmentType: event.target.value })}
+              >
+                {['full_time', 'part_time', 'contract', 'intern', 'probation'].map((value) => (
+                  <option key={value} value={value}>
+                    {titleize(value)}
+                  </option>
+                ))}
               </select>
             </Field>
+
             <Field label="Temporary password" required hint="Minimum 10 characters">
-              <input type="password" className="input" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} minLength={10} required />
+              <input
+                type="password"
+                className="input"
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                minLength={10}
+                required
+              />
             </Field>
           </div>
         </form>

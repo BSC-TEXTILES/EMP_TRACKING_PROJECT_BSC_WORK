@@ -30,8 +30,8 @@ employeesRouter.get(
 
 employeesRouter.get(
   '/hierarchy',
-  asyncHandler(async (_req, res) => {
-    res.json({ employees: await EmployeeService.hierarchy() });
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ employees: await EmployeeService.hierarchy(currentUser(req)) });
   }),
 );
 
@@ -50,6 +50,14 @@ employeesRouter.get(
 );
 
 employeesRouter.get(
+  '/allowed-locations',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    res.json({ locations: await EmployeeService.getUserAllowedLocations(user) });
+  }),
+);
+
+employeesRouter.get(
   '/',
   requireAny('employees.view.own', 'employees.view.team', 'employees.view.all'),
   asyncHandler(async (req: AuthedRequest, res) => {
@@ -60,6 +68,7 @@ employeesRouter.get(
         departmentId: req.query.departmentId ? intParam(String(req.query.departmentId), 'departmentId') : undefined,
         designationId: req.query.designationId ? intParam(String(req.query.designationId), 'designationId') : undefined,
         locationId: req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined,
+        groupId: req.query.groupId ? intParam(String(req.query.groupId), 'groupId') : undefined,
         managerId: req.query.managerId ? intParam(String(req.query.managerId), 'managerId') : undefined,
         status: req.query.status ? String(req.query.status) : undefined,
         roleId: req.query.roleId ? intParam(String(req.query.roleId), 'roleId') : undefined,
@@ -86,12 +95,19 @@ employeesRouter.post(
         designationId: z.number().int().positive().nullable().optional(),
         managerId: z.number().int().positive().nullable().optional(),
         locationId: z.number().int().positive().nullable().optional(),
+        groupId: z.number().int().positive().nullable().optional(),
+        teamLeaderId: z.number().int().positive().nullable().optional(),
         employmentType: z.string().max(32).optional(),
         password: z.string().min(10).max(200),
       }),
       req.body,
     );
-    res.status(201).json(await EmployeeService.createByAdmin(user, body));
+    res.status(201).json(
+      await EmployeeService.createByAdmin(user, body, {
+        ipAddress: clientIp(req),
+        userAgent: req.headers['user-agent'] as string | undefined,
+      }),
+    );
   }),
 );
 
@@ -137,11 +153,36 @@ employeesRouter.patch(
         designationId: z.number().int().positive().nullable().optional(),
         managerId: z.number().int().positive().nullable().optional(),
         locationId: z.number().int().positive().nullable().optional(),
+        groupId: z.number().int().positive().nullable().optional(),
+        teamLeaderId: z.number().int().positive().nullable().optional(),
         employmentType: z.string().max(32).optional(),
       }),
       req.body,
     );
     await EmployeeService.updateOrgAssignment(id, user, body);
+    res.json({ ok: true });
+  }),
+);
+
+employeesRouter.post(
+  '/:id/transfer',
+  requireAny('employees.manage', 'employees.transfer'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(
+      z.object({
+        locationId: z.number().int().positive(),
+        groupId: z.number().int().positive().nullable().optional(),
+        teamLeaderId: z.number().int().positive().nullable().optional(),
+        reason: z.string().max(500).optional(),
+      }),
+      req.body,
+    );
+    await EmployeeService.transferLocation(user, id, body, {
+      ipAddress: clientIp(req),
+      userAgent: req.headers['user-agent'] as string | undefined,
+    });
     res.json({ ok: true });
   }),
 );

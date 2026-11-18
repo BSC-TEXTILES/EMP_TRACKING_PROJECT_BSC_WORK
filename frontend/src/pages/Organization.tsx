@@ -1,22 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import ReportingHierarchy from '../components/ReportingHierarchy';
 import { api, errorMessage } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useToast } from '../contexts/ToastContext';
-import { Avatar, Badge, Card, EmptyState, PageHeader, SectionHeader, Skeleton, Tabs } from '../components/ui';
+import { Badge, Card, PageHeader, Skeleton, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { cx } from '../lib/format';
-
-interface Node {
-  id: number;
-  name: string;
-  employeeCode: string;
-  managerId: number | null;
-  designation: string | null;
-  department: string | null;
-  photoUrl: string | null;
-  roleSlug: string;
-  status: string;
-}
 
 interface Structure {
   departments: { id: number; name: string; code: string; head_name: string | null; employeeCount: number }[];
@@ -28,88 +17,29 @@ interface Structure {
 export default function Organization() {
   useDocumentTitle('Organization');
   const toast = useToast();
-  const [nodes, setNodes] = useState<Node[] | null>(null);
   const [structure, setStructure] = useState<Structure | null>(null);
-  const [tab, setTab] = useState('hierarchy');
-  const [search, setSearch] = useState('');
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') ?? 'hierarchy';
+  const setTab = (value: string) => setParams((prev) => { const next = new URLSearchParams(prev); next.set('tab', value); return next; }, { replace: true });
 
   useEffect(() => {
-    Promise.all([
-      api.get<{ employees: Node[] }>('/employees/hierarchy'),
-      api.get<Structure>('/employees/structure'),
-    ])
-      .then(([hierarchy, structureResult]) => {
-        setNodes(hierarchy.employees);
-        setStructure(structureResult);
-      })
+    if (tab === 'hierarchy' || structure) return;
+    api.get<Structure>('/employees/structure')
+      .then(setStructure)
       .catch((caught) => toast.error(errorMessage(caught)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const childrenOf = useMemo(() => {
-    const map = new Map<number | null, Node[]>();
-    for (const node of nodes ?? []) {
-      const key = node.managerId;
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(node);
-    }
-    return map;
-  }, [nodes]);
-
-  const roots = (nodes ?? []).filter((node) => node.managerId === null || !nodes?.some((candidate) => candidate.id === node.managerId));
-  const matches = search
-    ? new Set((nodes ?? []).filter((node) => `${node.name} ${node.employeeCode} ${node.designation ?? ''}`.toLowerCase().includes(search.toLowerCase())).map((node) => node.id))
-    : null;
-
-  const renderNode = (node: Node, depth: number) => {
-    const children = childrenOf.get(node.id) ?? [];
-    const isCollapsed = collapsed.has(node.id);
-    const visible = !matches || matches.has(node.id) || children.some((child) => matches.has(child.id));
-    if (!visible && depth > 0) return null;
-    return (
-      <div key={node.id} className="relative">
-        <div className={cx('flex items-center gap-2 rounded-lg border border-ink-200 bg-white px-2.5 py-2', depth === 0 && 'border-brand-300 bg-brand-50/50')}>
-          {children.length > 0 ? (
-            <button type="button" className="rounded p-0.5 text-ink-500 hover:bg-ink-100" onClick={() => setCollapsed((prev) => {
-              const next = new Set(prev);
-              if (next.has(node.id)) next.delete(node.id);
-              else next.add(node.id);
-              return next;
-            })}>
-              <Icon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={14} />
-            </button>
-          ) : (
-            <span className="w-5" />
-          )}
-          <Avatar name={node.name} src={node.photoUrl} size={28} />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-ink-800">{node.name}</p>
-            <p className="truncate text-[11px] text-ink-400">{node.employeeCode} · {node.designation ?? '—'} · {node.department ?? '—'}</p>
-          </div>
-          <Badge tone="neutral">{node.roleSlug.replace(/_/g, ' ')}</Badge>
-          {node.status === 'pending_approval' && <Badge tone="warning">Pending</Badge>}
-        </div>
-        {!isCollapsed && children.length > 0 && (
-          <div className="ml-4 mt-1.5 space-y-1.5 border-l border-dashed border-ink-200 pl-3">
-            {children.map((child) => renderNode(child, depth + 1))}
-          </div>
-        )}
-      </div>
-    );
-  };
+  }, [tab]);
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Organisation structure"
-        description="Reporting lines, departments, designations, locations and role distribution across the company."
-        actions={<input className="input w-auto" placeholder="Find employee…" value={search} onChange={(event) => setSearch(event.target.value)} />}
+        description="Reporting hierarchy, live workforce status and location-wise attendance, plus departments, locations and roles."
       />
 
       <Tabs
         tabs={[
-          { value: 'hierarchy', label: 'Hierarchy' },
+          { value: 'hierarchy', label: 'Reporting hierarchy' },
           { value: 'departments', label: 'Departments' },
           { value: 'locations', label: 'Locations' },
           { value: 'roles', label: 'Roles' },
@@ -118,15 +48,10 @@ export default function Organization() {
         onChange={setTab}
       />
 
-      {!nodes || !structure ? (
+      {tab === 'hierarchy' ? (
+        <ReportingHierarchy />
+      ) : !structure ? (
         <Card className="card-pad"><Skeleton lines={8} /></Card>
-      ) : tab === 'hierarchy' ? (
-        <Card className="card-pad">
-          <SectionHeader title="Reporting hierarchy" description={`${nodes.length} active employees · click a node to expand or collapse`} />
-          <div className="mt-4 space-y-2">
-            {roots.length === 0 ? <EmptyState title="No hierarchy" description="Assign reporting managers to build the hierarchy." /> : roots.map((root) => renderNode(root, 0))}
-          </div>
-        </Card>
       ) : tab === 'departments' ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {structure.departments.map((department) => (

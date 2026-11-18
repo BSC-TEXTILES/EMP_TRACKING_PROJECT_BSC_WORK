@@ -18,6 +18,13 @@ export interface CurrentUser {
   managerName: string | null;
   locationId: number | null;
   locationName: string | null;
+  locationCode?: string | null;
+  groupId?: number | null;
+  groupName?: string | null;
+  groupCode?: string | null;
+  teamLeaderId?: number | null;
+  teamLeaderName?: string | null;
+  allowedLocations?: Array<{ id: number; code: string; name: string }>;
   employmentType: string;
   joiningDate: string | null;
   permissions: string[];
@@ -244,7 +251,14 @@ export interface EmployeeRow {
   roleSlug: string;
   managerId: number | null;
   managerName: string | null;
+  locationId?: number | null;
   locationName: string | null;
+  locationCode?: string | null;
+  groupId?: number | null;
+  groupName?: string | null;
+  groupCode?: string | null;
+  teamLeaderId?: number | null;
+  teamLeaderName?: string | null;
   attendanceStatus: string | null;
   checkInAt: string | null;
   openTasks: number;

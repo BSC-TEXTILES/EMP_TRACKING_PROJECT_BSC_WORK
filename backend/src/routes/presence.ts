@@ -59,7 +59,10 @@ presenceRouter.post(
   rateLimit({ windowMs: 60_000, max: 20, keyPrefix: 'presence-ping' }),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    res.json({ presence: await PresenceService.ping(user.id) });
+    // Optional: the app section in use (a route name such as 'tasks'); never page content.
+    const raw = typeof req.body?.module === 'string' ? req.body.module.trim().toLowerCase() : '';
+    const module = /^[a-z][a-z0-9-]{0,47}$/.test(raw) ? raw : undefined;
+    res.json({ presence: await PresenceService.ping(user.id, module) });
   }),
 );
 

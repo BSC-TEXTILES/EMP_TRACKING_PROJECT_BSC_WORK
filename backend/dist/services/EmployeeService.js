@@ -3,11 +3,13 @@ import { recordAudit } from '../lib/audit.js';
 import { hashPassword, passwordIssues } from '../lib/crypto.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { locationEmployeeClause, subtreeIds } from '../lib/scope.js';
+import { allowedLocationIds, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ChatService } from './ChatService.js';
+import { GroupService } from './GroupService.js';
+import { HierarchyService } from './HierarchyService.js';
 async function employeeScope(user) {
-    if (user.permissions.includes('employees.view.all'))
+    if (user.permissions.includes('employees.view.all') || user.roleLevel >= 90)
         return locationEmployeeClause(user, 'e.id');
     if (user.permissions.includes('employees.view.team')) {
         const ids = await subtreeIds(user.id);
@@ -65,8 +67,15 @@ export class EmployeeService {
             params.push(filters.designationId);
         }
         if (filters.locationId) {
-            clauses.push('e.location_id = ?');
-            params.push(filters.locationId);
+            const locId = await requestedLocation(user, filters.locationId);
+            if (locId) {
+                clauses.push('e.location_id = ?');
+                params.push(locId);
+            }
+        }
+        if (filters.groupId) {
+            clauses.push('e.group_id = ?');
+            params.push(filters.groupId);
         }
         if (filters.managerId) {
             clauses.push('e.manager_id = ?');
@@ -85,8 +94,11 @@ export class EmployeeService {
         const where = clauses.join(' AND ');
         const rows = await query(`SELECT e.id, e.employee_code, e.full_name, e.email, e.mobile, e.photo_url, e.status, e.employment_type, e.joining_date,
               e.department_id, e.manager_id, e.created_at,
+              e.location_id, l.name AS location_name, l.code AS location_code,
+              e.group_id, wg.name AS group_name, wg.code AS group_code,
+              e.team_leader_id, tl.full_name AS team_leader_name,
               d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
-              m.full_name AS manager_name, l.name AS location_name,
+              m.full_name AS manager_name,
               a.status AS attendance_status, a.check_in_at,
               (SELECT COUNT(*) FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id
                 WHERE ta.employee_id = e.id AND t.status IN ('assigned','accepted','in_progress','on_hold','pending_approval')) AS open_tasks
@@ -96,6 +108,8 @@ export class EmployeeService {
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN employees m ON m.id = e.manager_id
        LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN workforce_groups wg ON wg.id = e.group_id
+       LEFT JOIN employees tl ON tl.id = e.team_leader_id
        LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = CURDATE()
        WHERE ${where}
        ORDER BY FIELD(e.status, 'pending_verification','pending_approval','active','inactive'), e.full_name
@@ -119,7 +133,14 @@ export class EmployeeService {
                 roleSlug: r.role_slug,
                 managerId: r.manager_id ? Number(r.manager_id) : null,
                 managerName: r.manager_name,
+                locationId: r.location_id ? Number(r.location_id) : null,
                 locationName: r.location_name,
+                locationCode: r.location_code,
+                groupId: r.group_id ? Number(r.group_id) : null,
+                groupName: r.group_name,
+                groupCode: r.group_code,
+                teamLeaderId: r.team_leader_id ? Number(r.team_leader_id) : null,
+                teamLeaderName: r.team_leader_name,
                 attendanceStatus: r.attendance_status,
                 checkInAt: toIso(r.check_in_at),
                 openTasks: Number(r.open_tasks),
@@ -132,13 +153,16 @@ export class EmployeeService {
     static async detail(employeeId, user) {
         const scope = await employeeScope(user);
         const row = await queryOne(`SELECT e.*, d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
-              m.full_name AS manager_name, l.name AS location_name
+              m.full_name AS manager_name, l.name AS location_name, l.code AS location_code,
+              wg.name AS group_name, wg.code AS group_code, tl.full_name AS team_leader_name
        FROM employees e
        JOIN roles r ON r.id = e.role_id
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN employees m ON m.id = e.manager_id
        LEFT JOIN locations l ON l.id = e.location_id
+       LEFT JOIN workforce_groups wg ON wg.id = e.group_id
+       LEFT JOIN employees tl ON tl.id = e.team_leader_id
        WHERE e.id = ? AND ${scope.clause}`, [employeeId, ...scope.params]);
         if (!row)
             throw ApiError.notFound('Employee not found or outside your access scope');
@@ -177,6 +201,12 @@ export class EmployeeService {
             managerName: row.manager_name,
             locationId: row.location_id ? Number(row.location_id) : null,
             locationName: row.location_name,
+            locationCode: row.location_code ?? null,
+            groupId: row.group_id ? Number(row.group_id) : null,
+            groupName: row.group_name ?? null,
+            groupCode: row.group_code ?? null,
+            teamLeaderId: row.team_leader_id ? Number(row.team_leader_id) : null,
+            teamLeaderName: row.team_leader_name ?? null,
             roleId: Number(row.role_id),
             roleName: row.role_name,
             roleSlug: row.role_slug,
@@ -271,11 +301,25 @@ export class EmployeeService {
         await assertCanAssignRole(actor, input.roleId);
         if (input.managerId === employeeId)
             throw ApiError.badRequest('An employee cannot report to themselves.');
+        if (input.teamLeaderId === employeeId)
+            throw ApiError.badRequest('An employee cannot be their own team leader.');
         if (input.managerId) {
             const descendants = await subtreeIds(employeeId);
             if (descendants.includes(input.managerId)) {
                 throw ApiError.badRequest('That manager is inside this employee\'s own reporting line.');
             }
+        }
+        if (input.locationId !== undefined && input.locationId !== null) {
+            const allowed = await allowedLocationIds(actor);
+            if (allowed !== null && !allowed.includes(Number(input.locationId))) {
+                throw ApiError.forbidden('You cannot assign an employee to an unauthorized location.');
+            }
+        }
+        const effectiveLocationId = input.locationId ?? target.location_id;
+        if (input.groupId && effectiveLocationId) {
+            const grp = await queryOne('SELECT id FROM workforce_groups WHERE id = ? AND location_id = ?', [input.groupId, effectiveLocationId]);
+            if (!grp)
+                throw ApiError.badRequest('Selected group does not belong to the employee\'s assigned store location.');
         }
         const fields = [];
         const params = [];
@@ -285,6 +329,8 @@ export class EmployeeService {
             ['designation_id', input.designationId],
             ['manager_id', input.managerId],
             ['location_id', input.locationId],
+            ['group_id', input.groupId],
+            ['team_leader_id', input.teamLeaderId],
             ['employment_type', input.employmentType],
         ]) {
             if (value !== undefined) {
@@ -295,12 +341,30 @@ export class EmployeeService {
         if (fields.length === 0)
             throw ApiError.badRequest('Nothing to update.');
         await execute(`UPDATE employees SET ${fields.join(', ')} WHERE id = ?`, [...params, employeeId]);
+        const previousManager = target.manager_id ? Number(target.manager_id) : null;
+        if (input.managerId !== undefined && (input.managerId ?? null) !== previousManager) {
+            await transaction((conn) => HierarchyService.recordManagerChange(conn, {
+                employeeId, managerId: input.managerId ?? null, previousManagerId: previousManager,
+                locationId: (input.locationId ?? target.location_id ?? null),
+                reason: 'Changed from the employee directory', source: 'manual', actorId: actor.id,
+            }));
+        }
+        // An employee left without a manager is attached to the Software Manager.
+        await HierarchyService.ensureStructure(actor.id).catch((error) => console.warn('[hierarchy] ensure failed', error));
+        if (input.groupId !== undefined) {
+            if (input.groupId) {
+                await execute('INSERT INTO employee_group_members (group_id, employee_id, role, assigned_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)', [input.groupId, employeeId, 'member', actor.id]);
+            }
+            else {
+                await execute('DELETE FROM employee_group_members WHERE employee_id = ?', [employeeId]);
+            }
+        }
         await recordAudit({
             actorId: actor.id,
             action: 'employee.org_assignment_updated',
             entityType: 'employee',
             entityId: employeeId,
-            before: { role_id: target.role_id, department_id: target.department_id, manager_id: target.manager_id },
+            before: { role_id: target.role_id, department_id: target.department_id, manager_id: target.manager_id, location_id: target.location_id, group_id: target.group_id },
             after: input,
         });
     }
@@ -347,6 +411,7 @@ export class EmployeeService {
             priority: 'high',
             actorId: actor.id,
         });
+        await HierarchyService.ensureStructure(actor.id).catch((error) => console.warn('[hierarchy] ensure failed', error));
     }
     static async rejectRegistration(employeeId, actor, reason) {
         if (!actor.permissions.includes('employees.approve') && !actor.permissions.includes('employees.manage')) {
@@ -365,7 +430,7 @@ export class EmployeeService {
             after: { reason },
         });
     }
-    static async createByAdmin(actor, input) {
+    static async createByAdmin(actor, input, context) {
         if (!actor.permissions.includes('employees.manage'))
             throw ApiError.forbidden('You cannot create employees.');
         await assertCanAssignRole(actor, input.roleId);
@@ -375,6 +440,20 @@ export class EmployeeService {
         const duplicate = await queryOne('SELECT id FROM employees WHERE email = ? OR mobile = ?', [input.email.toLowerCase(), input.mobile]);
         if (duplicate)
             throw ApiError.conflict('An employee already exists with this email or mobile.');
+        if (input.locationId) {
+            const allowed = await allowedLocationIds(actor);
+            if (allowed !== null && !allowed.includes(Number(input.locationId))) {
+                throw ApiError.forbidden('You cannot assign an employee to an unauthorized location.');
+            }
+        }
+        if (input.groupId && input.locationId) {
+            const grp = await queryOne('SELECT id FROM workforce_groups WHERE id = ? AND location_id = ? AND is_active = 1', [
+                input.groupId,
+                input.locationId,
+            ]);
+            if (!grp)
+                throw ApiError.badRequest('Selected group does not belong to the selected store location.');
+        }
         let code = input.employeeCode?.trim();
         if (!code) {
             const seq = await queryOne("SELECT setting_value FROM system_settings WHERE setting_key = 'employee_code_seq'");
@@ -383,8 +462,8 @@ export class EmployeeService {
             code = `EMP-${1000 + next}`;
         }
         const result = await execute(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id,
-        location_id, employment_type, status, joining_date, email_verified_at, mobile_verified_at, must_change_password)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3), 1)`, [
+        location_id, group_id, team_leader_id, employment_type, status, joining_date, email_verified_at, mobile_verified_at, must_change_password)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3), 1)`, [
             code,
             input.fullName.trim(),
             input.email.toLowerCase(),
@@ -395,17 +474,99 @@ export class EmployeeService {
             input.designationId ?? null,
             input.managerId ?? null,
             input.locationId ?? null,
+            input.groupId ?? null,
+            input.teamLeaderId ?? null,
             input.employmentType ?? 'full_time',
         ]);
+        if (input.groupId) {
+            await execute('INSERT INTO employee_group_members (group_id, employee_id, role, assigned_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)', [input.groupId, result.insertId, 'member', actor.id]);
+        }
+        if (input.locationId) {
+            await GroupService.logLocationAudit({
+                actor,
+                action: 'assign_location',
+                targetEmployeeId: result.insertId,
+                targetEmployeeName: input.fullName,
+                groupId: input.groupId ?? null,
+                toLocationId: input.locationId,
+                details: { reason: 'New employee assigned during creation', userAgent: context?.userAgent ?? null },
+                ipAddress: context?.ipAddress,
+            });
+        }
         await ChatService.emptyOrEnsureGeneral(result.insertId, input.departmentId);
         await recordAudit({
             actorId: actor.id,
             action: 'employee.created',
             entityType: 'employee',
             entityId: result.insertId,
-            after: { employeeCode: code, email: input.email, roleId: input.roleId },
+            after: { employeeCode: code, email: input.email, roleId: input.roleId, locationId: input.locationId, groupId: input.groupId },
         });
+        await HierarchyService.ensureStructure(actor.id).catch((error) => console.warn('[hierarchy] ensure failed', error));
         return { id: result.insertId, employeeCode: code };
+    }
+    static async transferLocation(actor, employeeId, input, context) {
+        if (!actor.permissions.includes('employees.manage') && !actor.permissions.includes('employees.transfer')) {
+            throw ApiError.forbidden('You do not have permission to transfer employees across locations.');
+        }
+        const target = await queryOne('SELECT id, employee_code, full_name, location_id, group_id, team_leader_id FROM employees WHERE id = ?', [employeeId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found.');
+        const allowed = await allowedLocationIds(actor);
+        if (allowed !== null && !allowed.includes(Number(input.locationId))) {
+            throw ApiError.forbidden('You cannot transfer an employee to an unauthorized location.');
+        }
+        if (allowed !== null && target.location_id && !allowed.includes(Number(target.location_id))) {
+            throw ApiError.forbidden('You cannot transfer an employee from a location you are not authorized to manage.');
+        }
+        const loc = await queryOne('SELECT id, name, code FROM locations WHERE id = ? AND is_active = 1', [input.locationId]);
+        if (!loc)
+            throw ApiError.badRequest('Target store location does not exist or is inactive.');
+        if (input.groupId) {
+            const grp = await queryOne('SELECT id, name FROM workforce_groups WHERE id = ? AND location_id = ? AND is_active = 1', [
+                input.groupId,
+                input.locationId,
+            ]);
+            if (!grp)
+                throw ApiError.badRequest('Selected group does not belong to the target store location.');
+        }
+        const fromLocationId = target.location_id;
+        const fromGroupId = target.group_id;
+        await execute('UPDATE employees SET location_id = ?, group_id = ?, team_leader_id = ? WHERE id = ?', [input.locationId, input.groupId ?? null, input.teamLeaderId ?? null, employeeId]);
+        // Update group membership
+        await execute('DELETE FROM employee_group_members WHERE employee_id = ?', [employeeId]);
+        if (input.groupId) {
+            await execute('INSERT INTO employee_group_members (group_id, employee_id, role, assigned_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)', [input.groupId, employeeId, 'member', actor.id]);
+        }
+        await GroupService.logLocationAudit({
+            actor,
+            action: 'transfer_employee',
+            targetEmployeeId: employeeId,
+            targetEmployeeName: target.full_name,
+            groupId: input.groupId ?? null,
+            fromLocationId,
+            toLocationId: input.locationId,
+            toLocationName: loc.name,
+            details: { fromGroupId, reason: input.reason ?? 'Location transfer by authorized administrator', userAgent: context?.userAgent ?? null },
+            ipAddress: context?.ipAddress,
+        });
+        await recordAudit({
+            actorId: actor.id,
+            action: 'employee.location_transferred',
+            entityType: 'employee',
+            entityId: employeeId,
+            before: { locationId: fromLocationId, groupId: fromGroupId },
+            after: { locationId: input.locationId, groupId: input.groupId, teamLeaderId: input.teamLeaderId, reason: input.reason },
+        });
+        return { ok: true };
+    }
+    static async getUserAllowedLocations(user) {
+        const allowed = await allowedLocationIds(user);
+        if (allowed === null) {
+            return query("SELECT id, code, name, city FROM locations WHERE is_active = 1 AND code IN ('BEL', 'DAV', 'SHI', 'HQ') ORDER BY FIELD(code, 'HQ', 'BEL', 'DAV', 'SHI')");
+        }
+        if (allowed.length === 0)
+            return [];
+        return query(`SELECT id, code, name, city FROM locations WHERE is_active = 1 AND id IN (${allowed.join(',')}) ORDER BY FIELD(code, 'HQ', 'BEL', 'DAV', 'SHI')`);
     }
     static async setStatus(employeeId, actor, status, reason) {
         if (!actor.permissions.includes('employees.manage'))
@@ -480,15 +641,17 @@ export class EmployeeService {
         });
         return { name: target.full_name };
     }
-    static async hierarchy() {
+    static async hierarchy(user) {
+        const scope = await HierarchyService.scope(user);
+        const scoped = scope.ids === null ? '' : scope.ids.length ? ` AND e.id IN (${scope.ids.map(() => '?').join(',')})` : ' AND 1 = 0';
         const rows = await query(`SELECT e.id, e.full_name, e.employee_code, e.manager_id, dg.title AS designation_title, d.name AS department_name,
               e.photo_url, r.slug AS role_slug, e.status
        FROM employees e
        JOIN roles r ON r.id = e.role_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status IN ('active','pending_approval')
-       ORDER BY r.level DESC, e.full_name`);
+       WHERE e.status IN ('active','pending_approval')${scoped}
+       ORDER BY r.level DESC, e.full_name`, scope.ids ?? []);
         return rows.map((r) => ({
             id: Number(r.id),
             name: r.full_name,

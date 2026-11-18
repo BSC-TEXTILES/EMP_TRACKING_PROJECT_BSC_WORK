@@ -184,7 +184,6 @@ async function ensureDatabaseReady(): Promise<void> {
                SET full_name = 'Gagan C B',
                    email = 'gagan.cb@bsctextiles.in',
                    mobile = '9876543210',
-                   manager_id = NULL,
                    status = 'active',
                    failed_login_attempts = 0,
                    locked_until = NULL,
@@ -249,7 +248,7 @@ async function ensureDatabaseReady(): Promise<void> {
             [chetanId]
           );
 
-          // Ensure Renuka Adhya exists as active Level 2 Software Manager
+          // Ensure Renukaradhya exists as the active Software Manager (root of the reporting hierarchy)
           const [renukaRows] = await dbConn.query<any[]>(
             "SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Renuka%' ORDER BY id DESC LIMIT 1"
           );
@@ -265,11 +264,11 @@ async function ensureDatabaseReady(): Promise<void> {
             renukaId = Number(renukaRows[0].id);
             await dbConn.query(
               `UPDATE employees 
-               SET full_name = 'Renuka Adhya',
+               SET full_name = 'Renukaradhya',
                    email = 'renuka.adhya@bsctextiles.in',
                    mobile = '9876543212',
-                   manager_id = ?,
-                   role_id = ?,
+                   manager_id = NULL,
+                   role_id = COALESCE((SELECT id FROM roles WHERE slug = 'software_manager' LIMIT 1), ?),
                    department_id = COALESCE(?, department_id),
                    designation_id = COALESCE(?, designation_id),
                    status = 'active',
@@ -277,13 +276,13 @@ async function ensureDatabaseReady(): Promise<void> {
                    locked_until = NULL,
                    password_hash = ?
                WHERE id = ?`,
-              [gaganId, managerRoleId, itDeptId, swDesigId, validHash, renukaId]
+              [managerRoleId, itDeptId, swDesigId, validHash, renukaId]
             );
           } else {
             const [renukaInsert]: any = await dbConn.query(
               `INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
-               VALUES ('EMP-1003', 'Renuka Adhya', 'renuka.adhya@bsctextiles.in', '9876543212', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`,
-              [validHash, managerRoleId, itDeptId, swDesigId, gaganId]
+               VALUES ('EMP-1003', 'Renukaradhya', 'renuka.adhya@bsctextiles.in', '9876543212', ?, ?, ?, ?, NULL, 'active', CURDATE(), NOW(3), NOW(3))`,
+              [validHash, managerRoleId, itDeptId, swDesigId]
             );
             renukaId = Number(renukaInsert.insertId);
           }
@@ -297,7 +296,7 @@ async function ensureDatabaseReady(): Promise<void> {
 
           // Purge only deprecated mock/test accounts with @workforce.test domain
           try {
-            await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''");
+            await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test'");
           } catch { }
 
           // Ensure Gagan has Super Admin and Store Manager roles in employee_roles
@@ -308,7 +307,7 @@ async function ensureDatabaseReady(): Promise<void> {
           );
 
           await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
-          console.log(`[startup] Verified Gagan C B (ID: ${gaganId}), Chetan TK (ID: ${chetanId}) and Renuka Adhya (ID: ${renukaId}) credentials ready.`);
+          console.log(`[startup] Verified Gagan C B (ID: ${gaganId}), Chetan TK (ID: ${chetanId}) and Renukaradhya (ID: ${renukaId}) credentials ready.`);
         } finally {
           try { await dbConn.query('SET FOREIGN_KEY_CHECKS = 1'); } catch { }
           dbConn.release();
@@ -382,6 +381,13 @@ async function ensureDatabaseReady(): Promise<void> {
           }
         } catch (rbacErr) {
           console.warn('[startup] RBAC sync note:', rbacErr);
+        }
+        try {
+          const { HierarchyService } = await import('./services/HierarchyService.js');
+          const structure = await HierarchyService.ensureStructure();
+          console.log(`[startup] Reporting hierarchy: root employee ${structure.rootId ?? 'not found'}, ${structure.reassigned} attached to root, ${structure.locationsAssigned} given a default location`);
+        } catch (hierErr) {
+          console.warn('[startup] Reporting hierarchy check note:', hierErr);
         }
         try {
           const { DailyTaskService } = await import('./services/DailyTaskService.js');

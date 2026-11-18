@@ -140,6 +140,14 @@ export function initRealtime(server) {
             online.set(user.id, new Set());
         online.get(user.id).add(socket.id);
         socket.join(`user:${user.id}`);
+        if (user.locationId) {
+            socket.join(`location:${user.locationId}`);
+        }
+        if (user.allowedLocations) {
+            for (const loc of user.allowedLocations) {
+                socket.join(`location:${loc.id}`);
+            }
+        }
         for (const convId of await conversationRoomIds(user.id)) {
             socket.join(`conv:${convId}`);
         }
@@ -168,6 +176,25 @@ export function initRealtime(server) {
         });
         socket.on('conversation:leave', (conversationId) => {
             socket.leave(`conv:${conversationId}`);
+        });
+        socket.on('location:join', async (locationId, ack) => {
+            try {
+                const id = Number(locationId);
+                if (!Number.isFinite(id))
+                    throw new Error('invalid location');
+                const allowed = user.allowedLocations?.map((l) => l.id) ?? (user.locationId ? [user.locationId] : []);
+                if (user.roleLevel < 90 && !allowed.includes(id)) {
+                    throw new Error('unauthorized location');
+                }
+                await socket.join(`location:${id}`);
+                ack?.({ ok: true });
+            }
+            catch (error) {
+                ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+            }
+        });
+        socket.on('location:leave', (locationId) => {
+            socket.leave(`location:${locationId}`);
         });
         socket.on('chat:typing', async (payload) => {
             if (!payload || typeof payload.conversationId !== 'number')

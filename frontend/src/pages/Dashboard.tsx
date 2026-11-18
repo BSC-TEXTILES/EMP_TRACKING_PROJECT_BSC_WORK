@@ -30,6 +30,14 @@ export default function Dashboard() {
   const { data, loading, error, reload } = useApi<DashboardData>('/me/dashboard');
   const attendance = useAttendance({ poll: true });
   const [team, setTeam] = useState<TeamSnapshot | null>(null);
+  const [groupSummary, setGroupSummary] = useState<Array<{
+    groupId: number;
+    groupName: string;
+    groupCode: string;
+    total: number;
+    present: number;
+  }>>([]);
+  const [dashboardLocationId, setDashboardLocationId] = useState<number | null>(user?.locationId ?? null);
 
   const isManager = canAny('employees.view.team', 'tasks.view.team', 'reports.view.team');
 
@@ -40,6 +48,15 @@ export default function Dashboard() {
       .then(setTeam)
       .catch(() => undefined);
   }, [isManager]);
+
+  useEffect(() => {
+    const locParam = dashboardLocationId ? `?locationId=${dashboardLocationId}` : '';
+    api.get<{ summary: { groupBreakdown: Array<{ groupId: number; groupName: string; groupCode: string; total: number; present: number }> } }>(
+      `/groups/dashboard/summary${locParam}`,
+    )
+      .then((res) => setGroupSummary(res.summary?.groupBreakdown ?? []))
+      .catch(() => setGroupSummary([]));
+  }, [dashboardLocationId]);
 
   useSocketEvent('task:updated', () => void reload());
   useSocketEvent('task:created', () => void reload());
@@ -121,6 +138,29 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {user?.allowedLocations && user.allowedLocations.length > 1 && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs shadow-2xs">
+              <Icon name="building" size={13} className="text-blue-600" />
+              <select
+                className="bg-transparent font-semibold text-ink-800 outline-none cursor-pointer"
+                value={dashboardLocationId ?? ''}
+                onChange={(e) => setDashboardLocationId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">All Stores</option>
+                {user.allowedLocations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.code} – {l.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {user?.locationCode && (
+            <span className="inline-flex items-center gap-1 rounded bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-700 border border-blue-200">
+              <Icon name="building" size={12} />
+              {user.locationCode}
+            </span>
+          )}
           {data.employee.manager && <Badge tone="neutral">Reports to {data.employee.manager}</Badge>}
           <Badge tone="brand">{titleize(data.employee.employmentType)}</Badge>
           <Link to="/profile" className="btn-secondary btn-sm">
@@ -359,6 +399,45 @@ export default function Dashboard() {
                 Team performance
               </Link>
             )}
+          </div>
+        </Card>
+      )}
+
+      {groupSummary.length > 0 && (
+        <Card className="card-pad">
+          <SectionHeader
+            title="Workforce Groups & Presence"
+            description="Active shift breakdown across floor sales, cashiering, and inventory teams"
+            action={
+              <Link to="/groups" className="btn-ghost btn-sm font-semibold text-blue-700">
+                Manage Groups <Icon name="chevronRight" size={13} className="ml-1 inline" />
+              </Link>
+            }
+          />
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {groupSummary.map((grp) => {
+              const pct = grp.total > 0 ? Math.round((grp.present / grp.total) * 100) : 0;
+              return (
+                <div key={grp.groupId} className="rounded-xl border border-ink-200 bg-white p-3.5 shadow-2xs">
+                  <div className="flex items-center justify-between gap-1 mb-1.5">
+                    <span className="font-mono text-[10px] uppercase font-bold text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200">
+                      {grp.groupCode}
+                    </span>
+                    <span className="text-xs font-semibold text-emerald-700">
+                      {grp.present} / {grp.total} present
+                    </span>
+                  </div>
+                  <p className="text-sm font-bold text-ink-900 truncate">{grp.groupName}</p>
+                  <div className="mt-2.5">
+                    <div className="flex items-center justify-between text-[11px] text-ink-500 mb-1">
+                      <span>Shift Attendance</span>
+                      <span className="font-semibold">{pct}%</span>
+                    </div>
+                    <ProgressBar value={pct} tone={pct >= 70 ? 'success' : pct >= 40 ? 'warning' : 'danger'} />
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </Card>
       )}

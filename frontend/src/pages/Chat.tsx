@@ -2268,32 +2268,29 @@ function ConversationModal({
               filteredContacts.map((contact) => (
                 <div
                   key={contact.id}
-                  className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 hover:bg-ink-50 transition"
+                  className="flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 hover:bg-blue-50/60 transition cursor-pointer group"
+                  onClick={() => void onSelectDirect(contact.id)}
                 >
-                  <button
-                    type="button"
-                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
-                    onClick={() => void onSelectDirect(contact.id)}
-                  >
+                  <div className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
                     <Avatar
                       name={contact.full_name}
                       src={contact.photo_url}
-                      size={34}
+                      size={36}
                       online={onlineIds.includes(contact.id)}
                     />
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-ink-900">{contact.full_name}</p>
+                      <p className="truncate text-sm font-bold text-ink-900 group-hover:text-blue-600 transition-colors">{contact.full_name}</p>
                       <p className="truncate text-xs text-ink-500">
                         {[contact.employee_code, contact.designation_title, contact.department_name]
                           .filter(Boolean)
                           .join(' · ') || 'Employee'}
                       </p>
                     </div>
-                  </button>
-                  <div className="ml-2 flex shrink-0 items-center gap-1">
+                  </div>
+                  <div className="ml-2 flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
                     <button
                       type="button"
-                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 cursor-pointer"
+                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-200 cursor-pointer transition"
                       title={`Audio call ${contact.full_name}`}
                       onClick={() => void onCall(contact.id, 'audio')}
                     >
@@ -2301,7 +2298,7 @@ function ConversationModal({
                     </button>
                     <button
                       type="button"
-                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 cursor-pointer"
+                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-200 cursor-pointer transition"
                       title={`Video call ${contact.full_name}`}
                       onClick={() => void onCall(contact.id, 'video')}
                     >

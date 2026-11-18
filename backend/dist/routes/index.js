@@ -27,6 +27,8 @@ import { webhooksRouter } from './webhooks.js';
 import { callsRouter } from './calls.js';
 import { devicesRouter } from './devices.js';
 import { pushRouter } from './push.js';
+import { groupsRouter } from './groups.js';
+import { hierarchyRouter } from './hierarchy.js';
 import { asyncHandler } from '../lib/http.js';
 export const apiRouter = Router();
 apiRouter.get('/live', (_req, res) => { res.json({ status: 'ok' }); });
@@ -66,4 +68,6 @@ apiRouter.use('/emails', internalEmailsRouter);
 apiRouter.use('/exports', exportsRouter);
 apiRouter.use('/presence', presenceRouter);
 apiRouter.use('/admin/webhooks', webhooksRouter);
+apiRouter.use('/groups', groupsRouter);
+apiRouter.use('/hierarchy', hierarchyRouter);
 //# sourceMappingURL=index.js.map
