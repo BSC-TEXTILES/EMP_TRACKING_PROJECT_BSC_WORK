@@ -344,7 +344,7 @@ employeesRouter.get(
 
 employeesRouter.patch(
   '/locations/:id',
-  requireAny('locations.manage'),
+  requireAny('locations.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const body = parseBody(
       z.object({
@@ -385,7 +385,7 @@ employeesRouter.put(
 
 employeesRouter.delete(
   '/locations/:id',
-  requireAny('locations.manage'),
+  requireAny('locations.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const raw = req.query.moveTo ?? (req.body as { moveToLocationId?: unknown } | undefined)?.moveToLocationId;
     const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
@@ -396,7 +396,7 @@ employeesRouter.delete(
 
 employeesRouter.post(
   '/locations',
-  requireAny('locations.manage'),
+  requireAny('locations.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(

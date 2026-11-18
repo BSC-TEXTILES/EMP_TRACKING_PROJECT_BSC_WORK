@@ -906,7 +906,8 @@ export class EmployeeService {
     }
     // ----------------------------- Locations -----------------------------------
     static async createLocation(actor, input) {
-        if (!actor.permissions.includes('locations.manage'))
+        const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
             throw ApiError.forbidden('Only an administrator can add locations.');
         const code = input.code.trim().toUpperCase();
         if (!/^[A-Z0-9]{2,12}$/.test(code))
@@ -934,7 +935,8 @@ export class EmployeeService {
         return result.insertId;
     }
     static async updateLocation(actor, id, input) {
-        if (!actor.permissions.includes('locations.manage'))
+        const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
             throw ApiError.forbidden('Only an administrator can change locations.');
         const current = await queryOne('SELECT * FROM locations WHERE id = ?', [id]);
         if (!current)
@@ -972,7 +974,8 @@ export class EmployeeService {
      * hidden everywhere, its code freed, and its history kept.
      */
     static async deleteLocation(actor, id, moveToLocationId, ip) {
-        if (!actor.permissions.includes('locations.manage'))
+        const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+        if (!canManage)
             throw ApiError.forbidden('Only an administrator can delete locations.');
         const location = await queryOne('SELECT id, code, name, is_active FROM locations WHERE id = ?', [id]);
         if (!location || !Number(location.is_active))

@@ -1177,7 +1177,8 @@ export class EmployeeService {
     actor: AuthUser,
     input: { name: string; code: string; city?: string; state?: string; address?: string; timezone?: string; latitude?: number; longitude?: number; geofenceRadiusM?: number },
   ) {
-    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can add locations.');
+    const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('Only an administrator can add locations.');
     const code = input.code.trim().toUpperCase();
     if (!/^[A-Z0-9]{2,12}$/.test(code)) throw ApiError.badRequest('Location codes use 2–12 letters or digits, e.g. BEL.');
     if (await queryOne('SELECT id FROM locations WHERE code = ? AND is_active = 1', [code])) throw ApiError.conflict('That location code is already used.');
@@ -1210,7 +1211,8 @@ export class EmployeeService {
     id: number,
     input: { name?: string; code?: string; city?: string | null; state?: string | null; address?: string | null; timezone?: string; latitude?: number | null; longitude?: number | null; geofenceRadiusM?: number | null; isActive?: boolean },
   ) {
-    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can change locations.');
+    const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('Only an administrator can change locations.');
     const current = await queryOne<Record<string, unknown>>('SELECT * FROM locations WHERE id = ?', [id]);
     if (!current) throw ApiError.notFound('Location not found');
     const code = input.code === undefined ? String(current.code) : input.code.trim().toUpperCase();
@@ -1246,7 +1248,8 @@ export class EmployeeService {
    * hidden everywhere, its code freed, and its history kept.
    */
   static async deleteLocation(actor: AuthUser, id: number, moveToLocationId?: number, ip?: string) {
-    if (!actor.permissions.includes('locations.manage')) throw ApiError.forbidden('Only an administrator can delete locations.');
+    const canManage = actor.permissions.includes('locations.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('Only an administrator can delete locations.');
     const location = await queryOne<{ id: number; code: string; name: string; is_active: number }>('SELECT id, code, name, is_active FROM locations WHERE id = ?', [id]);
     if (!location || !Number(location.is_active)) throw ApiError.notFound('Location not found');
     const remaining = await queryOne<{ total: number }>('SELECT COUNT(*) AS total FROM locations WHERE is_active = 1 AND id <> ?', [id]);
