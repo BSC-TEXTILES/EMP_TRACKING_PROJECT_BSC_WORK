@@ -154,8 +154,8 @@ export default function Chat() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [typingUsers, setTypingUsers] = useState<Record<number, string>>({});
   const [filter, setFilter] = useState('');
-  const [contactsOpen, setContactsOpen] = useState(false);
-  const [groupOpen, setGroupOpen] = useState(false);
+  const [conversationModalOpen, setConversationModalOpen] = useState(false);
+  const [conversationModalTab, setConversationModalTab] = useState<'direct' | 'group'>('direct');
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameInput, setRenameInput] = useState('');
   const [renameDescription, setRenameDescription] = useState('');
@@ -502,7 +502,7 @@ export default function Chat() {
   const startDirect = async (employeeId: number) => {
     try {
       const result = await api.post<{ id: number }>('/chat/conversations/direct', { employeeId });
-      setContactsOpen(false);
+      setConversationModalOpen(false);
       await loadConversations(true);
       openConversation(result.id);
     } catch (caught) {
@@ -993,22 +993,30 @@ export default function Chat() {
             <h1 className="text-base font-semibold text-ink-900">Messages</h1>
             <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 inline-block" title="Online" />
           </div>
-          <div className="flex items-center gap-1 text-ink-500">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
-              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors"
-              title="New conversation"
-              onClick={() => setContactsOpen(true)}
+              className="flex items-center gap-1 rounded-lg border border-ink-200 bg-white px-2.5 py-1 text-xs font-semibold text-ink-700 hover:bg-ink-100 hover:text-ink-900 transition shadow-2xs cursor-pointer"
+              title="Start a direct chat"
+              onClick={() => {
+                setConversationModalTab('direct');
+                setConversationModalOpen(true);
+              }}
             >
-              <Icon name="plus" size={17} />
+              <Icon name="plus" size={13} className="text-blue-600" />
+              <span>Direct</span>
             </button>
             <button
               type="button"
-              className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors"
-              title="New group chat"
-              onClick={() => setGroupOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 hover:text-blue-900 transition shadow-2xs cursor-pointer"
+              title="Create a new group"
+              onClick={() => {
+                setConversationModalTab('group');
+                setConversationModalOpen(true);
+              }}
             >
-              <Icon name="user" size={17} />
+              <Icon name="users" size={14} className="text-blue-600" />
+              <span>New Group</span>
             </button>
           </div>
         </div>
@@ -1055,11 +1063,17 @@ export default function Chat() {
                   onClick={() => openConversation(conversation.id)}
                 >
                   <div className="flex min-w-0 flex-1 items-start gap-3 px-3.5 py-3 text-left">
-                    {/* Circle avatar with initials and status dot matching Image 1 */}
+                    {/* Circle avatar with initials and status dot */}
                     <div className="relative shrink-0">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe] text-[#1e40af] text-sm font-semibold uppercase">
-                        {initials || 'C'}
-                      </div>
+                      {conversation.type === 'group' ? (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700 text-sm font-semibold shadow-xs">
+                          <Icon name="users" size={18} />
+                        </div>
+                      ) : (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#dbeafe] text-[#1e40af] text-sm font-semibold uppercase">
+                          {initials || 'C'}
+                        </div>
+                      )}
                       {conversation.type === 'direct' && (
                         <span
                           className={cx(
@@ -1567,21 +1581,18 @@ export default function Chat() {
         )}
       </section>
 
-      <ContactsModal
-        open={contactsOpen}
-        onClose={() => setContactsOpen(false)}
-        onSelect={startDirect}
-        onCall={startCall}
-        onlineIds={onlineIds}
-      />
-      <GroupModal
-        open={groupOpen}
-        onClose={() => setGroupOpen(false)}
-        onCreated={async (id) => {
-          setGroupOpen(false);
+      <ConversationModal
+        open={conversationModalOpen}
+        onClose={() => setConversationModalOpen(false)}
+        initialTab={conversationModalTab}
+        onSelectDirect={startDirect}
+        onCreatedGroup={async (id) => {
+          setConversationModalOpen(false);
           await loadConversations(true);
           openConversation(id);
         }}
+        onCall={startCall}
+        onlineIds={onlineIds}
       />
       <RenameModal
         open={renameOpen}
@@ -2058,32 +2069,46 @@ function GroupMembersModal({
   );
 }
 
-function ContactsModal({
+function ConversationModal({
   open,
   onClose,
-  onSelect,
+  initialTab = 'direct',
+  onSelectDirect,
+  onCreatedGroup,
   onCall,
   onlineIds,
 }: {
   open: boolean;
   onClose: () => void;
-  onSelect: (id: number) => Promise<void>;
+  initialTab?: 'direct' | 'group';
+  onSelectDirect: (id: number) => Promise<void>;
+  onCreatedGroup: (id: number) => Promise<void>;
   onCall: (id: number, type: 'audio' | 'video') => Promise<void>;
   onlineIds: number[];
 }) {
+  const toast = useToast();
+  const [tab, setTab] = useState<'direct' | 'group'>(initialTab);
   const [contacts, setContacts] = useState<PickerEmployee[] | null>(null);
   const [search, setSearch] = useState('');
 
+  // Group creation form state
+  const [groupForm, setGroupForm] = useState({ name: '', description: '', isAnnouncement: false });
+  const [selectedMemberIds, setSelectedMemberIds] = useState<number[]>([]);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
   useEffect(() => {
     if (!open) return;
-    setContacts(null);
+    setTab(initialTab);
+    setSearch('');
+    setMemberSearch('');
     api
       .get<{ contacts: PickerEmployee[] }>('/chat/contacts')
       .then((result) => setContacts(result.contacts))
       .catch(() => setContacts([]));
-  }, [open]);
+  }, [open, initialTab]);
 
-  const filtered = (contacts ?? []).filter((contact) =>
+  const filteredContacts = (contacts ?? []).filter((contact) =>
     search
       ? `${contact.full_name} ${contact.employee_code ?? ''} ${contact.designation_title ?? ''} ${contact.department_name ?? ''}`
           .toLowerCase()
@@ -2091,117 +2116,49 @@ function ContactsModal({
       : true,
   );
 
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="New conversation"
-      description="Start a direct chat with any active employee."
-    >
-      <input
-        className="input mb-3"
-        placeholder="Search by name, employee ID or department"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-      />
-      <div className="max-h-80 space-y-1 overflow-y-auto">
-        {!contacts ? (
-          <Skeleton lines={5} />
-        ) : filtered.length === 0 ? (
-          <EmptyState compact title="No employees found" />
-        ) : (
-          filtered.map((contact) => (
-            <div key={contact.id} className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 hover:bg-ink-50">
-              <button
-                type="button"
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
-                onClick={() => void onSelect(contact.id)}
-              >
-                <Avatar
-                  name={contact.full_name}
-                  src={contact.photo_url}
-                  size={32}
-                  online={onlineIds.includes(contact.id)}
-                />
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-ink-800">{contact.full_name}</p>
-                  <p className="truncate text-xs text-ink-500">
-                    {[contact.employee_code, contact.designation_title, contact.department_name]
-                      .filter(Boolean)
-                      .join(' · ') || 'Employee'}
-                  </p>
-                </div>
-              </button>
-              <div className="ml-2 flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100"
-                  title={`Audio call ${contact.full_name}`}
-                  onClick={() => void onCall(contact.id, 'audio')}
-                >
-                  <Icon name="phone" size={15} />
-                </button>
-                <button
-                  type="button"
-                  className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100"
-                  title={`Video call ${contact.full_name}`}
-                  onClick={() => void onCall(contact.id, 'video')}
-                >
-                  <Icon name="video" size={15} />
-                </button>
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-    </Modal>
+  const filteredGroupMembers = (contacts ?? []).filter((contact) =>
+    memberSearch
+      ? `${contact.full_name} ${contact.employee_code ?? ''} ${contact.designation_title ?? ''} ${contact.department_name ?? ''}`
+          .toLowerCase()
+          .includes(memberSearch.toLowerCase())
+      : true,
   );
-}
 
-function GroupModal({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: (id: number) => Promise<void>;
-}) {
-  const toast = useToast();
-  const [contacts, setContacts] = useState<PickerEmployee[]>([]);
-  const [form, setForm] = useState({ name: '', description: '', isAnnouncement: false });
-  const [members, setMembers] = useState<number[]>([]);
-  const [busy, setBusy] = useState(false);
+  const handleSelectAllMembers = () => {
+    if (!contacts) return;
+    if (selectedMemberIds.length === contacts.length) {
+      setSelectedMemberIds([]);
+    } else {
+      setSelectedMemberIds(contacts.map((c) => c.id));
+    }
+  };
 
-  useEffect(() => {
-    if (!open) return;
-    api
-      .get<{ contacts: PickerEmployee[] }>('/chat/contacts')
-      .then((result) => setContacts(result.contacts))
-      .catch(() => undefined);
-  }, [open]);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (members.length === 0) {
-      toast.error('Select at least one member.');
+  const handleCreateGroup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!groupForm.name.trim()) {
+      toast.error('Please enter a group name.');
       return;
     }
-    setBusy(true);
+    if (selectedMemberIds.length === 0) {
+      toast.error('Please select at least one team member for the group.');
+      return;
+    }
+    setCreatingGroup(true);
     try {
       const result = await api.post<{ id: number }>('/chat/conversations/group', {
-        name: form.name,
-        description: form.description || undefined,
-        memberIds: members,
-        isAnnouncement: form.isAnnouncement,
+        name: groupForm.name.trim(),
+        description: groupForm.description.trim() || undefined,
+        memberIds: selectedMemberIds,
+        isAnnouncement: groupForm.isAnnouncement,
       });
-      await onCreated(result.id);
-      setForm({ name: '', description: '', isAnnouncement: false });
-      setMembers([]);
+      toast.success(`Group "${groupForm.name.trim()}" created successfully!`);
+      setGroupForm({ name: '', description: '', isAnnouncement: false });
+      setSelectedMemberIds([]);
+      await onCreatedGroup(result.id);
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
-      setBusy(false);
+      setCreatingGroup(false);
     }
   };
 
@@ -2209,68 +2166,305 @@ function GroupModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Create a group"
+      title={tab === 'direct' ? 'New Conversation' : 'Create New Group'}
+      description={
+        tab === 'direct'
+          ? 'Start a direct 1-on-1 chat or switch to create a group.'
+          : 'Create a team group chat or announcement channel.'
+      }
+      size="md"
       footer={
-        <>
-          <button type="button" className="btn-secondary" onClick={onClose}>
-            Cancel
-          </button>
-          <button type="submit" form="group-form" className="btn-primary" disabled={busy}>
-            {busy ? 'Creating…' : 'Create group'}
-          </button>
-        </>
+        tab === 'group' ? (
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setTab('direct')}>
+              Back to Direct
+            </button>
+            <button
+              type="submit"
+              form="create-group-form"
+              className="btn-primary"
+              disabled={creatingGroup || selectedMemberIds.length === 0 || !groupForm.name.trim()}
+            >
+              {creatingGroup ? 'Creating…' : `Create Group (${selectedMemberIds.length})`}
+            </button>
+          </>
+        ) : undefined
       }
     >
-      <form id="group-form" onSubmit={submit} className="space-y-4">
-        <Field label="Group name" required>
-          <input
-            className="input"
-            value={form.name}
-            onChange={(event) => setForm({ ...form, name: event.target.value })}
-            minLength={2}
-            required
-          />
-        </Field>
-        <Field label="Description">
-          <input
-            className="input"
-            value={form.description}
-            onChange={(event) => setForm({ ...form, description: event.target.value })}
-          />
-        </Field>
-        <label className="flex items-center gap-2 text-sm text-ink-700">
-          <input
-            type="checkbox"
-            className="h-4 w-4"
-            checked={form.isAnnouncement}
-            onChange={(event) => setForm({ ...form, isAnnouncement: event.target.checked })}
-          />
-          Announcement group (only admins can post)
-        </label>
+      {/* Tab Switcher */}
+      <div className="flex border-b border-ink-200 mb-4">
+        <button
+          type="button"
+          onClick={() => setTab('direct')}
+          className={cx(
+            'flex items-center gap-2 pb-2.5 px-4 text-sm font-semibold border-b-2 transition-colors cursor-pointer',
+            tab === 'direct'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-ink-500 hover:text-ink-800',
+          )}
+        >
+          <Icon name="chat" size={15} />
+          <span>Direct Chat</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('group')}
+          className={cx(
+            'flex items-center gap-2 pb-2.5 px-4 text-sm font-semibold border-b-2 transition-colors cursor-pointer',
+            tab === 'group'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-ink-500 hover:text-ink-800',
+          )}
+        >
+          <Icon name="users" size={15} />
+          <span>New Group</span>
+          {selectedMemberIds.length > 0 && (
+            <span className="ml-1 rounded-full bg-blue-100 px-1.5 py-0.2 text-[11px] font-bold text-blue-700">
+              {selectedMemberIds.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {tab === 'direct' ? (
         <div>
-          <span className="label">Members *</span>
-          <div className="max-h-56 overflow-y-auto rounded-lg border border-ink-300 p-2">
-            {contacts.map((contact) => (
-              <label key={contact.id} className="flex items-center gap-2 rounded px-2 py-1 text-sm hover:bg-ink-50">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4"
-                  checked={members.includes(contact.id)}
-                  onChange={(event) =>
-                    setMembers((previous) =>
-                      event.target.checked
-                        ? [...previous, contact.id]
-                        : previous.filter((id) => id !== contact.id),
-                    )
-                  }
-                />
-                {contact.full_name}{' '}
-                <span className="text-xs text-ink-400">{contact.designation_title ?? ''}</span>
-              </label>
-            ))}
+          {/* Quick Action to switch to Group */}
+          <button
+            type="button"
+            onClick={() => setTab('group')}
+            className="flex w-full items-center gap-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50/60 p-3 text-left transition hover:border-blue-300 hover:shadow-xs mb-3 group cursor-pointer"
+          >
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-xs group-hover:bg-blue-700 transition">
+              <Icon name="users" size={18} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-blue-950">Create a New Group Chat</p>
+                <span className="rounded bg-blue-200/80 px-1.5 py-0.5 text-[10px] font-bold text-blue-800 uppercase tracking-wider">
+                  Group
+                </span>
+              </div>
+              <p className="text-xs text-blue-700">Add multiple employees into a group channel</p>
+            </div>
+            <div className="flex items-center gap-1 text-xs font-semibold text-blue-700 pr-1">
+              <span>Create</span>
+              <Icon name="chevronRight" size={14} />
+            </div>
+          </button>
+
+          <input
+            className="input mb-3"
+            placeholder="Search by name, employee ID or department"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+
+          <div className="max-h-80 space-y-1 overflow-y-auto divide-y divide-ink-50">
+            {!contacts ? (
+              <Skeleton lines={5} />
+            ) : filteredContacts.length === 0 ? (
+              <EmptyState compact title="No employees found" />
+            ) : (
+              filteredContacts.map((contact) => (
+                <div
+                  key={contact.id}
+                  className="flex items-center justify-between gap-2 rounded-lg px-2 py-2 hover:bg-ink-50 transition"
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
+                    onClick={() => void onSelectDirect(contact.id)}
+                  >
+                    <Avatar
+                      name={contact.full_name}
+                      src={contact.photo_url}
+                      size={34}
+                      online={onlineIds.includes(contact.id)}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-ink-900">{contact.full_name}</p>
+                      <p className="truncate text-xs text-ink-500">
+                        {[contact.employee_code, contact.designation_title, contact.department_name]
+                          .filter(Boolean)
+                          .join(' · ') || 'Employee'}
+                      </p>
+                    </div>
+                  </button>
+                  <div className="ml-2 flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 cursor-pointer"
+                      title={`Audio call ${contact.full_name}`}
+                      onClick={() => void onCall(contact.id, 'audio')}
+                    >
+                      <Icon name="phone" size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg p-1.5 text-ink-500 hover:bg-ink-100 cursor-pointer"
+                      title={`Video call ${contact.full_name}`}
+                      onClick={() => void onCall(contact.id, 'video')}
+                    >
+                      <Icon name="video" size={15} />
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
-      </form>
+      ) : (
+        <form id="create-group-form" onSubmit={handleCreateGroup} className="space-y-4">
+          <Field label="Group name" required hint="e.g. Sales Team, Shift B, Store Operations">
+            <input
+              className="input"
+              placeholder="Enter group name"
+              value={groupForm.name}
+              onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })}
+              minLength={2}
+              maxLength={160}
+              required
+            />
+          </Field>
+
+          <Field label="Description (Optional)" hint="Purpose of this group conversation">
+            <input
+              className="input"
+              placeholder="e.g. Daily shift coordination, announcements & tasks"
+              value={groupForm.description}
+              onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })}
+              maxLength={500}
+            />
+          </Field>
+
+          <label className="flex items-center gap-2.5 text-sm text-ink-700 bg-ink-50 p-2.5 rounded-lg border border-ink-100 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded text-blue-600 focus:ring-blue-500 shrink-0"
+              checked={groupForm.isAnnouncement}
+              onChange={(e) => setGroupForm({ ...groupForm, isAnnouncement: e.target.checked })}
+            />
+            <div>
+              <span className="font-semibold text-ink-900">Announcement group</span>
+              <p className="text-xs text-ink-500">Only group admins can send messages. All members can read.</p>
+            </div>
+          </label>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-ink-900">Select Members</span>
+                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+                  {selectedMemberIds.length} selected
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSelectAllMembers}
+                className="text-xs font-semibold text-blue-600 hover:text-blue-800 transition cursor-pointer"
+              >
+                {contacts && selectedMemberIds.length === contacts.length ? 'Deselect all' : 'Select all'}
+              </button>
+            </div>
+
+            <input
+              className="input text-xs py-1.5"
+              placeholder="Filter members by name, designation or department..."
+              value={memberSearch}
+              onChange={(e) => setMemberSearch(e.target.value)}
+            />
+
+            <div className="max-h-60 overflow-y-auto rounded-lg border border-ink-200 divide-y divide-ink-50 p-1">
+              {!contacts ? (
+                <Skeleton lines={4} />
+              ) : filteredGroupMembers.length === 0 ? (
+                <div className="p-3 text-center text-xs text-ink-500">No members match your filter</div>
+              ) : (
+                filteredGroupMembers.map((contact) => {
+                  const isChecked = selectedMemberIds.includes(contact.id);
+                  return (
+                    <label
+                      key={contact.id}
+                      className={cx(
+                        'flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm cursor-pointer transition select-none',
+                        isChecked ? 'bg-blue-50/70' : 'hover:bg-ink-50',
+                      )}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded text-blue-600 focus:ring-blue-500 shrink-0"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          setSelectedMemberIds((prev) =>
+                            e.target.checked ? [...prev, contact.id] : prev.filter((id) => id !== contact.id),
+                          );
+                        }}
+                      />
+                      <Avatar
+                        name={contact.full_name}
+                        src={contact.photo_url}
+                        size={28}
+                        online={onlineIds.includes(contact.id)}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="truncate text-xs font-bold text-ink-900">{contact.full_name}</p>
+                          {contact.department_name && (
+                            <span className="shrink-0 text-[10px] text-ink-400 font-medium truncate max-w-[120px]">
+                              {contact.department_name}
+                            </span>
+                          )}
+                        </div>
+                        <p className="truncate text-[11px] text-ink-500">
+                          {[contact.employee_code, contact.designation_title].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </form>
+      )}
     </Modal>
+  );
+}
+
+function ContactsModal(props: {
+  open: boolean;
+  onClose: () => void;
+  onSelect: (id: number) => Promise<void>;
+  onCall: (id: number, type: 'audio' | 'video') => Promise<void>;
+  onlineIds: number[];
+}) {
+  return (
+    <ConversationModal
+      open={props.open}
+      onClose={props.onClose}
+      initialTab="direct"
+      onSelectDirect={props.onSelect}
+      onCreatedGroup={async () => props.onClose()}
+      onCall={props.onCall}
+      onlineIds={props.onlineIds}
+    />
+  );
+}
+
+function GroupModal(props: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (id: number) => Promise<void>;
+}) {
+  return (
+    <ConversationModal
+      open={props.open}
+      onClose={props.onClose}
+      initialTab="group"
+      onSelectDirect={async () => undefined}
+      onCreatedGroup={props.onCreated}
+      onCall={async () => undefined}
+      onlineIds={[]}
+    />
   );
 }
