@@ -238,7 +238,7 @@ export default function Tasks() {
     void openDetail(task.id);
     setSubmitModalOpen(true);
     setSubmitNote('');
-    setSubmitMetricValue(task.metricValue ?? '');
+    setSubmitMetricValue(task.metricValue ?? 0);
     setSubmitFile(null);
   };
 
@@ -1270,7 +1270,7 @@ export default function Tasks() {
                     onClick={() => {
                       setSubmitModalOpen(true);
                       setSubmitNote('');
-                      setSubmitMetricValue(detail.metricValue ?? '');
+                      setSubmitMetricValue(detail.metricValue ?? 0);
                       setSubmitFile(null);
                     }}
                   >
@@ -1671,16 +1671,16 @@ export default function Tasks() {
           {detail?.requiresMetric && (
             <Field
               label={detail.metricLabel ? `${detail.metricLabel} (${detail.metricUnit || ''})` : 'Numerical Metric Value'}
-              required
+              hint={`Enter current recorded ${detail.metricLabel || 'metric'} in ${detail.metricUnit || '₹'}. You can enter 0 if not applicable.`}
             >
               <input
                 type="number"
                 step="any"
+                min="0"
                 className="input"
-                placeholder={`Enter ${detail.metricLabel || 'metric'} value`}
+                placeholder={`Enter ${detail.metricLabel || 'metric'} value (e.g. 0)`}
                 value={submitMetricValue}
                 onChange={(e) => setSubmitMetricValue(e.target.value === '' ? '' : Number(e.target.value))}
-                required
               />
             </Field>
           )}
