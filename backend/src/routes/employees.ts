@@ -258,7 +258,7 @@ employeesRouter.put(
 
 employeesRouter.post(
   '/roles',
-  requireAny('roles.manage'),
+  requireAny('roles.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(
@@ -271,16 +271,27 @@ employeesRouter.post(
 
 employeesRouter.patch(
   '/roles/:id',
-  requireAny('roles.manage'),
+  requireAny('roles.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(
-      z.object({ name: z.string().min(2).max(120).optional(), description: z.string().max(255).optional(), level: z.number().int().min(1).max(100).optional() }),
+      z.object({ name: z.string().min(2).max(120).optional(), slug: z.string().min(2).max(80).optional(), description: z.string().max(255).optional(), level: z.number().int().min(1).max(100).optional() }),
       req.body,
     );
     await EmployeeService.updateRoleDetails(user, id, body);
     res.json({ ok: true });
+  }),
+);
+
+employeesRouter.delete(
+  '/roles/:id',
+  requireAny('roles.manage', 'org.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const raw = req.query.moveTo ?? (req.body as { moveToRoleId?: unknown } | undefined)?.moveToRoleId;
+    const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
+    if (moveTo !== undefined && (!Number.isInteger(moveTo) || moveTo <= 0)) throw ApiError.badRequest('Invalid target replacement role.');
+    res.json(await EmployeeService.deleteRole(currentUser(req), intParam(req.params.id), moveTo, clientIp(req)));
   }),
 );
 

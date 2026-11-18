@@ -23,11 +23,22 @@ interface LocationItem {
   isActive?: boolean;
 }
 
+interface RoleItem {
+  id: number;
+  name: string;
+  slug: string;
+  level: number;
+  employeeCount: number;
+  category?: string;
+  description?: string | null;
+  isSystem?: boolean;
+}
+
 interface Structure {
   departments: { id: number; name: string; code: string; head_name: string | null; employeeCount: number }[];
   designations: { id: number; title: string; departmentId: number | null; level: number }[];
   locations: LocationItem[];
-  roles: { id: number; name: string; slug: string; level: number; employeeCount: number }[];
+  roles: RoleItem[];
 }
 
 export default function Organization() {
@@ -48,15 +59,22 @@ export default function Organization() {
       { replace: true },
     );
 
-  // Permission check for locations & org management
+  // Permission checks
   const canManageLocations =
     has('locations.manage') ||
     has('org.manage') ||
     user?.roleSlug === 'super_admin' ||
     (user?.roleLevel ?? 0) >= 90;
 
-  // Search filter for locations
+  const canManageRoles =
+    has('roles.manage') ||
+    has('org.manage') ||
+    user?.roleSlug === 'super_admin' ||
+    (user?.roleLevel ?? 0) >= 90;
+
+  // Search filters
   const [locationSearch, setLocationSearch] = useState('');
+  const [roleSearch, setRoleSearch] = useState('');
 
   // Location Add/Edit Modal state
   const [locationModalOpen, setLocationModalOpen] = useState(false);
@@ -79,6 +97,24 @@ export default function Organization() {
   const [moveToLocationId, setMoveToLocationId] = useState('');
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [locationDeleting, setLocationDeleting] = useState(false);
+
+  // Role Add/Edit Modal state
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [editingRole, setEditingRole] = useState<RoleItem | null>(null);
+  const [roleForm, setRoleForm] = useState({
+    name: '',
+    slug: '',
+    level: '30',
+    category: 'general',
+    description: '',
+  });
+  const [roleSaving, setRoleSaving] = useState(false);
+
+  // Role Delete Modal state
+  const [deleteRoleTarget, setDeleteRoleTarget] = useState<RoleItem | null>(null);
+  const [moveToRoleId, setMoveToRoleId] = useState('');
+  const [deleteRoleConfirmText, setDeleteRoleConfirmText] = useState('');
+  const [roleDeleting, setRoleDeleting] = useState(false);
 
   const loadStructure = async () => {
     setLoading(true);
@@ -113,6 +149,21 @@ export default function Organization() {
     );
   }, [structure?.locations, locationSearch]);
 
+  // Filtered roles
+  const filteredRoles = useMemo(() => {
+    if (!structure?.roles) return [];
+    const query = roleSearch.trim().toLowerCase();
+    if (!query) return structure.roles;
+    return structure.roles.filter(
+      (r) =>
+        r.name.toLowerCase().includes(query) ||
+        r.slug.toLowerCase().includes(query) ||
+        (r.category && r.category.toLowerCase().includes(query)) ||
+        (r.description && r.description.toLowerCase().includes(query)),
+    );
+  }, [structure?.roles, roleSearch]);
+
+  // Location Handlers
   const openAddLocation = () => {
     setEditingLocation(null);
     setLocationForm({
@@ -218,6 +269,104 @@ export default function Organization() {
     }
   };
 
+  // Role Handlers
+  const openAddRole = () => {
+    setEditingRole(null);
+    setRoleForm({
+      name: '',
+      slug: '',
+      level: '30',
+      category: 'operations',
+      description: '',
+    });
+    setRoleModalOpen(true);
+  };
+
+  const openEditRole = (role: RoleItem) => {
+    setEditingRole(role);
+    setRoleForm({
+      name: role.name,
+      slug: role.slug,
+      level: String(role.level),
+      category: role.category ?? 'general',
+      description: role.description ?? '',
+    });
+    setRoleModalOpen(true);
+  };
+
+  const openDeleteRole = (role: RoleItem) => {
+    if (role.slug === 'super_admin' || role.level >= 100) {
+      toast.error('The core Super Admin role cannot be deleted.');
+      return;
+    }
+    setDeleteRoleTarget(role);
+    setDeleteRoleConfirmText('');
+    const otherRoles = structure?.roles.filter((r) => r.id !== role.id) ?? [];
+    setMoveToRoleId(otherRoles[0]?.id ? String(otherRoles[0].id) : '');
+  };
+
+  const handleSaveRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!roleForm.name.trim() || !roleForm.slug.trim()) {
+      toast.error('Role name and identifier slug are required.');
+      return;
+    }
+
+    const payload = {
+      name: roleForm.name.trim(),
+      slug: roleForm.slug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_'),
+      level: Number(roleForm.level) || 30,
+      category: roleForm.category.trim() || 'general',
+      description: roleForm.description.trim() || undefined,
+    };
+
+    setRoleSaving(true);
+    try {
+      if (editingRole) {
+        await api.patch(`/employees/roles/${editingRole.id}`, payload);
+        toast.success(`Role "${payload.name}" updated successfully.`);
+      } else {
+        await api.post('/employees/roles', payload);
+        toast.success(`Role "${payload.name}" (${payload.slug}) created successfully.`);
+      }
+      setRoleModalOpen(false);
+      setEditingRole(null);
+      await loadStructure();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setRoleSaving(false);
+    }
+  };
+
+  const handleConfirmDeleteRole = async () => {
+    if (!deleteRoleTarget) return;
+    const staffCount = deleteRoleTarget.employeeCount ?? 0;
+    if (staffCount > 0 && !moveToRoleId) {
+      toast.error('Please select a replacement role to reassign assigned employees.');
+      return;
+    }
+    if (deleteRoleConfirmText.trim().toUpperCase() !== 'DELETE') {
+      toast.error('Type DELETE to confirm deletion.');
+      return;
+    }
+
+    setRoleDeleting(true);
+    try {
+      const query = staffCount > 0 && moveToRoleId ? `?moveTo=${moveToRoleId}` : '';
+      await api.del(`/employees/roles/${deleteRoleTarget.id}${query}`);
+      toast.success(`Role "${deleteRoleTarget.name}" deleted successfully.`);
+      setDeleteRoleTarget(null);
+      setDeleteRoleConfirmText('');
+      setMoveToRoleId('');
+      await loadStructure();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setRoleDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -233,6 +382,16 @@ export default function Organization() {
             >
               <Icon name="plus" size={15} />
               <span>Add Location</span>
+            </button>
+          ) : tab === 'roles' && canManageRoles ? (
+            <button
+              type="button"
+              className="btn-primary btn-sm inline-flex items-center gap-1.5 !bg-brand-600 hover:!bg-brand-700 !text-white shadow-xs cursor-pointer"
+              onClick={openAddRole}
+              title="Create a new workforce role"
+            >
+              <Icon name="plus" size={15} />
+              <span>Add Role</span>
             </button>
           ) : undefined
         }
@@ -419,30 +578,149 @@ export default function Organization() {
           )}
         </div>
       ) : (
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="table-base">
-              <thead>
-                <tr>
-                  <th>Role</th>
-                  <th>Slug</th>
-                  <th>Level</th>
-                  <th>Employees</th>
-                </tr>
-              </thead>
-              <tbody>
-                {structure.roles.map((role) => (
-                  <tr key={role.id}>
-                    <td className="font-medium text-ink-800">{role.name}</td>
-                    <td className="text-xs text-ink-500">{role.slug}</td>
-                    <td>{role.level}</td>
-                    <td>{role.employeeCount}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        /* Roles Management Tab */
+        <div className="space-y-4">
+          {/* Action & Filter Toolbar */}
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-ink-100 shadow-2xs">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <input
+                  type="search"
+                  className="input py-1.5 pl-8 pr-3 text-sm w-64"
+                  placeholder="Search roles by name or slug…"
+                  value={roleSearch}
+                  onChange={(e) => setRoleSearch(e.target.value)}
+                />
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400">
+                  <Icon name="search" size={14} />
+                </span>
+              </div>
+              <span className="text-xs font-semibold text-ink-500">
+                {filteredRoles.length} {filteredRoles.length === 1 ? 'Role' : 'Roles'}
+              </span>
+            </div>
+
+            {canManageRoles && (
+              <button
+                type="button"
+                className="btn-primary btn-sm inline-flex items-center gap-1.5 !bg-brand-600 hover:!bg-brand-700 !text-white shadow-xs cursor-pointer"
+                onClick={openAddRole}
+              >
+                <Icon name="plus" size={15} />
+                <span>Add Role</span>
+              </button>
+            )}
           </div>
-        </Card>
+
+          {filteredRoles.length === 0 ? (
+            <EmptyState
+              title="No roles found"
+              description={
+                roleSearch.trim()
+                  ? `No workforce role matches "${roleSearch}".`
+                  : 'No roles have been created yet.'
+              }
+              action={
+                canManageRoles ? (
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm inline-flex items-center gap-1.5 cursor-pointer"
+                    onClick={openAddRole}
+                  >
+                    <Icon name="plus" size={14} />
+                    <span>Create Role</span>
+                  </button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <Card>
+              <div className="overflow-x-auto">
+                <table className="table-base">
+                  <thead>
+                    <tr>
+                      <th>Role</th>
+                      <th>Slug</th>
+                      <th>Level</th>
+                      <th>Employees</th>
+                      {canManageRoles && <th className="text-right">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredRoles.map((role) => (
+                      <tr key={role.id} className="hover:bg-slate-50/60 transition">
+                        <td>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-ink-900">{role.name}</span>
+                            {role.slug === 'super_admin' ? (
+                              <Badge tone="danger">System Root</Badge>
+                            ) : role.isSystem ? (
+                              <Badge tone="brand">System</Badge>
+                            ) : null}
+                          </div>
+                          {role.description && (
+                            <p className="text-xs text-ink-500 line-clamp-1 mt-0.5">{role.description}</p>
+                          )}
+                        </td>
+                        <td>
+                          <span className="font-mono text-xs text-ink-600 bg-ink-100/70 px-2 py-0.5 rounded">
+                            {role.slug}
+                          </span>
+                        </td>
+                        <td>
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold ${
+                              role.level >= 90
+                                ? 'bg-purple-100 text-purple-800'
+                                : role.level >= 60
+                                ? 'bg-blue-100 text-blue-800'
+                                : role.level >= 30
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            Level {role.level}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="font-semibold text-ink-800">
+                            {role.employeeCount} {role.employeeCount === 1 ? 'employee' : 'employees'}
+                          </span>
+                        </td>
+                        {canManageRoles && (
+                          <td className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold cursor-pointer"
+                                onClick={() => openEditRole(role)}
+                                title={`Edit ${role.name}`}
+                              >
+                                <Icon name="edit" size={13} />
+                                <span>Edit</span>
+                              </button>
+                              {role.slug !== 'super_admin' && role.level < 100 && (
+                                <button
+                                  type="button"
+                                  className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50 cursor-pointer"
+                                  onClick={() => openDeleteRole(role)}
+                                  title={`Delete ${role.name}`}
+                                >
+                                  <Icon name="trash" size={13} />
+                                  <span>Delete</span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </div>
       )}
 
       {/* Add / Edit Location Modal */}
@@ -655,6 +933,191 @@ export default function Organization() {
                 placeholder="Type DELETE"
                 value={deleteConfirmText}
                 onChange={(e) => setDeleteConfirmText(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Add / Edit Role Modal */}
+      <Modal
+        open={roleModalOpen}
+        onClose={() => setRoleModalOpen(false)}
+        title={editingRole ? `Edit Role: ${editingRole.name}` : 'Add New Workforce Role'}
+        description="Define role hierarchy levels, system identifiers, and operational permission boundaries."
+        size="md"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setRoleModalOpen(false)}
+              disabled={roleSaving}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="role-form"
+              className="btn-primary !bg-brand-600 hover:!bg-brand-700 !text-white"
+              disabled={roleSaving}
+            >
+              {roleSaving ? 'Saving…' : editingRole ? 'Update Role' : 'Create Role'}
+            </button>
+          </>
+        }
+      >
+        <form id="role-form" onSubmit={handleSaveRole} className="space-y-3.5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Role Name" required hint="e.g. Assistant Store Manager, Billing Clerk">
+              <input
+                className="input font-medium"
+                placeholder="e.g. Operations Supervisor"
+                value={roleForm.name}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const autoSlug = !editingRole ? val.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') : roleForm.slug;
+                  setRoleForm({ ...roleForm, name: val, slug: autoSlug });
+                }}
+                required
+              />
+            </Field>
+
+            <Field label="Slug / Identifier" required hint="Unique system key (e.g. store_manager)">
+              <input
+                className="input font-mono text-sm"
+                placeholder="e.g. operations_supervisor"
+                value={roleForm.slug}
+                onChange={(e) => setRoleForm({ ...roleForm, slug: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '_') })}
+                disabled={Boolean(editingRole && editingRole.slug === 'super_admin')}
+                required
+              />
+            </Field>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Hierarchy Level (1–100)" required hint="100=Super Admin, 80=GM, 60=Manager, 10=Staff">
+              <input
+                type="number"
+                min={1}
+                max={100}
+                className="input font-bold"
+                value={roleForm.level}
+                onChange={(e) => setRoleForm({ ...roleForm, level: e.target.value })}
+                disabled={Boolean(editingRole && editingRole.slug === 'super_admin')}
+                required
+              />
+            </Field>
+
+            <Field label="Role Category" hint="Functional grouping">
+              <select
+                className="input"
+                value={roleForm.category}
+                onChange={(e) => setRoleForm({ ...roleForm, category: e.target.value })}
+              >
+                <option value="executive">Executive / Leadership</option>
+                <option value="management">Store / Team Management</option>
+                <option value="operations">Store Operations / Sales</option>
+                <option value="it">IT & Systems</option>
+                <option value="hr">Human Resources & Admin</option>
+                <option value="finance">Finance & Accounts</option>
+                <option value="general">General Workforce</option>
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Description & Scope" hint="Operational responsibilities and duties">
+            <textarea
+              className="input min-h-[64px]"
+              placeholder="e.g. Oversees inventory receipt, cash counters, customer escalations, and store staff shifts."
+              value={roleForm.description}
+              onChange={(e) => setRoleForm({ ...roleForm, description: e.target.value })}
+            />
+          </Field>
+        </form>
+      </Modal>
+
+      {/* Delete Role Confirmation Modal */}
+      <Modal
+        open={Boolean(deleteRoleTarget)}
+        onClose={() => setDeleteRoleTarget(null)}
+        title={`Delete Role: ${deleteRoleTarget?.name ?? ''}`}
+        description="Permanently deletes this workforce role. If employees are assigned, select a replacement role to transfer them to."
+        size="md"
+        footer={
+          <>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setDeleteRoleTarget(null)}
+              disabled={roleDeleting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary !bg-rose-600 hover:!bg-rose-700 !text-white !border-rose-600 disabled:opacity-50"
+              onClick={handleConfirmDeleteRole}
+              disabled={
+                roleDeleting ||
+                deleteRoleConfirmText.trim().toUpperCase() !== 'DELETE' ||
+                ((deleteRoleTarget?.employeeCount ?? 0) > 0 && !moveToRoleId)
+              }
+            >
+              {roleDeleting ? 'Deleting…' : 'Delete Role'}
+            </button>
+          </>
+        }
+      >
+        {deleteRoleTarget && (
+          <div className="space-y-4 py-1">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-3.5 text-xs text-rose-900 space-y-1">
+              <p className="font-bold flex items-center gap-1.5 text-sm text-rose-800">
+                <Icon name="alert-triangle" size={16} />
+                <span>Caution: Deleting Role "{deleteRoleTarget.name}"</span>
+              </p>
+              <p>
+                Deleting this role removes all associated role-permission assignments.
+              </p>
+            </div>
+
+            {(deleteRoleTarget.employeeCount ?? 0) > 0 && (
+              <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3.5">
+                <p className="text-xs font-bold text-amber-900">
+                  ⚠️ {deleteRoleTarget.employeeCount} active employee(s) currently hold this role:
+                </p>
+                <Field label="Reassign affected employees to:" required hint="Select replacement workforce role">
+                  <select
+                    className="input font-semibold"
+                    value={moveToRoleId}
+                    onChange={(e) => setMoveToRoleId(e.target.value)}
+                    required
+                  >
+                    <option value="" disabled>
+                      Select Replacement Role
+                    </option>
+                    {structure?.roles
+                      .filter((r) => r.id !== deleteRoleTarget.id)
+                      .map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name} (Level {r.level} · {r.slug})
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-semibold text-ink-700 mb-1.5">
+                Type <span className="font-mono font-bold text-rose-600">DELETE</span> to confirm:
+              </label>
+              <input
+                className="input w-full font-mono text-sm"
+                placeholder="Type DELETE"
+                value={deleteRoleConfirmText}
+                onChange={(e) => setDeleteRoleConfirmText(e.target.value)}
                 autoFocus
               />
             </div>

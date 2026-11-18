@@ -942,10 +942,10 @@ export class EmployeeService {
                 (SELECT COUNT(*) FROM employees e WHERE e.location_id = l.id AND e.status = 'active') AS employee_count
          FROM locations l WHERE l.is_active = 1 ORDER BY l.name`,
       ),
-      query<{ id: number; name: string; slug: string; category: string; level: number; employee_count: number }>(
-        `SELECT r.id, r.name, r.slug, r.category, r.level,
+      query<{ id: number; name: string; slug: string; category: string; level: number; employee_count: number; description: string | null; is_system: number }>(
+        `SELECT r.id, r.name, r.slug, r.category, r.level, r.description, r.is_system,
                 (SELECT COUNT(*) FROM employees e WHERE e.role_id = r.id AND e.status = 'active') AS employee_count
-         FROM roles r ORDER BY r.level DESC`,
+         FROM roles r ORDER BY r.level DESC, r.name`,
       ),
     ]);
     return {
@@ -968,7 +968,12 @@ export class EmployeeService {
         isActive: Boolean(l.is_active),
         employeeCount: Number(l.employee_count),
       })),
-      roles: roles.map((r) => ({ ...r, employeeCount: Number(r.employee_count) })),
+      roles: roles.map((r) => ({
+        ...r,
+        id: Number(r.id),
+        employeeCount: Number(r.employee_count),
+        isSystem: Boolean(r.is_system) || r.slug === 'super_admin' || r.level >= 100,
+      })),
     };
   }
 
@@ -1320,12 +1325,23 @@ export class EmployeeService {
   }
 
 
-  static async updateRoleDetails(actor: AuthUser, roleId: number, input: { name?: string; description?: string; level?: number }) {
-    if (!actor.permissions.includes('roles.manage')) throw ApiError.forbidden('You cannot manage roles.');
-    const role = await queryOne<{ is_system: number }>('SELECT is_system FROM roles WHERE id = ?', [roleId]);
+  static async updateRoleDetails(actor: AuthUser, roleId: number, input: { name?: string; slug?: string; description?: string; level?: number }) {
+    const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('You cannot manage roles.');
+    const role = await queryOne<{ id: number; slug: string; level: number; is_system: number }>('SELECT id, slug, level, is_system FROM roles WHERE id = ?', [roleId]);
     if (!role) throw ApiError.notFound('Role not found');
-    await execute('UPDATE roles SET name = COALESCE(?, name), description = COALESCE(?, description), level = COALESCE(?, level) WHERE id = ?', [
-      input.name ?? null,
+    if (role.slug === 'super_admin' && input.level !== undefined && input.level < 100) {
+      throw ApiError.badRequest('Super Admin role must remain at hierarchy level 100.');
+    }
+    const cleanSlug = input.slug ? input.slug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') : undefined;
+    if (cleanSlug && cleanSlug !== role.slug) {
+      if (role.slug === 'super_admin') throw ApiError.badRequest('Super Admin slug cannot be changed.');
+      const exists = await queryOne<{ id: number }>('SELECT id FROM roles WHERE slug = ? AND id <> ?', [cleanSlug, roleId]);
+      if (exists) throw ApiError.conflict('A role with that slug already exists.');
+    }
+    await execute('UPDATE roles SET name = COALESCE(?, name), slug = COALESCE(?, slug), description = COALESCE(?, description), level = COALESCE(?, level) WHERE id = ?', [
+      input.name?.trim() ?? null,
+      cleanSlug ?? null,
       input.description ?? null,
       input.level ?? null,
       roleId,
@@ -1334,19 +1350,46 @@ export class EmployeeService {
   }
 
   static async createRole(actor: AuthUser, input: { name: string; slug: string; category?: string; level?: number; description?: string }) {
-    if (!actor.permissions.includes('roles.manage')) throw ApiError.forbidden('You cannot create roles.');
+    const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('You cannot create roles.');
     const slug = input.slug.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    if (!slug) throw ApiError.badRequest('A valid role slug is required.');
     const duplicate = await queryOne<{ id: number }>('SELECT id FROM roles WHERE slug = ?', [slug]);
     if (duplicate) throw ApiError.conflict('A role with that identifier already exists.');
     const result = await execute('INSERT INTO roles (name, slug, category, level, description) VALUES (?, ?, ?, ?, ?)', [
-      input.name,
+      input.name.trim(),
       slug,
       input.category ?? 'general',
       input.level ?? 20,
-      input.description ?? null,
+      input.description?.trim() || null,
     ]);
     await recordAudit({ actorId: actor.id, action: 'role.created', entityType: 'role', entityId: result.insertId, after: input });
     return result.insertId;
+  }
+
+  static async deleteRole(actor: AuthUser, roleId: number, moveToRoleId?: number, ip?: string) {
+    const canManage = actor.permissions.includes('roles.manage') || actor.permissions.includes('org.manage') || actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90;
+    if (!canManage) throw ApiError.forbidden('Only an administrator can delete roles.');
+    const role = await queryOne<{ id: number; name: string; slug: string; level: number; is_system: number }>('SELECT id, name, slug, level, is_system FROM roles WHERE id = ?', [roleId]);
+    if (!role) throw ApiError.notFound('Role not found');
+    if (role.slug === 'super_admin' || role.level >= 100 || Number(role.is_system) === 1) {
+      throw ApiError.badRequest('Core system roles like Super Admin cannot be deleted.');
+    }
+    const staff = await query<{ id: number }>("SELECT id FROM employees WHERE role_id = ? AND status NOT IN ('deleted', 'rejected')", [roleId]);
+    if (staff.length > 0) {
+      if (!moveToRoleId) {
+        throw ApiError.conflict(`${staff.length} active employee(s) are assigned to the "${role.name}" role. Choose a replacement role to transfer them to.`);
+      }
+      if (moveToRoleId === roleId) throw ApiError.badRequest('Choose a different replacement role.');
+      const targetRole = await queryOne<{ id: number; name: string }>('SELECT id, name FROM roles WHERE id = ?', [moveToRoleId]);
+      if (!targetRole) throw ApiError.badRequest('Target replacement role not found.');
+      const ids = staff.map((s) => Number(s.id));
+      await execute(`UPDATE employees SET role_id = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [targetRole.id, ...ids]);
+    }
+    await execute('DELETE FROM role_permissions WHERE role_id = ?', [roleId]);
+    await execute('DELETE FROM roles WHERE id = ?', [roleId]);
+    await recordAudit({ actorId: actor.id, action: 'role.deleted', entityType: 'role', entityId: roleId, before: role, ip });
+    return { ok: true, moved: staff.length };
   }
 }
 
