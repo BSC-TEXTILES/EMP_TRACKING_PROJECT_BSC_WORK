@@ -403,6 +403,7 @@ export default function Organization() {
           { value: 'departments', label: 'Departments' },
           { value: 'locations', label: 'Locations' },
           { value: 'roles', label: 'Roles' },
+          { value: 'times', label: 'Office Times & Shifts' },
         ]}
         value={tab}
         onChange={setTab}
@@ -577,7 +578,7 @@ export default function Organization() {
             </div>
           )}
         </div>
-      ) : (
+      ) : tab === 'roles' ? (
         /* Roles Management Tab */
         <div className="space-y-4">
           {/* Action & Filter Toolbar */}
@@ -720,6 +721,91 @@ export default function Organization() {
               </div>
             </Card>
           )}
+        </div>
+      ) : (
+        /* Office Times & Shifts Tab */
+        <div className="space-y-5">
+          <Card className="card-pad bg-gradient-to-r from-blue-50/60 to-indigo-50/40 border-blue-200">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm">
+                  <Icon name="clock" size={24} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-ink-900">Workforce Store Timings & Shift Policy</h3>
+                  <p className="text-xs text-ink-600 mt-0.5">
+                    Official working hours across all retail branches, customer service desks, and corporate headquarters.
+                  </p>
+                </div>
+              </div>
+
+              {(has('settings.manage') || has('org.manage') || (user?.roleLevel ?? 0) >= 60 || user?.roleSlug === 'super_admin') && (
+                <a
+                  href="/admin/office-times"
+                  className="btn-primary btn-sm inline-flex items-center gap-1.5"
+                >
+                  <Icon name="settings" size={14} />
+                  <span>Configure Office Times</span>
+                </a>
+              )}
+            </div>
+          </Card>
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card className="card-pad">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">Standard Check-In</p>
+              <p className="font-mono text-2xl font-bold text-ink-900 mt-1">09:30 AM</p>
+              <p className="text-xs text-ink-500 mt-1">With 10-minute grace window</p>
+            </Card>
+
+            <Card className="card-pad">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">Standard Check-Out</p>
+              <p className="font-mono text-2xl font-bold text-ink-900 mt-1">06:30 PM</p>
+              <p className="text-xs text-ink-500 mt-1">Full-day threshold: 9.0 hrs</p>
+            </Card>
+
+            <Card className="card-pad">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">Lunch Interval</p>
+              <p className="font-mono text-2xl font-bold text-ink-900 mt-1">01:00 – 02:00 PM</p>
+              <p className="text-xs text-ink-500 mt-1">60 min daily break allowance</p>
+            </Card>
+
+            <Card className="card-pad">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">Working Days</p>
+              <p className="font-mono text-2xl font-bold text-blue-700 mt-1">Mon – Sat</p>
+              <p className="text-xs text-ink-500 mt-1">Sunday official weekly off</p>
+            </Card>
+          </div>
+
+          <Card className="card-pad">
+            <div className="flex items-center justify-between pb-3 border-b border-ink-100">
+              <h4 className="font-bold text-sm text-ink-900">Branch & Location Timings</h4>
+              <span className="text-xs text-ink-500">Asia/Kolkata (IST)</span>
+            </div>
+
+            <div className="mt-3 divide-y divide-ink-100">
+              {structure.locations.map((loc) => (
+                <div key={loc.id} className="py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-ink-900 text-sm">{loc.name}</span>
+                      <span className="rounded bg-ink-100 px-1.5 py-0.5 text-xs font-mono font-bold text-ink-700">
+                        {loc.code}
+                      </span>
+                    </div>
+                    <p className="text-xs text-ink-500 mt-0.5">
+                      {loc.city ?? loc.name} · {loc.employeeCount ?? 0} employees assigned
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="font-mono font-semibold text-sm text-ink-900">09:30 AM – 06:30 PM</p>
+                    <p className="text-[11px] text-ink-500">Standard Retail Day Shift · 10m Grace</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
         </div>
       )}
 

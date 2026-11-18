@@ -61,6 +61,13 @@ export function originGuard(req: Request, _res: Response, next: NextFunction): v
     next();
     return;
   }
+  if (isMobileOrigin(origin)) {
+    // The mobile app sends Bearer tokens only. A cookie here means a page on that
+    // origin is trying to ride a browser session: refuse it.
+    if (req.headers.cookie) next(ApiError.forbidden('Cross-origin request blocked'));
+    else next();
+    return;
+  }
   const allowed = config.appOrigin.split(',').map((o) => o.trim().replace(/\/+$/, ''));
   const host = req.get('host');
   let sameHost = false;
@@ -71,6 +78,36 @@ export function originGuard(req: Request, _res: Response, next: NextFunction): v
   }
   if (!allowed.includes(origin.replace(/\/+$/, '')) && !sameHost) {
     next(ApiError.forbidden('Cross-origin request blocked'));
+    return;
+  }
+  next();
+}
+
+/** True for the Capacitor app's origins (see config.mobileOrigins). */
+export function isMobileOrigin(origin: string | undefined): boolean {
+  return Boolean(origin) && config.mobileOrigins.includes(origin!.replace(/\/+$/, ''));
+}
+
+/**
+ * CORS for the mobile app only. The app authenticates with a Bearer token, so
+ * credentials (cookies) are never allowed cross-origin: no
+ * Access-Control-Allow-Credentials header is sent, and originGuard rejects any
+ * state-changing request from these origins that carries cookies.
+ */
+export function mobileCors(req: Request, res: Response, next: NextFunction): void {
+  const origin = req.get('origin');
+  if (!req.path.startsWith('/api/') || !isMobileOrigin(origin)) {
+    next();
+    return;
+  }
+  res.setHeader('Access-Control-Allow-Origin', origin!);
+  res.append('Vary', 'Origin');
+  res.setHeader('Access-Control-Expose-Headers', 'X-Access-Expires-At, Content-Disposition, Retry-After');
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Requested-With');
+    res.setHeader('Access-Control-Max-Age', '600');
+    res.status(204).end();
     return;
   }
   next();

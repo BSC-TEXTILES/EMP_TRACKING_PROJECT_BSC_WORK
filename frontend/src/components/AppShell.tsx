@@ -8,6 +8,9 @@ import { cx, formatTime, relativeTime } from '../lib/format';
 import { Avatar, Badge, EmptyState, Field, Modal } from './ui';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Icon } from './icons';
+import { BottomNav, type BottomNavItem } from './mobile/BottomNav';
+import { PullToRefresh } from './mobile/NativeShell';
+import { isNative } from '../lib/native';
 import type { NotificationItem } from '../lib/types';
 
 interface NavItem {
@@ -34,6 +37,8 @@ export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+  /** Mobile app: bumping this remounts the current screen (pull to refresh). */
+  const [refreshKey, setRefreshKey] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [search, setSearch] = useState('');
@@ -244,6 +249,12 @@ export function AppShell() {
           { to: '/organization', label: 'Organisation', icon: 'org', show: true },
           { to: '/admin/organization', label: 'Organization data', icon: 'building', show: has('org.manage') },
           {
+            to: '/admin/office-times',
+            label: 'Office times',
+            icon: 'clock',
+            show: has('settings.manage') || has('org.manage') || (user?.roleLevel ?? 0) >= 60 || user?.roleSlug === 'super_admin',
+          },
+          {
             to: '/analytics',
             label: 'Analytics',
             icon: 'chart',
@@ -265,7 +276,7 @@ export function AppShell() {
         ],
       },
     ],
-    [has, canAny],
+    [has, canAny, user],
   );
 
   const activeTitle = useMemo(() => {
@@ -326,6 +337,21 @@ export function AppShell() {
   };
 
   if (!user) return null;
+
+  // Mobile app tab bar: the first four screens this user can open; everything else is under More.
+  const tabCandidates: (BottomNavItem & { show: boolean })[] = [
+    { to: '/', label: 'Home', icon: 'dashboard', show: has('dashboard.view') },
+    { to: '/attendance', label: 'Attendance', icon: 'clock', show: true },
+    { to: '/tasks', label: 'Tasks', icon: 'tasks', show: canAny('tasks.view.own', 'tasks.view.team', 'tasks.view.all') },
+    { to: '/chat', label: 'Messages', icon: 'chat', show: has('chat.use') },
+    { to: '/leave', label: 'Leave', icon: 'leave', show: has('leave.apply') },
+    { to: '/notifications', label: 'Alerts', icon: 'bell', show: true, badge: unreadNotifications },
+  ];
+  const tabs = tabCandidates.filter((t) => t.show).slice(0, 4);
+  const pullRefresh = () => {
+    setRefreshKey((k) => k + 1);
+    window.dispatchEvent(new CustomEvent('notifications:changed'));
+  };
 
   const renderSidebar = (collapsedMode: boolean) => (
     <aside className={cx('flex h-full shrink-0 flex-col bg-ink-900 text-white', collapsedMode ? 'w-[72px]' : 'w-64')}>
@@ -429,7 +455,7 @@ export function AppShell() {
   );
 
   return (
-    <div className="flex min-h-screen bg-ink-100">
+    <div className="app-shell flex min-h-screen bg-ink-100">
       <div className={cx('hidden lg:fixed lg:inset-y-0 lg:left-0 lg:flex', collapsed ? 'lg:w-[72px]' : 'lg:w-64')}>
         {renderSidebar(collapsed)}
       </div>
@@ -437,14 +463,14 @@ export function AppShell() {
       {mobileOpen && (
         <div className="fixed inset-0 z-40 flex lg:hidden">
           <div className="absolute inset-0 bg-ink-900/60" onClick={() => setMobileOpen(false)} aria-hidden />
-          <div className="relative z-10 h-full w-64">{renderSidebar(false)}</div>
+          <div className="relative z-10 h-full w-64 bg-ink-900 safe-top safe-bottom">{renderSidebar(false)}</div>
         </div>
       )}
 
       <div className={cx('flex min-w-0 flex-1 flex-col transition-[margin] duration-200', collapsed ? 'lg:ml-[72px]' : 'lg:ml-64')}>
-        <header className="sticky top-0 z-30 border-b border-ink-200 bg-white/95 backdrop-blur">
+        <header className="sticky top-0 z-30 border-b border-ink-200 bg-white/95 backdrop-blur safe-top">
           <div className="flex h-16 items-center gap-3 px-4 sm:px-6">
-            <button type="button" className="btn-ghost btn-sm lg:hidden" onClick={() => setMobileOpen(true)} aria-label="Open navigation">
+            <button type="button" className={cx('btn-ghost btn-sm lg:hidden', isNative && 'hidden')} onClick={() => setMobileOpen(true)} aria-label="Open navigation">
               <Icon name="menu" size={20} />
             </button>
             <div className="min-w-0">
@@ -671,12 +697,21 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 sm:px-6 sm:py-6">
-          <ErrorBoundary>
-            <Outlet />
-          </ErrorBoundary>
+        <main className={cx('mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 sm:px-6 sm:py-6', isNative && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
+          {isNative ? (
+            <PullToRefresh onRefresh={pullRefresh}>
+              <ErrorBoundary key={refreshKey}>
+                <Outlet />
+              </ErrorBoundary>
+            </PullToRefresh>
+          ) : (
+            <ErrorBoundary>
+              <Outlet />
+            </ErrorBoundary>
+          )}
         </main>
-        <footer className="no-print border-t border-ink-200 px-4 py-3 text-center text-[11px] text-ink-400 sm:px-6">
+        {isNative && <BottomNav items={tabs} onMore={() => setMobileOpen(true)} moreBadge={tabs.some((t) => t.to === '/notifications') ? 0 : unreadNotifications} />}
+        <footer hidden={isNative} className="no-print border-t border-ink-200 px-4 py-3 text-center text-[11px] text-ink-400 sm:px-6">
           Workforce Enterprise Suite · {new Date().getFullYear()} · Data and actions are persisted to MySQL
         </footer>
 

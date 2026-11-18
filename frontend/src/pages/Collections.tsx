@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, errorMessage } from '../lib/api';
+import { openExternal } from '../lib/native';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -358,7 +359,7 @@ export default function Collections() {
     const search = new URLSearchParams(query);
     search.set('type', 'collections');
     search.set('format', format);
-    window.location.href = `/api/exports?${search.toString()}`;
+    void openExternal(`/api/exports?${search.toString()}`);
   };
 
   if (!canView) {

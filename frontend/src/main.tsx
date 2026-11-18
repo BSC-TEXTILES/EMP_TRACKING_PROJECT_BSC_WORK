@@ -6,9 +6,15 @@ import { App } from './App';
 import { AuthProvider } from './contexts/AuthContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { RealtimeProvider } from './contexts/RealtimeContext';
+import { NativeShell } from './components/mobile/NativeShell';
+import { initNativeSession, isNative } from './lib/native';
+import { initTheme } from './lib/theme';
 
-// Register Service Worker for PWA
-if ('serviceWorker' in navigator) {
+initTheme();
+if (isNative) document.documentElement.dataset.native = '1';
+
+// Register Service Worker for PWA (website only; the app ships its files itself)
+if (!isNative && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js')
       .then((registration) => {
@@ -50,16 +56,21 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <ToastProvider>
-        <AuthProvider>
-          <RealtimeProvider>
-            <App />
-          </RealtimeProvider>
-        </AuthProvider>
-      </ToastProvider>
-    </BrowserRouter>
-  </StrictMode>,
-);
+// The app reads its stored session from the Keychain / Keystore before the first render.
+void initNativeSession().finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <ToastProvider>
+          <AuthProvider>
+            <RealtimeProvider>
+              <NativeShell>
+                <App />
+              </NativeShell>
+            </RealtimeProvider>
+          </AuthProvider>
+        </ToastProvider>
+      </BrowserRouter>
+    </StrictMode>,
+  );
+});

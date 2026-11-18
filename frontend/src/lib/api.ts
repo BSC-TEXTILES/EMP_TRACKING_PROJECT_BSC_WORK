@@ -11,7 +11,18 @@ export class ApiError extends Error {
   }
 }
 
-const BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/+$/, '');
+import { API_ORIGIN, isNative, mediaUrl, nativeTokens, openExternal, setMediaToken, setNativeTokens } from './native';
+
+// The mobile app calls the API by absolute URL (it runs on its own origin).
+const BASE = isNative ? `${API_ORIGIN}/api` : (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/+$/, '');
+/** Cookies on the website; Bearer tokens in the mobile app. */
+const CREDENTIALS: RequestCredentials = isNative ? 'omit' : 'include';
+
+function authHeaders(headers: Headers = new Headers()): Headers {
+  const tokens = isNative ? nativeTokens() : null;
+  if (tokens && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${tokens.accessToken}`);
+  return headers;
+}
 const REQUEST_TIMEOUT_MS = 20_000;
 /** Files above this size use the resumable, chunked upload endpoint. */
 const CHUNKED_UPLOAD_THRESHOLD = 10 * 1024 * 1024;
@@ -28,9 +39,9 @@ function reportClientFailure(path: string, status: number): void {
   const module = normalized.split('/').filter(Boolean)[0] ?? 'Platform';
   void fetch(`${BASE}/activity/client-error`, {
     method: 'POST',
-    credentials: 'include',
+    credentials: CREDENTIALS,
     keepalive: true,
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(new Headers({ 'Content-Type': 'application/json' })),
     body: JSON.stringify({ path: normalized, status, module }),
   }).catch(() => undefined);
 }
@@ -44,8 +55,68 @@ function scheduleRefresh(expiresAt: number): void {
   refreshTimer = setTimeout(() => { void renewSession().catch(() => undefined); }, Math.max(1000, expiresAt - Date.now() - 60000));
 }
 
+/**
+ * Mobile app: rotates the refresh token. A network failure is NOT a sign-out
+ * (phones lose signal all the time); only a 401 from the server ends the session.
+ */
+async function renewNativeSession(): Promise<void> {
+  const current = nativeTokens();
+  if (!current) throw new ApiError(401, 'Please sign in.', 'session_expired');
+  let response: Response;
+  try {
+    response = await fetch(`${BASE}/auth/mobile/refresh`, {
+      method: 'POST',
+      credentials: 'omit',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: current.refreshToken }),
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch {
+    throw new ApiError(0, 'Cannot reach the service. Check your network connection and try again.', 'network_error');
+  }
+  if (response.status === 401) {
+    await setNativeTokens(null);
+    sessionExpired = true;
+    localStorage.removeItem('wfm_access_expiry');
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+    throw new ApiError(401, 'Your session has expired. Please sign in again.', 'session_expired');
+  }
+  if (!response.ok) throw new ApiError(response.status, 'The service is temporarily unavailable. Please try again in a moment.', 'service_unavailable');
+  const result = (await response.json()) as { accessToken: string; refreshToken: string; accessTokenExpiresAt: number };
+  await setNativeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken, accessTokenExpiresAt: result.accessTokenExpiresAt });
+  localStorage.setItem('wfm_access_expiry', String(result.accessTokenExpiresAt));
+  scheduleRefresh(result.accessTokenExpiresAt);
+}
+
+/** Mobile app: makes sure the access token is valid for at least 30 more seconds. */
+export async function ensureFreshAccess(): Promise<string | null> {
+  if (!isNative) return null;
+  const current = nativeTokens();
+  if (!current) return null;
+  if (current.accessTokenExpiresAt < Date.now() + 30_000) await renewSession();
+  return nativeTokens()?.accessToken ?? null;
+}
+
+let mediaTimer: ReturnType<typeof setTimeout> | undefined;
+/** Mobile app: fetches the short-lived token used in image and download URLs. */
+export async function refreshMediaToken(): Promise<void> {
+  if (!isNative || !nativeTokens()) return;
+  clearTimeout(mediaTimer);
+  try {
+    const result = await request<{ token: string; expiresAt: number }>('/auth/mobile/media-token', { method: 'POST' });
+    setMediaToken(result);
+    mediaTimer = setTimeout(() => { void refreshMediaToken(); }, Math.max(60_000, result.expiresAt - Date.now() - 10 * 60_000));
+  } catch {
+    mediaTimer = setTimeout(() => { void refreshMediaToken(); }, 60_000);
+  }
+}
+
 async function renewSession(): Promise<void> {
   if (refreshFlight) return refreshFlight;
+  if (isNative) {
+    refreshFlight = renewNativeSession().finally(() => { refreshFlight = null; });
+    return refreshFlight;
+  }
   const renew = async () => {
     // Web Locks serialize cookie rotation across tabs. Only expiry metadata is stored.
     const expiry = Number(localStorage.getItem('wfm_access_expiry') || 0);
@@ -78,7 +149,20 @@ function isRawBody(body: BodyInit | null | undefined): boolean {
 async function request<T>(path: string, options: RequestInit = {}, retried = false): Promise<T> {
   const publicAuth = path.startsWith('/setup/') || path.startsWith('/auth/') && path !== '/auth/me' && !path.startsWith('/auth/sessions');
   if (sessionExpired && !publicAuth) throw new ApiError(401, 'Your session has expired. Please sign in again.', 'session_expired');
-  const headers = new Headers(options.headers);
+
+  // Mobile app: same screens, token endpoints (see docs/MOBILE_BACKEND.md).
+  let url = path;
+  if (isNative) {
+    if (path === '/auth/login') url = '/auth/mobile/login';
+    else if (path === '/auth/login/otp/verify') url = '/auth/mobile/login/otp/verify';
+    else if (path === '/auth/logout') {
+      url = '/auth/mobile/logout';
+      options = { ...options, body: JSON.stringify({ refreshToken: nativeTokens()?.refreshToken }) };
+    } else if (!publicAuth || path === '/auth/mobile/media-token') {
+      await ensureFreshAccess().catch(() => undefined);
+    }
+  }
+  const headers = authHeaders(new Headers(options.headers));
   if (options.body !== undefined && options.body !== null && !(options.body instanceof FormData) && !isRawBody(options.body)) {
     headers.set('Content-Type', 'application/json');
   }
@@ -88,8 +172,8 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
 
   let response: Response;
   try {
-    response = await fetch(`${BASE}${path}`, {
-      credentials: 'include',
+    response = await fetch(`${BASE}${url}`, {
+      credentials: CREDENTIALS,
       ...options,
       headers,
       signal: options.signal ?? controller.signal,
@@ -127,6 +211,10 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
     clearTimeout(refreshTimer);
     localStorage.removeItem('wfm_access_expiry');
     sessionExpired = true;
+    if (isNative) {
+      clearTimeout(mediaTimer);
+      await setNativeTokens(null);
+    }
   }
   if (response.status === 401 && !publicAuth) window.dispatchEvent(new CustomEvent('auth:expired'));
 
@@ -153,7 +241,18 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) return (await response.text()) as unknown as T;
-  return (await response.json()) as T;
+  const data = await response.json();
+  if (isNative && data && typeof data === 'object' && typeof data.accessToken === 'string') {
+    // Mobile sign-in: keep the tokens in secure storage, hand the screen only the rest.
+    const { accessToken, refreshToken, accessTokenExpiresAt, ...rest } = data as { accessToken: string; refreshToken: string; accessTokenExpiresAt: number };
+    await setNativeTokens({ accessToken, refreshToken, accessTokenExpiresAt });
+    sessionExpired = false;
+    localStorage.setItem('wfm_access_expiry', String(accessTokenExpiresAt));
+    scheduleRefresh(accessTokenExpiresAt);
+    await refreshMediaToken();
+    return rest as T;
+  }
+  return data as T;
 }
 
 export interface UploadedFile {
@@ -207,13 +306,15 @@ function isRetryable(error: unknown): boolean {
 /** Form upload with real progress events (XHR is the only browser API that reports upload progress). */
 async function uploadSingle(file: File, options: UploadOptions): Promise<UploadedFile> {
   const sha256 = await sha256Hex(file);
+  const bearer = await ensureFreshAccess().catch(() => null);
   return new Promise<UploadedFile>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append('file', file);
     if (sha256) form.append('sha256', sha256);
     xhr.open('POST', `${BASE}/files/upload`, true);
-    xhr.withCredentials = true;
+    xhr.withCredentials = !isNative;
+    if (bearer) xhr.setRequestHeader('Authorization', `Bearer ${bearer}`);
     xhr.timeout = 5 * 60_000;
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) notifyProgress(options, event.loaded, event.total);
@@ -342,6 +443,8 @@ export const api = {
 };
 
 export function fileUrl(fileId: number, download = false): string {
+  // Mobile app: absolute URL with a short-lived media token (img/video/links cannot send headers).
+  if (isNative) return mediaUrl(`/api/files/${fileId}${download ? '?download=1' : ''}`);
   // BASE already contains the API prefix (`/api` or an absolute API origin).
   // Using it directly keeps authenticated downloads working in both setups.
   return `${BASE}/files/${fileId}${download ? '?download=1' : ''}`;
@@ -351,6 +454,10 @@ export function downloadReport(params: Record<string, string | number | undefine
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== '') search.set(key, String(value));
+  }
+  if (isNative) {
+    void openExternal(`/api/exports?${search.toString()}`);
+    return;
   }
   window.location.href = `${BASE}/exports?${search.toString()}`;
 }

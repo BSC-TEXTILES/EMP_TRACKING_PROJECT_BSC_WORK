@@ -1,0 +1,158 @@
+/*
+ * Dark theme. Generated once by a helper script; edit freely.
+ *
+ * Active when <html data-theme="dark"> (see src/lib/theme.ts). Instead of adding
+ * dark: variants to every component, the colour tokens are remapped:
+ *  - ink (the neutral scale) is inverted, and --color-surface replaces white
+ *    backgrounds (cards, inputs, menus);
+ *  - the pale tints (50-200) of every accent colour become dark tints, so
+ *    badges and alerts keep their hue without glaring;
+ *  - accent text shades (600-900) are lightened for contrast;
+ *  - the few deliberately dark panels (sidebar, overlays) stay dark.
+ * Solid accent backgrounds (500-900) and white text are unchanged.
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --color-surface: #111a2e;
+  --color-ink-50: #182238;
+  --color-ink-100: #0b1220;
+  --color-ink-200: #26324a;
+  --color-ink-300: #3a475f;
+  --color-ink-400: #7d8aa2;
+  --color-ink-500: #98a6bb;
+  --color-ink-600: #b6c1d2;
+  --color-ink-700: #cdd5e1;
+  --color-ink-800: #e2e8f0;
+  --color-ink-900: #f5f7fb;
+  --color-brand-50: color-mix(in oklab, var(--color-brand-500) 13%, var(--color-surface));
+  --color-brand-100: color-mix(in oklab, var(--color-brand-500) 20%, var(--color-surface));
+  --color-brand-200: color-mix(in oklab, var(--color-brand-500) 32%, var(--color-surface));
+  --color-slate-50: color-mix(in oklab, var(--color-slate-500) 13%, var(--color-surface));
+  --color-slate-100: color-mix(in oklab, var(--color-slate-500) 20%, var(--color-surface));
+  --color-slate-200: color-mix(in oklab, var(--color-slate-500) 32%, var(--color-surface));
+  --color-gray-50: color-mix(in oklab, var(--color-gray-500) 13%, var(--color-surface));
+  --color-gray-100: color-mix(in oklab, var(--color-gray-500) 20%, var(--color-surface));
+  --color-gray-200: color-mix(in oklab, var(--color-gray-500) 32%, var(--color-surface));
+  --color-red-50: color-mix(in oklab, var(--color-red-500) 13%, var(--color-surface));
+  --color-red-100: color-mix(in oklab, var(--color-red-500) 20%, var(--color-surface));
+  --color-red-200: color-mix(in oklab, var(--color-red-500) 32%, var(--color-surface));
+  --color-rose-50: color-mix(in oklab, var(--color-rose-500) 13%, var(--color-surface));
+  --color-rose-100: color-mix(in oklab, var(--color-rose-500) 20%, var(--color-surface));
+  --color-rose-200: color-mix(in oklab, var(--color-rose-500) 32%, var(--color-surface));
+  --color-pink-50: color-mix(in oklab, var(--color-pink-500) 13%, var(--color-surface));
+  --color-pink-100: color-mix(in oklab, var(--color-pink-500) 20%, var(--color-surface));
+  --color-pink-200: color-mix(in oklab, var(--color-pink-500) 32%, var(--color-surface));
+  --color-orange-50: color-mix(in oklab, var(--color-orange-500) 13%, var(--color-surface));
+  --color-orange-100: color-mix(in oklab, var(--color-orange-500) 20%, var(--color-surface));
+  --color-orange-200: color-mix(in oklab, var(--color-orange-500) 32%, var(--color-surface));
+  --color-amber-50: color-mix(in oklab, var(--color-amber-500) 13%, var(--color-surface));
+  --color-amber-100: color-mix(in oklab, var(--color-amber-500) 20%, var(--color-surface));
+  --color-amber-200: color-mix(in oklab, var(--color-amber-500) 32%, var(--color-surface));
+  --color-yellow-50: color-mix(in oklab, var(--color-yellow-500) 13%, var(--color-surface));
+  --color-yellow-100: color-mix(in oklab, var(--color-yellow-500) 20%, var(--color-surface));
+  --color-yellow-200: color-mix(in oklab, var(--color-yellow-500) 32%, var(--color-surface));
+  --color-lime-50: color-mix(in oklab, var(--color-lime-500) 13%, var(--color-surface));
+  --color-lime-100: color-mix(in oklab, var(--color-lime-500) 20%, var(--color-surface));
+  --color-lime-200: color-mix(in oklab, var(--color-lime-500) 32%, var(--color-surface));
+  --color-green-50: color-mix(in oklab, var(--color-green-500) 13%, var(--color-surface));
+  --color-green-100: color-mix(in oklab, var(--color-green-500) 20%, var(--color-surface));
+  --color-green-200: color-mix(in oklab, var(--color-green-500) 32%, var(--color-surface));
+  --color-emerald-50: color-mix(in oklab, var(--color-emerald-500) 13%, var(--color-surface));
+  --color-emerald-100: color-mix(in oklab, var(--color-emerald-500) 20%, var(--color-surface));
+  --color-emerald-200: color-mix(in oklab, var(--color-emerald-500) 32%, var(--color-surface));
+  --color-teal-50: color-mix(in oklab, var(--color-teal-500) 13%, var(--color-surface));
+  --color-teal-100: color-mix(in oklab, var(--color-teal-500) 20%, var(--color-surface));
+  --color-teal-200: color-mix(in oklab, var(--color-teal-500) 32%, var(--color-surface));
+  --color-cyan-50: color-mix(in oklab, var(--color-cyan-500) 13%, var(--color-surface));
+  --color-cyan-100: color-mix(in oklab, var(--color-cyan-500) 20%, var(--color-surface));
+  --color-cyan-200: color-mix(in oklab, var(--color-cyan-500) 32%, var(--color-surface));
+  --color-sky-50: color-mix(in oklab, var(--color-sky-500) 13%, var(--color-surface));
+  --color-sky-100: color-mix(in oklab, var(--color-sky-500) 20%, var(--color-surface));
+  --color-sky-200: color-mix(in oklab, var(--color-sky-500) 32%, var(--color-surface));
+  --color-blue-50: color-mix(in oklab, var(--color-blue-500) 13%, var(--color-surface));
+  --color-blue-100: color-mix(in oklab, var(--color-blue-500) 20%, var(--color-surface));
+  --color-blue-200: color-mix(in oklab, var(--color-blue-500) 32%, var(--color-surface));
+  --color-indigo-50: color-mix(in oklab, var(--color-indigo-500) 13%, var(--color-surface));
+  --color-indigo-100: color-mix(in oklab, var(--color-indigo-500) 20%, var(--color-surface));
+  --color-indigo-200: color-mix(in oklab, var(--color-indigo-500) 32%, var(--color-surface));
+  --color-violet-50: color-mix(in oklab, var(--color-violet-500) 13%, var(--color-surface));
+  --color-violet-100: color-mix(in oklab, var(--color-violet-500) 20%, var(--color-surface));
+  --color-violet-200: color-mix(in oklab, var(--color-violet-500) 32%, var(--color-surface));
+  --color-purple-50: color-mix(in oklab, var(--color-purple-500) 13%, var(--color-surface));
+  --color-purple-100: color-mix(in oklab, var(--color-purple-500) 20%, var(--color-surface));
+  --color-purple-200: color-mix(in oklab, var(--color-purple-500) 32%, var(--color-surface));
+  --color-fuchsia-50: color-mix(in oklab, var(--color-fuchsia-500) 13%, var(--color-surface));
+  --color-fuchsia-100: color-mix(in oklab, var(--color-fuchsia-500) 20%, var(--color-surface));
+  --color-fuchsia-200: color-mix(in oklab, var(--color-fuchsia-500) 32%, var(--color-surface));
+}
+:root[data-theme='dark'] .bg-white, :root[data-theme='dark'] .hover:bg-white:hover { background-color: var(--color-surface); }
+:root[data-theme='dark'] .bg-white/95 { background-color: color-mix(in oklab, var(--color-surface) 95%, transparent); }
+:root[data-theme='dark'] .bg-white/90 { background-color: color-mix(in oklab, var(--color-surface) 90%, transparent); }
+:root[data-theme='dark'] .bg-white/80 { background-color: color-mix(in oklab, var(--color-surface) 80%, transparent); }
+:root[data-theme='dark'] .bg-white/70 { background-color: color-mix(in oklab, var(--color-surface) 70%, transparent); }
+:root[data-theme='dark'] .bg-white/50 { background-color: color-mix(in oklab, var(--color-surface) 50%, transparent); }
+:root[data-theme='dark'] .bg-ink-900 { background-color: #050a14; }
+:root[data-theme='dark'] .bg-ink-900/40 { background-color: rgb(2 6 15 / 40%); }
+:root[data-theme='dark'] .bg-ink-900/50 { background-color: rgb(2 6 15 / 50%); }
+:root[data-theme='dark'] .bg-ink-900/55 { background-color: rgb(2 6 15 / 55%); }
+:root[data-theme='dark'] .bg-ink-900/60 { background-color: rgb(2 6 15 / 60%); }
+:root[data-theme='dark'] .bg-ink-900/70 { background-color: rgb(2 6 15 / 70%); }
+:root[data-theme='dark'] .bg-ink-900/80 { background-color: rgb(2 6 15 / 80%); }
+:root[data-theme='dark'] .text-brand-600, :root[data-theme='dark'] .hover:text-brand-600:hover, :root[data-theme='dark'] .text-brand-700, :root[data-theme='dark'] .hover:text-brand-700:hover { color: var(--color-brand-400); }
+:root[data-theme='dark'] .text-brand-800, :root[data-theme='dark'] .text-brand-900 { color: color-mix(in oklab, var(--color-brand-400) 55%, white); }
+:root[data-theme='dark'] .text-slate-600, :root[data-theme='dark'] .hover:text-slate-600:hover, :root[data-theme='dark'] .text-slate-700, :root[data-theme='dark'] .hover:text-slate-700:hover { color: var(--color-slate-400); }
+:root[data-theme='dark'] .text-slate-800, :root[data-theme='dark'] .text-slate-900 { color: color-mix(in oklab, var(--color-slate-400) 55%, white); }
+:root[data-theme='dark'] .text-gray-600, :root[data-theme='dark'] .hover:text-gray-600:hover, :root[data-theme='dark'] .text-gray-700, :root[data-theme='dark'] .hover:text-gray-700:hover { color: var(--color-gray-400); }
+:root[data-theme='dark'] .text-gray-800, :root[data-theme='dark'] .text-gray-900 { color: color-mix(in oklab, var(--color-gray-400) 55%, white); }
+:root[data-theme='dark'] .text-red-600, :root[data-theme='dark'] .hover:text-red-600:hover, :root[data-theme='dark'] .text-red-700, :root[data-theme='dark'] .hover:text-red-700:hover { color: var(--color-red-400); }
+:root[data-theme='dark'] .text-red-800, :root[data-theme='dark'] .text-red-900 { color: color-mix(in oklab, var(--color-red-400) 55%, white); }
+:root[data-theme='dark'] .text-rose-600, :root[data-theme='dark'] .hover:text-rose-600:hover, :root[data-theme='dark'] .text-rose-700, :root[data-theme='dark'] .hover:text-rose-700:hover { color: var(--color-rose-400); }
+:root[data-theme='dark'] .text-rose-800, :root[data-theme='dark'] .text-rose-900 { color: color-mix(in oklab, var(--color-rose-400) 55%, white); }
+:root[data-theme='dark'] .text-pink-600, :root[data-theme='dark'] .hover:text-pink-600:hover, :root[data-theme='dark'] .text-pink-700, :root[data-theme='dark'] .hover:text-pink-700:hover { color: var(--color-pink-400); }
+:root[data-theme='dark'] .text-pink-800, :root[data-theme='dark'] .text-pink-900 { color: color-mix(in oklab, var(--color-pink-400) 55%, white); }
+:root[data-theme='dark'] .text-orange-600, :root[data-theme='dark'] .hover:text-orange-600:hover, :root[data-theme='dark'] .text-orange-700, :root[data-theme='dark'] .hover:text-orange-700:hover { color: var(--color-orange-400); }
+:root[data-theme='dark'] .text-orange-800, :root[data-theme='dark'] .text-orange-900 { color: color-mix(in oklab, var(--color-orange-400) 55%, white); }
+:root[data-theme='dark'] .text-amber-600, :root[data-theme='dark'] .hover:text-amber-600:hover, :root[data-theme='dark'] .text-amber-700, :root[data-theme='dark'] .hover:text-amber-700:hover { color: var(--color-amber-400); }
+:root[data-theme='dark'] .text-amber-800, :root[data-theme='dark'] .text-amber-900 { color: color-mix(in oklab, var(--color-amber-400) 55%, white); }
+:root[data-theme='dark'] .text-yellow-600, :root[data-theme='dark'] .hover:text-yellow-600:hover, :root[data-theme='dark'] .text-yellow-700, :root[data-theme='dark'] .hover:text-yellow-700:hover { color: var(--color-yellow-400); }
+:root[data-theme='dark'] .text-yellow-800, :root[data-theme='dark'] .text-yellow-900 { color: color-mix(in oklab, var(--color-yellow-400) 55%, white); }
+:root[data-theme='dark'] .text-lime-600, :root[data-theme='dark'] .hover:text-lime-600:hover, :root[data-theme='dark'] .text-lime-700, :root[data-theme='dark'] .hover:text-lime-700:hover { color: var(--color-lime-400); }
+:root[data-theme='dark'] .text-lime-800, :root[data-theme='dark'] .text-lime-900 { color: color-mix(in oklab, var(--color-lime-400) 55%, white); }
+:root[data-theme='dark'] .text-green-600, :root[data-theme='dark'] .hover:text-green-600:hover, :root[data-theme='dark'] .text-green-700, :root[data-theme='dark'] .hover:text-green-700:hover { color: var(--color-green-400); }
+:root[data-theme='dark'] .text-green-800, :root[data-theme='dark'] .text-green-900 { color: color-mix(in oklab, var(--color-green-400) 55%, white); }
+:root[data-theme='dark'] .text-emerald-600, :root[data-theme='dark'] .hover:text-emerald-600:hover, :root[data-theme='dark'] .text-emerald-700, :root[data-theme='dark'] .hover:text-emerald-700:hover { color: var(--color-emerald-400); }
+:root[data-theme='dark'] .text-emerald-800, :root[data-theme='dark'] .text-emerald-900 { color: color-mix(in oklab, var(--color-emerald-400) 55%, white); }
+:root[data-theme='dark'] .text-teal-600, :root[data-theme='dark'] .hover:text-teal-600:hover, :root[data-theme='dark'] .text-teal-700, :root[data-theme='dark'] .hover:text-teal-700:hover { color: var(--color-teal-400); }
+:root[data-theme='dark'] .text-teal-800, :root[data-theme='dark'] .text-teal-900 { color: color-mix(in oklab, var(--color-teal-400) 55%, white); }
+:root[data-theme='dark'] .text-cyan-600, :root[data-theme='dark'] .hover:text-cyan-600:hover, :root[data-theme='dark'] .text-cyan-700, :root[data-theme='dark'] .hover:text-cyan-700:hover { color: var(--color-cyan-400); }
+:root[data-theme='dark'] .text-cyan-800, :root[data-theme='dark'] .text-cyan-900 { color: color-mix(in oklab, var(--color-cyan-400) 55%, white); }
+:root[data-theme='dark'] .text-sky-600, :root[data-theme='dark'] .hover:text-sky-600:hover, :root[data-theme='dark'] .text-sky-700, :root[data-theme='dark'] .hover:text-sky-700:hover { color: var(--color-sky-400); }
+:root[data-theme='dark'] .text-sky-800, :root[data-theme='dark'] .text-sky-900 { color: color-mix(in oklab, var(--color-sky-400) 55%, white); }
+:root[data-theme='dark'] .text-blue-600, :root[data-theme='dark'] .hover:text-blue-600:hover, :root[data-theme='dark'] .text-blue-700, :root[data-theme='dark'] .hover:text-blue-700:hover { color: var(--color-blue-400); }
+:root[data-theme='dark'] .text-blue-800, :root[data-theme='dark'] .text-blue-900 { color: color-mix(in oklab, var(--color-blue-400) 55%, white); }
+:root[data-theme='dark'] .text-indigo-600, :root[data-theme='dark'] .hover:text-indigo-600:hover, :root[data-theme='dark'] .text-indigo-700, :root[data-theme='dark'] .hover:text-indigo-700:hover { color: var(--color-indigo-400); }
+:root[data-theme='dark'] .text-indigo-800, :root[data-theme='dark'] .text-indigo-900 { color: color-mix(in oklab, var(--color-indigo-400) 55%, white); }
+:root[data-theme='dark'] .text-violet-600, :root[data-theme='dark'] .hover:text-violet-600:hover, :root[data-theme='dark'] .text-violet-700, :root[data-theme='dark'] .hover:text-violet-700:hover { color: var(--color-violet-400); }
+:root[data-theme='dark'] .text-violet-800, :root[data-theme='dark'] .text-violet-900 { color: color-mix(in oklab, var(--color-violet-400) 55%, white); }
+:root[data-theme='dark'] .text-purple-600, :root[data-theme='dark'] .hover:text-purple-600:hover, :root[data-theme='dark'] .text-purple-700, :root[data-theme='dark'] .hover:text-purple-700:hover { color: var(--color-purple-400); }
+:root[data-theme='dark'] .text-purple-800, :root[data-theme='dark'] .text-purple-900 { color: color-mix(in oklab, var(--color-purple-400) 55%, white); }
+:root[data-theme='dark'] .text-fuchsia-600, :root[data-theme='dark'] .hover:text-fuchsia-600:hover, :root[data-theme='dark'] .text-fuchsia-700, :root[data-theme='dark'] .hover:text-fuchsia-700:hover { color: var(--color-fuchsia-400); }
+:root[data-theme='dark'] .text-fuchsia-800, :root[data-theme='dark'] .text-fuchsia-900 { color: color-mix(in oklab, var(--color-fuchsia-400) 55%, white); }
+:root[data-theme='dark'] ::placeholder { color: var(--color-ink-400); }
+:root[data-theme='dark'] * { scrollbar-color: #3a475f transparent; }
+:root[data-theme='dark'] *::-webkit-scrollbar-thumb { background: #3a475f; }
+:root[data-theme='dark'] img, :root[data-theme='dark'] video { color-scheme: normal; }
+/* Inside deliberately dark panels, restore the light-theme neutral scale so
+   their text keeps the contrast it was designed with. */
+:root[data-theme='dark'] .bg-ink-900 {
+  --color-ink-50: #f8fafc;
+  --color-ink-100: #f1f5f9;
+  --color-ink-200: #e2e8f0;
+  --color-ink-300: #cbd5e1;
+  --color-ink-400: #94a3b8;
+  --color-ink-500: #64748b;
+  --color-ink-600: #475569;
+  --color-ink-700: #334155;
+  --color-ink-800: #1e293b;
+  --color-ink-900: #0f172a;
+}

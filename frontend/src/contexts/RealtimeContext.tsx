@@ -2,6 +2,8 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type R
 import { io, type Socket } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
+import { ensureFreshAccess } from '../lib/api';
+import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
 
 type Handler = (payload: unknown) => void;
 type ConnectionStatus = 'connecting' | 'online' | 'offline';
@@ -89,8 +91,24 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const socketUrl = import.meta.env.VITE_WEBSOCKET_URL || undefined;
-    const socket = io(socketUrl, {
+    // Mobile app: absolute API origin, WebSocket only, access token in the
+    // handshake (re-read on every reconnect so a refreshed token is used).
+    const socket = isNative ? io(API_ORIGIN, {
+      transports: ['websocket'],
+      withCredentials: false,
+      auth: (cb) => {
+        void ensureFreshAccess()
+          .catch(() => null)
+          .then((token) => cb({ token: token ?? nativeTokens()?.accessToken ?? '' }));
+      },
+      reconnection: true,
+      reconnectionDelay: 1_000,
+      reconnectionDelayMax: 30_000,
+      randomizationFactor: 0.25,
+      reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
+      timeout: 15_000,
+      autoConnect: true,
+    }) : io(import.meta.env.VITE_WEBSOCKET_URL || undefined, {
       withCredentials: true,
       // Polling first ensures handshake succeeds behind all reverse proxies, then upgrades cleanly to WebSocket
       transports: ['polling', 'websocket'],

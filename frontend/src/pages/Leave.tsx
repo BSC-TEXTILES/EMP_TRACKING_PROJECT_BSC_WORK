@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api, errorMessage } from '../lib/api';
+import { api, errorMessage, fileUrl } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -205,7 +205,7 @@ export default function Leave() {
                   <p className="mt-1 text-sm text-ink-600">{leave.reason}</p>
                   <p className="mt-1 text-xs text-ink-500">Location: {leave.locationName ?? 'Not assigned'} · Manager: {leave.managerName ?? 'Not assigned'} · HR: {leave.hrName ?? 'Legacy request'}</p>
                   <p className="mt-1 text-xs text-brand-700">Submitted → Manager {leave.managerActionAt ? 'reviewed' : 'pending'} → HR {leave.hrActionAt ? 'reviewed' : 'pending'} → {titleize(leave.status)}</p>
-                  {leave.documentFileId && <a href={`/api/files/${leave.documentFileId}?download=1`} className="mt-1 block text-xs text-brand-700 underline">Download supporting document</a>}
+                  {leave.documentFileId && <a href={fileUrl(leave.documentFileId, true)} className="mt-1 block text-xs text-brand-700 underline">Download supporting document</a>}
                   {leave.decisionNote && <p className="mt-1 text-xs text-ink-500">Decision note: {leave.decisionNote}</p>}
                 </div>
                 <div className="flex flex-wrap gap-1.5">

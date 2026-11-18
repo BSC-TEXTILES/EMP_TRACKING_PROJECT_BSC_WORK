@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, parseBody } from '../lib/http.js';
-import { authenticate, currentUser } from '../middleware/auth.js';
+import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
+import { PushService } from '../services/PushService.js';
 import { query, execute, queryOne } from '../db/index.js';
 import { config } from '../config.js';
 import type { AuthedRequest } from '../middleware/auth.js';
@@ -101,6 +102,8 @@ pushRouter.post(
  */
 pushRouter.post(
   '/send',
+  // Previously open to every signed-in user, letting anyone push arbitrary text to anyone.
+  requireAny('notifications.send'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(
@@ -275,4 +278,58 @@ pushRouter.post(
     
     res.json({ sent, total: subs.length });
   })
+);
+// ---------------------------------------------------------------------------
+// Mobile app (Android / iOS) - Firebase Cloud Messaging device tokens
+// ---------------------------------------------------------------------------
+
+const deviceSchema = z.object({
+  // FCM registration tokens are ~150-200 URL-safe characters.
+  token: z.string().min(20).max(512).regex(/^[A-Za-z0-9_:\-.]+$/, 'Invalid device token'),
+  platform: z.enum(['android', 'ios']),
+  deviceName: z.string().max(120).optional(),
+  appVersion: z.string().max(40).optional(),
+});
+
+/** Registers (or refreshes) this phone for push. Call after login and whenever FCM rotates the token. */
+pushRouter.post(
+  '/devices',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(deviceSchema, req.body);
+    await PushService.registerDevice(currentUser(req), body);
+    res.json({ ok: true, pushConfigured: PushService.configured() });
+  }),
+);
+
+/** Removes this phone's token (permission withdrawn in Settings). Logout removes it automatically. */
+pushRouter.delete(
+  '/devices',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(z.object({ token: deviceSchema.shape.token }), req.body);
+    const removed = await PushService.unregisterDevice(currentUser(req).id, body.token);
+    res.json({ ok: true, removed });
+  }),
+);
+
+pushRouter.get(
+  '/devices',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ devices: await PushService.devices(currentUser(req).id), pushConfigured: PushService.configured() });
+  }),
+);
+
+/** Per-category push toggles for the app's Settings screen. */
+pushRouter.get(
+  '/preferences',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json(await PushService.preferences(currentUser(req).id));
+  }),
+);
+
+pushRouter.put(
+  '/preferences',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(z.object({ categories: z.record(z.string().max(40), z.boolean()) }), req.body);
+    res.json(await PushService.setPreferences(currentUser(req).id, body.categories));
+  }),
 );

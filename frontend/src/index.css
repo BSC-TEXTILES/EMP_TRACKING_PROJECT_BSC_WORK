@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import './theme-dark.css';
 
 @theme {
   --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -22,6 +23,8 @@
   --color-ink-700: #334155;
   --color-ink-800: #1e293b;
   --color-ink-900: #0f172a;
+  /* Card, input and menu backgrounds. White in the light theme; see theme-dark.css. */
+  --color-surface: #ffffff;
 }
 
 @layer base {
@@ -50,7 +53,7 @@
 
 @layer components {
   .card {
-    @apply bg-white rounded-lg border border-ink-200 shadow-[0_1px_2px_rgba(15,23,42,0.04)];
+    @apply bg-surface rounded-lg border border-ink-200 shadow-[0_1px_2px_rgba(15,23,42,0.04)];
   }
   .card-pad {
     @apply p-5;
@@ -73,7 +76,7 @@
     @apply bg-brand-700 text-white hover:bg-brand-800 shadow-sm;
   }
   .btn-secondary {
-    @apply bg-white text-ink-700 border border-ink-300 hover:bg-ink-50;
+    @apply bg-surface text-ink-700 border border-ink-300 hover:bg-ink-50;
   }
   .btn-ghost {
     @apply text-ink-600 hover:bg-ink-100;
@@ -85,7 +88,7 @@
     @apply px-2.5 py-1.5 text-xs;
   }
   .input {
-    @apply w-full rounded-md border border-ink-300 bg-white px-3 py-2 text-sm text-ink-800 placeholder:text-ink-400
+    @apply w-full rounded-md border border-ink-300 bg-surface px-3 py-2 text-sm text-ink-800 placeholder:text-ink-400
       focus:border-brand-500 focus:ring-2 focus:ring-brand-100 focus:outline-none disabled:bg-ink-50;
   }
   .label {
@@ -118,7 +121,7 @@
     @apply max-w-[75%] rounded-2xl px-3.5 py-2 text-sm leading-relaxed break-words;
   }
   .bubble-in {
-    @apply bg-white border border-ink-200 text-ink-800 rounded-tl-sm;
+    @apply bg-surface border border-ink-200 text-ink-800 rounded-tl-sm;
   }
   .bubble-out {
     @apply bg-brand-700 text-white rounded-tr-sm;
@@ -138,4 +141,29 @@
   body {
     background: white;
   }
+}
+
+/* Phone safe areas (notch, status bar, home indicator). env() is 0 where not needed. */
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-pad {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+/* Mobile app (set on <html> by main.tsx when running inside Capacitor). */
+html[data-native] {
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+html[data-native] body {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* Screens outside the main layout (sign-in, registration) clear the status bar. */
+html[data-native] #root > div:not(.app-shell) {
+  padding-top: env(safe-area-inset-top, 0px);
 }

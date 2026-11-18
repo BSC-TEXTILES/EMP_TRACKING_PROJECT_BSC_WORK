@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, hasPermission, requireAny } from '../middleware/auth.js';
-import { AttendanceService } from '../services/AttendanceService.js';
+import { AttendanceService, OfficeHoursService } from '../services/AttendanceService.js';
 import { assertEmployeeAccess, locationEmployeeIds, visibleEmployeeIds } from '../lib/scope.js';
 import { addDays, endOfMonth, periodOf, startOfMonth, today } from '../lib/dates.js';
 import { LeaveService } from '../services/LeaveService.js';
@@ -11,6 +11,38 @@ import type { AuthedRequest } from '../middleware/auth.js';
 
 export const attendanceRouter = Router();
 attendanceRouter.use(authenticate);
+
+/** Office (login / logout) hours: company default and per location. Everyone can read them. */
+attendanceRouter.get(
+  '/office-hours',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ ...(await OfficeHoursService.get()), canEdit: hasPermission(currentUser(req), 'settings.manage') });
+  }),
+);
+
+const hoursSchema = z.object({
+  workStart: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM'),
+  workEnd: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM'),
+  graceMinutes: z.number().int().min(0).max(120),
+});
+
+attendanceRouter.put(
+  '/office-hours',
+  requireAny('settings.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(
+      z.object({
+        default: hoursSchema.optional(),
+        locations: z.array(z.union([
+          z.object({ locationId: z.number().int().positive(), inherit: z.literal(true) }),
+          hoursSchema.extend({ locationId: z.number().int().positive(), inherit: z.literal(false).optional() }),
+        ])).max(100).optional(),
+      }),
+      req.body,
+    );
+    res.json({ ...(await OfficeHoursService.set(currentUser(req), body, clientIp(req))), canEdit: true });
+  }),
+);
 
 attendanceRouter.get(
   '/today',

@@ -7,6 +7,7 @@ import { Card, SectionHeader, Badge, Modal, Field, Switch } from '../components/
 import { Icon } from '../components/icons';
 import { DeviceManager } from '../components/DeviceManager';
 import { cx } from '../lib/format';
+import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme';
 
 interface UserPreferences {
   emailNotifications: boolean;
@@ -32,7 +33,7 @@ export default function Settings() {
     callNotifications: true,
     meetingReminders: true,
     taskNotifications: true,
-    theme: 'system',
+    theme: themePreference(),
     language: 'en',
     timezone: 'Asia/Kolkata',
   });
@@ -42,8 +43,9 @@ export default function Settings() {
 
   const loadPreferences = async () => {
     try {
-      const result = await api.get<{ preferences: Partial<UserPreferences> }>('/api/me/preferences');
-      setPreferences(prev => ({ ...prev, ...result.preferences }));
+      const result = await api.get<{ preferences: Partial<UserPreferences> }>('/me/preferences');
+      // The theme is per device (this browser / this phone), not per account.
+      setPreferences(prev => ({ ...prev, ...result.preferences, theme: themePreference() }));
     } catch {
       // Ignore - use defaults
     } finally {
@@ -54,11 +56,9 @@ export default function Settings() {
   const savePreferences = async () => {
     setSaving(true);
     try {
-      await api.post('/api/me/preferences', preferences);
+      await api.post('/me/preferences', preferences);
       toast.success('Settings saved');
       
-      // Apply theme immediately
-      applyTheme(preferences.theme);
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -66,18 +66,8 @@ export default function Settings() {
     }
   };
 
-  const applyTheme = (theme: string) => {
-    const root = document.documentElement;
-    if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-  };
-
   useEffect(() => {
     loadPreferences();
-    applyTheme(preferences.theme);
   }, []);
 
   const handlePreferenceChange = (key: keyof UserPreferences, value: any) => {
@@ -188,9 +178,13 @@ export default function Settings() {
                 <select
                   className="input"
                   value={preferences.theme}
-                  onChange={(e) => handlePreferenceChange('theme', e.target.value as 'light' | 'dark' | 'system')}
+                  onChange={(e) => {
+                    // Applies at once on this device; no need to press Save.
+                    setThemePreference(e.target.value as ThemePreference);
+                    handlePreferenceChange('theme', e.target.value as ThemePreference);
+                  }}
                 >
-                  <option value="system">System Default</option>
+                  <option value="system">Same as this device</option>
                   <option value="light">Light</option>
                   <option value="dark">Dark</option>
                 </select>

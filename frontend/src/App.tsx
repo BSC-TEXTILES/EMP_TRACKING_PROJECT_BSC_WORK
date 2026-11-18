@@ -28,6 +28,7 @@ const Employees = lazy(() => import('./pages/Employees'));
 const Groups = lazy(() => import('./pages/Groups'));
 const OrganizationSettings = lazy(() => import('./pages/OrganizationSettings'));
 const Organization = lazy(() => import('./pages/Organization'));
+const OfficeTimesAdmin = lazy(() => import('./pages/OfficeTimesAdmin'));
 const Analytics = lazy(() => import('./pages/Analytics'));
 const RolesAdmin = lazy(() => import('./pages/RolesAdmin'));
 const SettingsAdmin = lazy(() => import('./pages/SettingsAdmin'));
@@ -120,6 +121,7 @@ export function App() {
           <Route path="admin/employees" element={<Employees />} />
           <Route path="organization" element={<Organization />} />
           <Route path="admin/organization" element={<OrganizationSettings />} />
+          <Route path="admin/office-times" element={<OfficeTimesAdmin />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="admin/roles" element={<RolesAdmin />} />
           <Route path="admin/settings" element={<SettingsAdmin />} />

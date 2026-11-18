@@ -10,7 +10,7 @@ import { onSetupCompleted, recoverPendingInstallation } from './services/Website
 import { config, needsSetup } from './config.js';
 import { apiRouter } from './routes/index.js';
 import { initRealtime } from './realtime/io.js';
-import { originGuard, rateLimit, securityHeaders } from './middleware/security.js';
+import { mobileCors, originGuard, rateLimit, securityHeaders } from './middleware/security.js';
 import { startJobs } from './jobs/scheduler.js';
 import { closePool, queryOne } from './db/index.js';
 import { FileService } from './services/FileService.js';
@@ -21,6 +21,7 @@ export function createApp() {
     app.set('trust proxy', 1);
     app.disable('x-powered-by');
     app.use(securityHeaders);
+    app.use(mobileCors);
     app.use(express.json({ limit: '2mb' }));
     app.use(express.urlencoded({ extended: true, limit: '2mb' }));
     app.use(cookieParser());

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { cx, initials, priorityTone, statusTone, titleize } from '../lib/format';
+import { mediaUrl } from '../lib/native';
 
 export function Avatar({
   name,
@@ -19,7 +20,7 @@ export function Avatar({
   useEffect(() => setFailed(false), [src]);
   const image = src && !failed ? (
     <img
-      src={src}
+      src={mediaUrl(src)}
       alt={name ?? 'Employee'}
       style={style}
       loading="lazy"

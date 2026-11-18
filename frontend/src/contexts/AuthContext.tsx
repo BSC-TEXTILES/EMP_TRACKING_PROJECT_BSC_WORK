@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ApiError, api } from '../lib/api';
+import { ApiError, api, refreshMediaToken } from '../lib/api';
+import { isNative } from '../lib/native';
 import type { CurrentUser } from '../lib/types';
 
 interface AuthContextValue {
@@ -43,6 +44,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     try {
       const result = await api.get<{ user: CurrentUser; unreadNotifications: number }>('/auth/me');
+      // Mobile app: image and download URLs need a media token before anything renders.
+      if (isNative) await refreshMediaToken();
       localStorage.setItem(SESSION_KEY, '1');
       setUser(result.user);
       setUnreadNotifications(result.unreadNotifications);
@@ -119,7 +122,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // while the employee is signed in. A network interruption only delays the
   // next heartbeat; it does not end the session.
   useEffect(() => {
-    if (!user?.id) return;
+    // A phone cannot report desktop activity; the native agent does that.
+    if (!user?.id || isNative) return;
     let cancelled = false;
     const start = () => {
       if (cancelled) return;

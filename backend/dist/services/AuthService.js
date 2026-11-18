@@ -395,6 +395,37 @@ export class AuthService {
     static accessToken(employeeId, sid) {
         return jwt.sign({ sid, sub: String(employeeId), typ: 'session' }, config.jwtSecret, { expiresIn: '15m' });
     }
+    /**
+     * Mobile app media links. `<img src>`, `<video src>` and download links cannot
+     * send an Authorization header, and the app never receives the website's
+     * cookies, so the app appends this token as `?mt=` to file and export URLs.
+     * It is accepted only for GET /api/files/:id and GET /api/exports (see the
+     * authenticate middleware), never as an access token, lasts one hour and dies
+     * with the session.
+     */
+    static mediaToken(accessToken) {
+        const payload = jwt.verify(accessToken, config.jwtSecret);
+        if (!payload?.sid || !payload.sub || payload.typ !== 'session')
+            throw ApiError.unauthorized();
+        const token = jwt.sign({ sid: payload.sid, sub: payload.sub, typ: 'media' }, config.jwtSecret, { expiresIn: '1h' });
+        return { token, expiresAt: Date.now() + 3600_000 };
+    }
+    static async authenticateMediaToken(token) {
+        let payload;
+        try {
+            payload = jwt.verify(token, config.jwtSecret);
+        }
+        catch {
+            return null;
+        }
+        if (!payload?.sid || !payload.sub || payload.typ !== 'media')
+            return null;
+        const session = await queryOne('SELECT id, employee_id FROM employee_sessions WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > NOW(3)', [sha256(payload.sid)]);
+        if (!session || Number(session.employee_id) !== Number(payload.sub))
+            return null;
+        const user = await AuthService.buildUser(Number(payload.sub), Number(session.id));
+        return user && user.status === 'active' ? user : null;
+    }
     static async refreshSession(raw) {
         if (!raw || raw.length > 256)
             throw ApiError.unauthorized();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, downloadReport, errorMessage } from '../lib/api';
+import { OfficeHoursBar, hoursFor, type OfficeHoursData } from '../components/OfficeHours';
 import { useDebounced, useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
@@ -135,7 +136,7 @@ export default function Employees() {
     });
     if (defaultLoc) {
       api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${defaultLoc}`)
-        .then((res) => setTargetLocationGroups(res.items))
+        .then((res) => setTargetLocationGroups(res.items ?? []))
         .catch(() => setTargetLocationGroups([]));
     }
   };
@@ -230,14 +231,14 @@ export default function Employees() {
   useEffect(() => {
     api.get<Structure>('/employees/structure').then(setStructure).catch(() => undefined);
     api.get<{ locations: Array<{ id: number; code: string; name: string }> }>('/employees/allowed-locations')
-      .then((res) => setAllowedLocations(res.locations))
+      .then((res) => setAllowedLocations(res.locations ?? []))
       .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     if (locationId) {
       api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locationId}`)
-        .then((res) => setLocationGroups(res.items))
+        .then((res) => setLocationGroups(res.items ?? []))
         .catch(() => setLocationGroups([]));
     } else {
       setLocationGroups([]);
@@ -271,6 +272,7 @@ export default function Employees() {
     }
   };
 
+  const [officeHours, setOfficeHours] = useState<OfficeHoursData | null>(null);
   const employeesList = useMemo(() => {
     return data?.items ?? [];
   }, [data?.items]);
@@ -312,6 +314,7 @@ export default function Employees() {
       </div>
 
       <Card>
+        <OfficeHoursBar onLoaded={setOfficeHours} />
         <div className="flex flex-wrap items-end gap-2 border-b border-ink-100 px-4 py-3">
           <div className="relative min-w-[200px] flex-1">
             <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
@@ -352,6 +355,7 @@ export default function Employees() {
                     <th>Role</th>
                     <th>Department</th>
                     <th>Manager</th>
+                    <th>Office time</th>
                     <th>Today</th>
                     <th>Open tasks</th>
                     <th>Status</th>
@@ -384,6 +388,12 @@ export default function Employees() {
                       <td className="text-ink-600">{employee.roleName}</td>
                       <td className="text-ink-600">{employee.departmentName ?? '—'}</td>
                       <td className="text-ink-600">{employee.managerName ?? '—'}</td>
+                      <td className="whitespace-nowrap text-xs text-ink-600 tabular-nums">
+                        {(() => {
+                          const h = hoursFor(officeHours, employee.locationId);
+                          return h ? <>{h.workStart} – {h.workEnd}</> : '—';
+                        })()}
+                      </td>
                       <td>{employee.attendanceStatus ? <StatusBadge status={employee.attendanceStatus} /> : <span className="text-xs text-ink-400">No record</span>}</td>
                       <td className="text-ink-700">{employee.openTasks}</td>
                       <td><StatusBadge status={employee.status} /></td>
@@ -899,7 +909,7 @@ export default function Employees() {
                 setApproveForm({ ...approveForm, locationId: locId, groupId: '' });
                 if (locId) {
                   api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locId}`)
-                    .then((res) => setTargetLocationGroups(res.items))
+                    .then((res) => setTargetLocationGroups(res.items ?? []))
                     .catch(() => setTargetLocationGroups([]));
                 } else {
                   setTargetLocationGroups([]);
@@ -1032,7 +1042,7 @@ export default function Employees() {
                 setTransferForm({ ...transferForm, locationId: locId, groupId: '' });
                 if (locId) {
                   api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${locId}`)
-                    .then((res) => setTargetLocationGroups(res.items))
+                    .then((res) => setTargetLocationGroups(res.items ?? []))
                     .catch(() => setTargetLocationGroups([]));
                 } else {
                   setTargetLocationGroups([]);
@@ -1119,7 +1129,7 @@ function CreateEmployee({
   useEffect(() => {
     if (form.locationId) {
       api.get<{ items: Array<{ id: number; code: string; name: string }> }>(`/groups?locationId=${form.locationId}`)
-        .then((res) => setAvailableGroups(res.items))
+        .then((res) => setAvailableGroups(res.items ?? []))
         .catch(() => setAvailableGroups([]));
     } else {
       setAvailableGroups([]);

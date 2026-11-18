@@ -2,6 +2,7 @@ import { execute, query, queryOne } from '../db/index.js';
 import { toIso } from '../lib/dates.js';
 import { emitToEmployees } from '../realtime/io.js';
 import { EmailService } from './EmailService.js';
+import { PushService } from './PushService.js';
 export class NotificationService {
     /**
      * Persists one notification and fan-outs per-recipient rows, then pushes it to
@@ -52,6 +53,15 @@ export class NotificationService {
             read: false,
         };
         emitToEmployees(recipients, 'notification:new', payload);
+        // Phone push (Android / iOS app). Best effort, never blocks or fails the caller.
+        void PushService.deliver(recipients, {
+            notificationId,
+            type: input.type,
+            title: input.title,
+            body: input.body ?? null,
+            link: input.link ?? null,
+            priority: input.priority ?? 'normal',
+        });
         // Email is queued after the notification is durable. A mail failure never
         // affects the business transaction that produced this notification.
         void EmailService.notifyRecipients(recipients, {

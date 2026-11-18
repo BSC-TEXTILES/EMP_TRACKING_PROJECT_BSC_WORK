@@ -15,12 +15,44 @@ async function syncMonitoring(action) {
     }
 }
 const SETTING_KEYS = ['work_start_time', 'work_end_time', 'late_grace_minutes', 'half_day_hours', 'full_day_hours', 'overtime_after_hours'];
-async function shiftConfig() {
+async function shiftConfig(locationId) {
     const s = await getSettings(SETTING_KEYS);
+    let workStart = s.work_start_time || '09:30';
+    let workEnd = s.work_end_time || '18:30';
+    let graceMinutes = Number(s.late_grace_minutes || 10);
+    if (locationId) {
+        const locSettings = await getSettings([
+            `loc_work_start_${locationId}`,
+            `loc_work_end_${locationId}`,
+            `loc_grace_${locationId}`,
+            'location_shifts_json',
+        ]);
+        if (locSettings[`loc_work_start_${locationId}`])
+            workStart = locSettings[`loc_work_start_${locationId}`];
+        if (locSettings[`loc_work_end_${locationId}`])
+            workEnd = locSettings[`loc_work_end_${locationId}`];
+        if (locSettings[`loc_grace_${locationId}`])
+            graceMinutes = Number(locSettings[`loc_grace_${locationId}`]);
+        if (locSettings.location_shifts_json) {
+            try {
+                const parsed = JSON.parse(locSettings.location_shifts_json);
+                const match = parsed[String(locationId)];
+                if (match?.workStartTime)
+                    workStart = match.workStartTime;
+                if (match?.workEndTime)
+                    workEnd = match.workEndTime;
+                if (match?.lateGraceMinutes != null)
+                    graceMinutes = Number(match.lateGraceMinutes);
+            }
+            catch {
+                // Fallback to location keys or general defaults
+            }
+        }
+    }
     return {
-        workStart: s.work_start_time || '09:30',
-        workEnd: s.work_end_time || '18:30',
-        graceMinutes: Number(s.late_grace_minutes || 10),
+        workStart,
+        workEnd,
+        graceMinutes,
         halfDayHours: Number(s.half_day_hours || 4),
         fullDayHours: Number(s.full_day_hours || 9),
         overtimeAfterHours: Number(s.overtime_after_hours || 9),
@@ -35,9 +67,100 @@ function lateMinutesFor(checkInUtc, shift) {
     const diff = minutesOfDay(local) - minutesOfDay(shift.workStart) - shift.graceMinutes;
     return Math.max(0, diff);
 }
+// ------------------------------------------------------------ office hours
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+function assertHours(h, label) {
+    if (!TIME_RE.test(h.workStart) || !TIME_RE.test(h.workEnd))
+        throw ApiError.badRequest(`${label}: times must be HH:MM (24-hour).`);
+    if (minutesOfDay(h.workEnd) <= minutesOfDay(h.workStart))
+        throw ApiError.badRequest(`${label}: logout time must be after login time.`);
+    if (!Number.isInteger(h.graceMinutes) || h.graceMinutes < 0 || h.graceMinutes > 120)
+        throw ApiError.badRequest(`${label}: grace must be 0–120 minutes.`);
+}
+/**
+ * Office (login / logout) hours: one company default plus optional per-location
+ * hours. These drive the Late badge at check-in and early-departure at check-out.
+ */
+export const OfficeHoursService = {
+    async get() {
+        const s = await getSettings(['work_start_time', 'work_end_time', 'late_grace_minutes']);
+        const def = {
+            workStart: s.work_start_time || '09:30',
+            workEnd: s.work_end_time || '18:30',
+            graceMinutes: Number(s.late_grace_minutes || 10),
+        };
+        const locations = await query('SELECT id, code, name FROM locations WHERE is_active = 1 ORDER BY name');
+        const rows = await Promise.all(locations.map(async (l) => {
+            const effective = await shiftConfig(Number(l.id));
+            const own = effective.workStart !== def.workStart || effective.workEnd !== def.workEnd || effective.graceMinutes !== def.graceMinutes;
+            return {
+                locationId: Number(l.id),
+                code: l.code,
+                name: l.name,
+                workStart: effective.workStart,
+                workEnd: effective.workEnd,
+                graceMinutes: effective.graceMinutes,
+                usesDefault: !own,
+            };
+        }));
+        return { default: def, locations: rows };
+    },
+    async set(actor, input, ip) {
+        if (input.default)
+            assertHours(input.default, 'Company hours');
+        const known = new Set((await query('SELECT id FROM locations')).map((l) => Number(l.id)));
+        for (const loc of input.locations ?? []) {
+            if (!known.has(loc.locationId))
+                throw ApiError.badRequest(`Unknown location ${loc.locationId}.`);
+            if (!loc.inherit)
+                assertHours(loc, `Location ${loc.locationId}`);
+        }
+        const before = await OfficeHoursService.get();
+        await transaction(async (conn) => {
+            const put = (key, value) => conn.query(`INSERT INTO system_settings (setting_key, setting_value, updated_by) VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_by = VALUES(updated_by)`, [key, value, actor.id]);
+            if (input.default) {
+                await put('work_start_time', input.default.workStart);
+                await put('work_end_time', input.default.workEnd);
+                await put('late_grace_minutes', String(input.default.graceMinutes));
+            }
+            if (input.locations?.length) {
+                // The older JSON map takes precedence over per-location keys; drop the
+                // edited locations from it so the values saved here are the ones used.
+                const [jsonRows] = await conn.query("SELECT setting_value FROM system_settings WHERE setting_key = 'location_shifts_json' FOR UPDATE");
+                const raw = jsonRows[0]?.setting_value;
+                let map = {};
+                try {
+                    map = raw ? JSON.parse(raw) : {};
+                }
+                catch {
+                    map = {};
+                }
+                for (const loc of input.locations) {
+                    delete map[String(loc.locationId)];
+                    const keys = [`loc_work_start_${loc.locationId}`, `loc_work_end_${loc.locationId}`, `loc_grace_${loc.locationId}`];
+                    if (loc.inherit) {
+                        await conn.query('DELETE FROM system_settings WHERE setting_key IN (?, ?, ?)', keys);
+                    }
+                    else {
+                        await put(keys[0], loc.workStart);
+                        await put(keys[1], loc.workEnd);
+                        await put(keys[2], String(loc.graceMinutes));
+                    }
+                }
+                if (raw !== undefined && raw !== null)
+                    await put('location_shifts_json', JSON.stringify(map));
+            }
+        });
+        const after = await OfficeHoursService.get();
+        await recordAudit({ actorId: actor.id, action: 'office_hours.updated', entityType: 'system_settings', before, after, ip });
+        return after;
+    },
+};
 export class AttendanceService {
     static async stateFor(employeeId, date = today()) {
-        const shift = await shiftConfig();
+        const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
+        const shift = await shiftConfig(emp?.location_id);
         const row = await queryOne(`SELECT a.*, NOW(3) AS server_now,
               (SELECT b.id FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_id,
               (SELECT b.started_at FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_start
@@ -84,7 +207,8 @@ export class AttendanceService {
     }
     static async checkIn(employeeId, input) {
         const date = today();
-        const shift = await shiftConfig();
+        const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
+        const shift = await shiftConfig(emp?.location_id);
         const nowTime = localTime();
         const late = minutesOfDay(nowTime) > minutesOfDay(shift.workStart) + shift.graceMinutes;
         await transaction(async (conn) => {
@@ -134,7 +258,8 @@ export class AttendanceService {
     }
     static async checkOut(employeeId, input) {
         const date = today();
-        const shift = await shiftConfig();
+        const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
+        const shift = await shiftConfig(emp?.location_id);
         const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, date]);
         if (!row?.check_in_at)
             throw ApiError.badRequest('You have not checked in today.');
@@ -326,7 +451,8 @@ export class AttendanceService {
         if (correction.status !== 'pending')
             throw ApiError.conflict('This correction has already been reviewed.');
         if (approve) {
-            const shift = await shiftConfig();
+            const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [correction.employee_id]);
+            const shift = await shiftConfig(emp?.location_id);
             await transaction(async (conn) => {
                 const [existingRows] = await conn.query('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? FOR UPDATE', [
                     correction.employee_id,

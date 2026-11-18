@@ -202,6 +202,23 @@ export const config = {
     },
     vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? '',
     vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? '',
+    /**
+     * Firebase Cloud Messaging for the Android / iOS app. Server-side only: the
+     * service-account key never ships in the app. Either a path to the JSON key
+     * file or the JSON itself (optionally base64-encoded) may be given.
+     */
+    fcm: {
+        serviceAccountFile: process.env.FCM_SERVICE_ACCOUNT_FILE ?? '',
+        serviceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON ?? '',
+    },
+    /**
+     * Origins the Capacitor app runs on (Android: https://localhost, iOS:
+     * capacitor://localhost). Allowed for cookie-less, Bearer-token requests only.
+     */
+    mobileOrigins: (process.env.MOBILE_APP_ORIGINS ?? 'capacitor://localhost,https://localhost')
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
     uploadDir: process.env.UPLOAD_DIR ?? 'storage/uploads',
     maxUploadMb: int('MAX_UPLOAD_MB', 15),
     /** Chunked/resumable uploads support large archives up to 1 GB by default. */

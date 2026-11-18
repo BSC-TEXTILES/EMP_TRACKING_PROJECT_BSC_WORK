@@ -142,7 +142,7 @@ export default function Groups() {
       if (search.trim()) params.set('search', search.trim());
 
       const res = await api.get<{ items: WorkforceGroupItem[] }>(`/groups?${params.toString()}`);
-      setGroups(res.items);
+      setGroups(res.items ?? []);
 
       // Load summary
       const sumRes = await api.get<{

@@ -119,8 +119,12 @@ export function initRealtime(server) {
     });
     io.use(async (socket, next) => {
         try {
+            // Website: HttpOnly session cookie. Mobile app: access token in the handshake
+            // `auth` payload (io(url, { transports: ['websocket'], auth: { token } })),
+            // because the app's origin never receives the website's cookies.
             const cookies = parseCookies(socket.handshake.headers.cookie);
-            const token = cookies[config.cookieName];
+            const authToken = socket.handshake.auth?.token;
+            const token = cookies[config.cookieName] ?? (typeof authToken === 'string' && authToken.length < 2048 ? authToken : undefined);
             if (!token)
                 return next(new Error('unauthorized'));
             const user = await AuthService.authenticateToken(token);

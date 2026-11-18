@@ -54,7 +54,7 @@ adminRouter.put(
     );
     const allowed = new Set([...Object.keys(SETTING_DEFAULTS), 'employee_code_seq', 'task_no_seq', 'ticket_no_seq', 'project_seq']);
     for (const [key, value] of Object.entries(body.settings)) {
-      if (!allowed.has(key)) continue;
+      if (!allowed.has(key) && !key.startsWith('loc_')) continue;
       await setSetting(key, value, user.id);
     }
     await recordAudit({ actorId: user.id, action: 'settings.updated', entityType: 'system_settings', after: body.settings });
@@ -250,3 +250,255 @@ adminRouter.post('/leave-types', requireAny('org.manage'), asyncHandler(async (r
   await recordAudit({ actorId: currentUser(req).id, action: 'leave_type.created', entityType: 'leave_type', entityId: result.insertId, after: body });
   res.status(201).json({ id: result.insertId });
 }));
+
+// ------------------------------ Office Times & Shifts ------------------------------
+
+adminRouter.get(
+  '/office-times',
+  requireAny('settings.manage', 'org.manage', 'admin.dashboard', 'locations.manage'),
+  asyncHandler(async (_req, res) => {
+    const rows = await query<{ setting_key: string; setting_value: string | null }>(
+      'SELECT setting_key, setting_value FROM system_settings',
+    );
+    const settings: Record<string, string> = { ...SETTING_DEFAULTS };
+    for (const r of rows) settings[r.setting_key] = r.setting_value ?? '';
+
+    const locRows = await query<{ id: number; name: string; code: string; city: string | null; timezone: string }>(
+      'SELECT id, name, code, city, timezone FROM locations WHERE is_active = 1 ORDER BY code',
+    );
+
+    let locationShifts: Record<string, { workStartTime?: string; workEndTime?: string; lateGraceMinutes?: number; shiftName?: string }> = {};
+    if (settings.location_shifts_json) {
+      try {
+        locationShifts = JSON.parse(settings.location_shifts_json);
+      } catch {
+        locationShifts = {};
+      }
+    }
+
+    const locations = locRows.map((loc) => {
+      const custom = locationShifts[String(loc.id)] || {
+        workStartTime: settings[`loc_work_start_${loc.id}`],
+        workEndTime: settings[`loc_work_end_${loc.id}`],
+        lateGraceMinutes: settings[`loc_grace_${loc.id}`] ? Number(settings[`loc_grace_${loc.id}`]) : undefined,
+      };
+      const hasCustom = Boolean(custom.workStartTime && custom.workEndTime);
+      return {
+        id: Number(loc.id),
+        name: loc.name,
+        code: loc.code,
+        city: loc.city,
+        timezone: loc.timezone || 'Asia/Kolkata',
+        workStartTime: custom.workStartTime || settings.work_start_time || '09:30',
+        workEndTime: custom.workEndTime || settings.work_end_time || '18:30',
+        lateGraceMinutes: custom.lateGraceMinutes != null ? Number(custom.lateGraceMinutes) : Number(settings.late_grace_minutes || 10),
+        shiftName: custom.shiftName || 'Standard Store Shift',
+        isCustom: hasCustom,
+      };
+    });
+
+    let shiftsCatalog = [
+      {
+        id: 'gen-01',
+        name: 'General Store Shift',
+        code: 'GEN-01',
+        startTime: '09:30',
+        endTime: '18:30',
+        graceMinutes: 10,
+        description: 'Standard daytime shift for all retail stores and head office',
+        isDefault: true,
+        active: true,
+      },
+      {
+        id: 'morn-01',
+        name: 'Morning Retail Shift',
+        code: 'MORN-01',
+        startTime: '09:00',
+        endTime: '18:00',
+        graceMinutes: 15,
+        description: 'Morning floor operations, stock receiving and counter opening',
+        isDefault: false,
+        active: true,
+      },
+      {
+        id: 'eve-01',
+        name: 'Evening Retail Shift',
+        code: 'EVE-01',
+        startTime: '11:30',
+        endTime: '20:30',
+        graceMinutes: 15,
+        description: 'Afternoon customer traffic, closing tally and reconciliation',
+        isDefault: false,
+        active: true,
+      },
+      {
+        id: 'corp-01',
+        name: 'Corporate & Administrative',
+        code: 'CORP-01',
+        startTime: '09:30',
+        endTime: '18:30',
+        graceMinutes: 10,
+        description: 'Corporate staff, accounts, digital marketing & IT technology team',
+        isDefault: false,
+        active: true,
+      },
+    ];
+
+    if (settings.shifts_catalog_json) {
+      try {
+        const parsedCatalog = JSON.parse(settings.shifts_catalog_json);
+        if (Array.isArray(parsedCatalog) && parsedCatalog.length > 0) {
+          shiftsCatalog = parsedCatalog;
+        }
+      } catch {
+        // use defaults
+      }
+    }
+
+    const workDays = (settings.work_days || '1,2,3,4,5,6')
+      .split(',')
+      .map(Number)
+      .filter((n) => !isNaN(n));
+
+    // Calculate current shift status
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const currentTimeKolkata = formatter.format(now);
+    const [curH, curM] = currentTimeKolkata.split(':').map(Number);
+    const curMinutes = curH * 60 + curM;
+
+    const [startH, startM] = (settings.work_start_time || '09:30').split(':').map(Number);
+    const startMinutes = startH * 60 + startM;
+
+    const [endH, endM] = (settings.work_end_time || '18:30').split(':').map(Number);
+    const endMinutes = endH * 60 + endM;
+
+    const inShift = curMinutes >= startMinutes && curMinutes <= endMinutes;
+    const isLateWindow = curMinutes > startMinutes && curMinutes <= startMinutes + Number(settings.late_grace_minutes || 10);
+
+    res.json({
+      general: {
+        workStartTime: settings.work_start_time || '09:30',
+        workEndTime: settings.work_end_time || '18:30',
+        lateGraceMinutes: Number(settings.late_grace_minutes || 10),
+        halfDayHours: Number(settings.half_day_hours || 4),
+        fullDayHours: Number(settings.full_day_hours || 9),
+        overtimeAfterHours: Number(settings.overtime_after_hours || 9),
+        missingCheckoutGraceMinutes: Number(settings.missing_checkout_grace_minutes || 120),
+        workDays,
+        dailyReportReminderTime: settings.daily_report_reminder_time || '18:00',
+        lunchStartTime: settings.lunch_start_time || '13:00',
+        lunchEndTime: settings.lunch_end_time || '14:00',
+        breakDurationMinutes: Number(settings.break_duration_minutes || 60),
+      },
+      locations,
+      shifts: shiftsCatalog,
+      currentStatus: {
+        currentTime: currentTimeKolkata,
+        timezone: 'Asia/Kolkata',
+        inShift,
+        isLateWindow,
+        statusLabel: inShift ? 'Store Open · Shift Active' : curMinutes < startMinutes ? 'Pre-Shift · Store Closed' : 'Post-Shift · Store Closed',
+      },
+    });
+  }),
+);
+
+adminRouter.put(
+  '/office-times',
+  requireAny('settings.manage', 'org.manage', 'locations.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const schema = z.object({
+      general: z.object({
+        workStartTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+        workEndTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+        lateGraceMinutes: z.number().int().min(0).max(180),
+        halfDayHours: z.number().min(1).max(12),
+        fullDayHours: z.number().min(1).max(24),
+        overtimeAfterHours: z.number().min(1).max(24),
+        missingCheckoutGraceMinutes: z.number().int().min(0).max(360).optional(),
+        workDays: z.array(z.number().int().min(0).max(6)).min(1),
+        dailyReportReminderTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        lunchStartTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        lunchEndTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        breakDurationMinutes: z.number().int().min(0).max(180).optional(),
+      }),
+      locations: z.array(z.object({
+        id: z.number().int().positive(),
+        workStartTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        workEndTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/).optional(),
+        lateGraceMinutes: z.number().int().min(0).max(180).optional(),
+        shiftName: z.string().max(100).optional(),
+        isCustom: z.boolean(),
+      })).optional(),
+      shifts: z.array(z.object({
+        id: z.string().max(32),
+        name: z.string().min(2).max(100),
+        code: z.string().min(2).max(32),
+        startTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+        endTime: z.string().regex(/^([01]\d|2[0-3]):([0-5]\d)$/),
+        graceMinutes: z.number().int().min(0).max(180),
+        description: z.string().max(255).optional(),
+        isDefault: z.boolean().optional(),
+        active: z.boolean().optional(),
+      })).optional(),
+    });
+
+    const body = parseBody(schema, req.body);
+    const g = body.general;
+
+    await setSetting('work_start_time', g.workStartTime, user.id);
+    await setSetting('work_end_time', g.workEndTime, user.id);
+    await setSetting('late_grace_minutes', String(g.lateGraceMinutes), user.id);
+    await setSetting('half_day_hours', String(g.halfDayHours), user.id);
+    await setSetting('full_day_hours', String(g.fullDayHours), user.id);
+    await setSetting('overtime_after_hours', String(g.overtimeAfterHours), user.id);
+    await setSetting('work_days', g.workDays.sort().join(','), user.id);
+    if (g.missingCheckoutGraceMinutes != null) await setSetting('missing_checkout_grace_minutes', String(g.missingCheckoutGraceMinutes), user.id);
+    if (g.dailyReportReminderTime) await setSetting('daily_report_reminder_time', g.dailyReportReminderTime, user.id);
+    if (g.lunchStartTime) await setSetting('lunch_start_time', g.lunchStartTime, user.id);
+    if (g.lunchEndTime) await setSetting('lunch_end_time', g.lunchEndTime, user.id);
+    if (g.breakDurationMinutes != null) await setSetting('break_duration_minutes', String(g.breakDurationMinutes), user.id);
+
+    if (body.locations) {
+      const locMap: Record<string, { workStartTime: string; workEndTime: string; lateGraceMinutes: number; shiftName: string }> = {};
+      for (const loc of body.locations) {
+        if (loc.isCustom && loc.workStartTime && loc.workEndTime) {
+          locMap[String(loc.id)] = {
+            workStartTime: loc.workStartTime,
+            workEndTime: loc.workEndTime,
+            lateGraceMinutes: loc.lateGraceMinutes ?? g.lateGraceMinutes,
+            shiftName: loc.shiftName || 'Store Shift',
+          };
+          await setSetting(`loc_work_start_${loc.id}`, loc.workStartTime, user.id);
+          await setSetting(`loc_work_end_${loc.id}`, loc.workEndTime, user.id);
+          await setSetting(`loc_grace_${loc.id}`, String(loc.lateGraceMinutes ?? g.lateGraceMinutes), user.id);
+        } else {
+          await setSetting(`loc_work_start_${loc.id}`, '', user.id);
+          await setSetting(`loc_work_end_${loc.id}`, '', user.id);
+          await setSetting(`loc_grace_${loc.id}`, '', user.id);
+        }
+      }
+      await setSetting('location_shifts_json', JSON.stringify(locMap), user.id);
+    }
+
+    if (body.shifts) {
+      await setSetting('shifts_catalog_json', JSON.stringify(body.shifts), user.id);
+    }
+
+    await recordAudit({
+      actorId: user.id,
+      action: 'office_times.updated',
+      entityType: 'office_times',
+      after: { general: g, locationCount: body.locations?.length ?? 0, shiftCount: body.shifts?.length ?? 0 },
+    });
+
+    res.json({ ok: true, message: 'Office times and shift schedules saved successfully.' });
+  }),
+);

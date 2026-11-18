@@ -3,6 +3,77 @@ import { z } from 'zod';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { asyncHandler, intParam, parseBody } from '../lib/http.js';
 import { GroupService } from '../services/GroupService.js';
+/*
+ * Response shapes. The service returns database rows (snake_case); the web app
+ * (Groups and Employees pages) reads camelCase under `items` / `group` /
+ * `members` / `summary` / `logs`. The raw rows used to be sent as-is, so those
+ * pages received undefined lists and crashed ("Cannot read properties of
+ * undefined (reading 'map')").
+ */
+function groupDto(g) {
+    return {
+        id: Number(g.id),
+        locationId: Number(g.location_id),
+        code: g.code ?? '',
+        name: g.name,
+        description: g.description,
+        managerId: g.manager_id === null ? null : Number(g.manager_id),
+        teamLeaderId: g.team_leader_id === null ? null : Number(g.team_leader_id),
+        isActive: Boolean(Number(g.is_active)),
+        locationName: g.location_name,
+        locationCode: g.location_code,
+        managerName: g.manager_name,
+        managerCode: g.manager_code,
+        teamLeaderName: g.team_leader_name,
+        teamLeaderCode: g.team_leader_code,
+        memberCount: Number(g.member_count ?? 0),
+        presentTodayCount: Number(g.present_count ?? 0),
+        createdAt: g.created_at,
+    };
+}
+function memberDto(groupId, m) {
+    return {
+        id: Number(m.employee_id),
+        groupId,
+        employeeId: Number(m.employee_id),
+        role: m.role,
+        fullName: m.full_name,
+        employeeCode: m.employee_code,
+        email: m.email,
+        mobile: '',
+        designationTitle: m.designation_title,
+        departmentName: m.department_name,
+        photoUrl: m.photo_url,
+        status: 'active',
+        attendanceStatus: m.attendance_status,
+        checkInAt: null,
+        isOnline: Boolean(Number(m.is_online ?? 0)),
+        joinedAt: m.joined_at,
+    };
+}
+function auditDto(row) {
+    let details = {};
+    try {
+        details = typeof row.details === 'string' ? JSON.parse(row.details) : (row.details ?? {});
+    }
+    catch {
+        details = {};
+    }
+    const text = (v) => (v === null || v === undefined || v === '' ? null : String(v));
+    return {
+        id: Number(row.id),
+        actorName: String(row.actor_name ?? ''),
+        action: String(row.action ?? ''),
+        entityType: row.target_employee_id ? 'employee' : 'group',
+        targetEmployeeName: text(row.target_employee_name),
+        fromLocationCode: text(row.from_location_name),
+        toLocationCode: text(row.to_location_name),
+        fromGroupName: text(details.fromGroupName ?? details.from_group_name),
+        toGroupName: text(details.toGroupName ?? details.to_group_name ?? row.group_name),
+        reason: text(details.reason),
+        createdAt: row.created_at,
+    };
+}
 export const groupsRouter = Router();
 groupsRouter.use(authenticate);
 // Get location-based dashboard summary
@@ -10,7 +81,8 @@ groupsRouter.get('/dashboard/summary', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
     const summary = await GroupService.dashboardSummary(user, locationId);
-    res.json(summary);
+    // `summary` is what the Groups page reads; the full breakdown stays alongside.
+    res.json({ ...summary, summary: summary.totals });
 }));
 // Get location audit logs
 groupsRouter.get('/audit/logs', requireAny('locations.manage', 'locations.view.all'), asyncHandler(async (req, res) => {
@@ -18,7 +90,7 @@ groupsRouter.get('/audit/logs', requireAny('locations.manage', 'locations.view.a
     const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
     const logs = await GroupService.auditLogs(user, { locationId, limit });
-    res.json({ logs });
+    res.json({ logs: logs.map(auditDto) });
 }));
 // List groups
 groupsRouter.get('/', asyncHandler(async (req, res) => {
@@ -27,14 +99,15 @@ groupsRouter.get('/', asyncHandler(async (req, res) => {
     const search = req.query.search ? String(req.query.search) : undefined;
     const isActive = req.query.isActive !== undefined ? req.query.isActive === 'true' || req.query.isActive === '1' : undefined;
     const groups = await GroupService.list(user, { locationId, search, isActive });
-    res.json({ groups });
+    const items = groups.map(groupDto);
+    res.json({ items, groups: items });
 }));
 // Get group by ID
 groupsRouter.get('/:id', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const id = intParam(req.params.id);
     const result = await GroupService.get(user, id);
-    res.json(result);
+    res.json({ group: groupDto(result.group), members: result.members.map((m) => memberDto(id, m)) });
 }));
 // Create a new group
 groupsRouter.post('/', requireAny('groups.manage', 'locations.manage'), asyncHandler(async (req, res) => {

@@ -4,6 +4,9 @@ import { config } from '../config.js';
 import { ApiError } from '../lib/http.js';
 import { AuthService, type AuthUser } from '../services/AuthService.js';
 
+/** Routes that accept a mobile media token (`?mt=`): file downloads and report exports. */
+const MEDIA_PATHS = /^\/api\/(?:files\/\d+|exports)\/?$/;
+
 export interface AuthedRequest extends Request {
   user?: AuthUser;
   authToken?: string;
@@ -15,7 +18,20 @@ export async function authenticate(req: AuthedRequest, _res: Response, next: Nex
     const header = req.get('authorization');
     const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     const candidate = token ?? bearer;
-    if (!candidate) throw ApiError.unauthorized();
+    if (!candidate) {
+      // Mobile app media link (?mt=): only for file downloads and exports. Never
+      // accepted on any other route or method.
+      const media = typeof req.query.mt === 'string' ? req.query.mt : undefined;
+      if (media && req.method === 'GET' && MEDIA_PATHS.test(req.originalUrl.split('?')[0])) {
+        const mediaUser = await AuthService.authenticateMediaToken(media);
+        if (!mediaUser) throw ApiError.unauthorized('This link has expired. Refresh the page.');
+        req.user = mediaUser;
+        _res.setHeader('Referrer-Policy', 'no-referrer');
+        next();
+        return;
+      }
+      throw ApiError.unauthorized();
+    }
     const user = await AuthService.authenticateToken(candidate);
     if (!user) throw ApiError.unauthorized('Your session has expired. Please sign in again.');
     const payload = jwt.decode(candidate) as { exp: number };
