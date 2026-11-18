@@ -193,7 +193,7 @@ employeesRouter.post(
 
 employeesRouter.delete(
   '/:id',
-  requireAny('employees.delete'),
+  requireAny('employees.delete', 'employees.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);

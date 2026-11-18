@@ -213,7 +213,7 @@ export class TicketService {
         email: actor.email, department: actor.departmentName, designation: actor.designationTitle, location: actor.locationName };
       await conn.query('UPDATE tickets SET issue_details = ? WHERE id = ?', [JSON.stringify(issueDetails), id]);
       for (const fileId of [...new Set(input.attachmentIds ?? [])]) {
-        const [files] = await conn.query<any[]>("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status = 'clean'", [fileId, actor.id]);
+        const [files] = await conn.query<any[]>("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status IN ('clean','validated')", [fileId, actor.id]);
         if (!files.length) throw ApiError.forbidden('Attachment is not an available file owned by you.');
         await conn.query('INSERT INTO ticket_attachments (ticket_id, file_id) VALUES (?, ?)', [id, fileId]);
       }

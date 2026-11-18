@@ -512,6 +512,11 @@ async function main(): Promise<void> {
   } else {
     console.log('  Email: SMTP not configured — delivery unavailable');
   }
+  void import('./lib/uploadSecurity.js').then(({ scannerConfigured, scanMode }) => {
+    if (scannerConfigured()) console.log(`  Uploads: content-verified + ClamAV scanned (${process.env.CLAMAV_HOST})`);
+    else if (scanMode() === 'required') console.warn('  Uploads: DISABLED — UPLOAD_SCAN_MODE=required but CLAMAV_HOST is not set');
+    else console.log('  Uploads: content-verified (set CLAMAV_HOST to add virus scanning)');
+  }).catch(() => undefined);
 
   const rawPort = process.env.PORT;
   const isPassenger = (typeof (global as any).PhusionPassenger !== 'undefined') ||

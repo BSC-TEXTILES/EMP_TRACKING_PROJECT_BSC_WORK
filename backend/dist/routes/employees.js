@@ -119,7 +119,7 @@ employeesRouter.post('/:id/status', requireAny('employees.manage'), asyncHandler
     await EmployeeService.setStatus(id, user, body.status, body.reason);
     res.json({ ok: true });
 }));
-employeesRouter.delete('/:id', requireAny('employees.delete'), asyncHandler(async (req, res) => {
+employeesRouter.delete('/:id', requireAny('employees.delete', 'employees.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(z.object({ reason: z.string().max(500).optional() }), req.body ?? {});

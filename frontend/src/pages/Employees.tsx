@@ -55,35 +55,43 @@ export default function Employees() {
   const [orgEdit, setOrgEdit] = useState(false);
   const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', employmentType: '' });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '' });
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   // Role hierarchy: mirror the server rule so people only see actions they may take.
   const myLevel = user?.roleLevel ?? 0;
+  const isElevatedAdmin = myLevel >= 100 || user?.roleSlug === 'super_admin' || has('employees.manage') || has('employees.delete');
   const roleLevelOf = (roleIdOrName: number | string | null | undefined) =>
     structure?.roles.find((r) => r.id === roleIdOrName || r.name === roleIdOrName)?.level ?? Number.MAX_SAFE_INTEGER;
   const canManage = (employeeId: number, roleIdOrName: number | string | null | undefined) =>
-    employeeId !== user?.id && (myLevel >= 100 || roleLevelOf(roleIdOrName) < myLevel);
+    employeeId !== user?.id && (isElevatedAdmin || roleLevelOf(roleIdOrName) < myLevel);
   const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
 
-  const deleteEmployee = async (employeeId: number, name: string, code: string) => {
-    const typed = window.prompt(
-      `Delete ${name} (${code})?
-
-They will be signed out and can no longer log in. Their email and mobile are released. Attendance, tasks and reports stay in history.
-
-Type DELETE to confirm:`,
-    );
-    if (typed?.trim().toUpperCase() !== 'DELETE') {
-      if (typed !== null) toast.error('Not deleted: you must type DELETE to confirm.');
+  const confirmDeleteEmployee = async () => {
+    if (!deleteTarget) return;
+    if (deleteConfirmText.trim().toUpperCase() !== 'DELETE') {
+      toast.error('Type DELETE to confirm deletion.');
       return;
     }
+    setDeleting(true);
     try {
-      await api.del(`/employees/${employeeId}`);
-      toast.success(`${name} has been deleted.`);
+      await api.del(`/employees/${deleteTarget.id}`);
+      toast.success(`${deleteTarget.name} has been deleted.`);
+      setDeleteTarget(null);
+      setDeleteConfirmText('');
       setDetail(null);
       await load();
     } catch (caught) {
       toast.error(errorMessage(caught));
+    } finally {
+      setDeleting(false);
     }
+  };
+
+  const deleteEmployee = (employeeId: number, name: string, code: string) => {
+    setDeleteTarget({ id: employeeId, name, code });
+    setDeleteConfirmText('');
   };
 
   const load = async () => {
@@ -268,20 +276,6 @@ Type DELETE to confirm:`,
                               </button>
                             </>
                           )}
-                          {has('employees.delete') && canManage(employee.id, employee.roleName) && (
-                            <button
-                              type="button"
-                              title="Delete employee"
-                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void deleteEmployee(employee.id, employee.fullName, employee.employeeCode);
-                              }}
-                            >
-                              <Icon name="trash" size={13} />
-                              <span>Delete</span>
-                            </button>
-                          )}
                           <button
                             type="button"
                             title="View full details"
@@ -300,6 +294,20 @@ Type DELETE to confirm:`,
                             <Icon name="edit" size={13} />
                             <span>Edit</span>
                           </button>
+                          {canManage(employee.id, employee.roleName) && (
+                            <button
+                              type="button"
+                              title="Delete employee"
+                              className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-rose-700 !border-rose-200 hover:!bg-rose-50"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteEmployee(employee.id, employee.fullName, employee.employeeCode);
+                              }}
+                            >
+                              <Icon name="trash" size={13} />
+                              <span>Delete</span>
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -338,9 +346,9 @@ Type DELETE to confirm:`,
                   }}>Reject</button>
                 </>
               )}
-              {has('employees.delete') && canManage(detail.id, detail.roleId) && (
+              {canManage(detail.id, detail.roleId) && (
                 <button className="btn-secondary btn-sm inline-flex items-center gap-1.5 !text-rose-700 !border-rose-200 hover:!bg-rose-50"
-                  onClick={() => void deleteEmployee(detail.id, detail.fullName, detail.employeeCode)}>
+                  onClick={() => deleteEmployee(detail.id, detail.fullName, detail.employeeCode)}>
                   <Icon name="trash" size={14} />
                   <span>Delete</span>
                 </button>
@@ -633,6 +641,64 @@ Type DELETE to confirm:`,
       </Modal>
 
       <CreateEmployee open={createOpen} onClose={() => setCreateOpen(false)} structure={structure} employees={employeesList} onCreated={() => { setCreateOpen(false); void load(); }} />
+
+      {/* Delete Employee Confirmation Modal */}
+      <Modal
+        open={Boolean(deleteTarget)}
+        onClose={() => { if (!deleting) setDeleteTarget(null); }}
+        title="Delete Employee Account"
+        description={deleteTarget ? `Permanently remove ${deleteTarget.name} (${deleteTarget.code})` : undefined}
+        size="md"
+        footer={
+          <div className="flex w-full items-center justify-between gap-2">
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={deleting}
+              onClick={() => setDeleteTarget(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={deleting || deleteConfirmText.trim().toUpperCase() !== 'DELETE'}
+              className="btn-primary btn-sm !bg-rose-600 hover:!bg-rose-700 !border-rose-600 text-white disabled:opacity-50"
+              onClick={() => void confirmDeleteEmployee()}
+            >
+              {deleting ? 'Deleting…' : 'Permanently Delete'}
+            </button>
+          </div>
+        }
+      >
+        {deleteTarget && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/60 p-4 text-xs text-rose-800">
+              <p className="font-bold text-sm text-rose-900 mb-1 flex items-center gap-1.5">
+                <Icon name="trash" size={16} />
+                Warning: Irreversible Account Deletion
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-rose-700">
+                <li>The employee will be immediately signed out and blocked from signing in.</li>
+                <li>Their registered email and mobile number will be released.</li>
+                <li>All historical attendance logs, task submissions, and KPI reports are permanently archived.</li>
+              </ul>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-ink-700 mb-1.5">
+                Type <span className="font-mono font-bold text-rose-600">DELETE</span> to confirm:
+              </label>
+              <input
+                className="input w-full font-mono text-sm"
+                placeholder="Type DELETE"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

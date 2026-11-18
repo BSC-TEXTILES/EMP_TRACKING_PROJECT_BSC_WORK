@@ -57,7 +57,7 @@ filesRouter.post('/upload', rateLimit({ windowMs: 60000, max: 15, keyPrefix: 'up
     let checksum;
     try {
         FileService.validate(file.originalname, file.mimetype, file.size);
-        await inspectUpload(file.path, file.originalname, file.mimetype);
+        const verdict = await inspectUpload(file.path, file.originalname, file.mimetype);
         checksum = await FileService.sha256File(file.path);
         // The browser sends the checksum it computed before uploading. Comparing
         // it with the bytes actually stored proves the transfer was not altered.
@@ -71,8 +71,9 @@ filesRouter.post('/upload', rateLimit({ windowMs: 60000, max: 15, keyPrefix: 'up
             mimeType: file.mimetype,
             size: file.size,
             sha256: checksum,
+            scanStatus: verdict,
         });
-        await recordAudit({ actorId: user.id, action: 'file.scan.clean', entityType: 'file', entityId: id });
+        await recordAudit({ actorId: user.id, action: verdict === 'clean' ? 'file.scan.clean' : 'file.content.validated', entityType: 'file', entityId: id });
     }
     catch (error) {
         await fs.unlink(file.path).catch(() => undefined);

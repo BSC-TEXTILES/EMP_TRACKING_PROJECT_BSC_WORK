@@ -137,7 +137,7 @@ export class FileService {
      * attachments therefore inherit the conversation's membership rules.
      */
     static async getForUser(fileId, user) {
-        const file = await queryOne("SELECT id, owner_id, storage_key, original_name, mime_type, size_bytes, is_private, sha256 FROM files WHERE id = ? AND (scan_status = 'clean' OR (scan_status = 'validated' AND is_private = 0))", [fileId]);
+        const file = await queryOne("SELECT id, owner_id, storage_key, original_name, mime_type, size_bytes, is_private, sha256 FROM files WHERE id = ? AND scan_status IN ('clean','validated')", [fileId]);
         if (!file)
             throw ApiError.notFound('File not found');
         // Public images (profile photos) may be viewed by any signed-in employee.
@@ -382,13 +382,14 @@ export class FileService {
         }
         try {
             FileService.validate(session.original_name, session.mime_type, bytes, { chunked: true });
-            await inspectUpload(finalPath, session.original_name, session.mime_type);
+            const verdict = await inspectUpload(finalPath, session.original_name, session.mime_type);
             const id = await FileService.register(owner.id, {
                 storageKey,
                 originalName: session.original_name,
                 mimeType: session.mime_type,
                 size: bytes,
                 sha256: checksum,
+                scanStatus: verdict,
             });
             await execute("UPDATE upload_sessions SET status = 'completed', received_bytes = ?, sha256 = ?, storage_key = ? WHERE id = ?", [
                 bytes,

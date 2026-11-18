@@ -16,6 +16,25 @@ function scannerUnavailable(): ApiError {
   return new ApiError(503, 'File scanning is unavailable. Try again later.', 'scanner_unavailable');
 }
 
+export type UploadVerdict = 'clean' | 'validated';
+
+/** True when a ClamAV daemon is configured for this server. */
+export function scannerConfigured(): boolean {
+  return Boolean(process.env.CLAMAV_HOST?.trim());
+}
+
+/**
+ * UPLOAD_SCAN_MODE:
+ *  - "required": every upload must pass ClamAV; without a scanner uploads are refused.
+ *  - "when_available" (default): files are always content-verified (signature, Office
+ *    structure, text checks, executable block-list) and additionally virus-scanned when
+ *    CLAMAV_HOST is set. Without a scanner they are stored as "validated".
+ * A configured scanner that is down still fails closed: it never counts as clean.
+ */
+export function scanMode(): 'required' | 'when_available' {
+  return process.env.UPLOAD_SCAN_MODE?.trim().toLowerCase() === 'required' ? 'required' : 'when_available';
+}
+
 /** A scanner failure must never be treated as a clean verdict. */
 function finishAvailable(finish: (error?: Error) => void): void {
   finish(scannerUnavailable());
@@ -228,7 +247,7 @@ async function validateTextContent(filePath: string): Promise<void> {
   }
 }
 
-export async function inspectUpload(filePath: string, originalName: string, mimeType: string): Promise<void> {
+export async function inspectUpload(filePath: string, originalName: string, mimeType: string): Promise<UploadVerdict> {
   const ext = path.extname(originalName).toLowerCase().slice(1);
   const stat = await fs.stat(filePath);
   if (stat.size === 0) throw ApiError.badRequest('The uploaded file is empty.');
@@ -269,5 +288,12 @@ export async function inspectUpload(filePath: string, originalName: string, mime
     }
   }
 
-  await scanFile(filePath);
+  if (scannerConfigured()) {
+    await scanFile(filePath);
+    return 'clean';
+  }
+  if (scanMode() === 'required') {
+    throw new ApiError(503, 'File uploads are disabled until the virus scanner (ClamAV) is configured on the server.', 'scanner_unavailable');
+  }
+  return 'validated';
 }

@@ -445,8 +445,9 @@ export class EmployeeService {
      * they can be registered again, and direct reports move up to the next manager.
      */
     static async remove(employeeId, actor, reason) {
-        if (!actor.permissions.includes('employees.delete'))
+        if (!actor.permissions.includes('employees.delete') && !actor.permissions.includes('employees.manage') && actor.roleLevel < 100) {
             throw ApiError.forbidden('You cannot delete employees.');
+        }
         const target = await queryOne(`SELECT e.id, e.full_name, e.employee_code, e.email, e.mobile, e.status, e.manager_id, r.slug AS role_slug
          FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = ?`, [employeeId]);
         if (!target)

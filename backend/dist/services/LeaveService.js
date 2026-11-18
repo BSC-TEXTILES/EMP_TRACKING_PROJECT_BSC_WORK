@@ -70,7 +70,7 @@ export class LeaveService {
         if (input.startDate.slice(0, 4) !== input.endDate.slice(0, 4))
             throw ApiError.badRequest('Submit separate requests for each calendar year.');
         if (input.documentFileId) {
-            const file = await queryOne("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status = 'clean'", [input.documentFileId, employeeId]);
+            const file = await queryOne("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status IN ('clean','validated')", [input.documentFileId, employeeId]);
             if (!file)
                 throw ApiError.forbidden('Select a supporting document uploaded by you.');
         }

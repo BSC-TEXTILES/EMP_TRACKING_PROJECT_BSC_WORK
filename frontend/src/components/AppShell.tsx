@@ -47,6 +47,7 @@ export function AppShell() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem('wfm_sidebar_collapsed') === '1');
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const profileRef = useRef<HTMLDivElement | null>(null);
 
   const [presenceStatus, setPresenceStatus] = useState('active');
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
@@ -296,8 +297,11 @@ export function AppShell() {
 
   useEffect(() => {
     const close = (event: MouseEvent) => {
-      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (panelRef.current && !panelRef.current.contains(target)) {
         setNotificationsOpen(false);
+      }
+      if (profileRef.current && !profileRef.current.contains(target)) {
         setProfileOpen(false);
       }
     };
@@ -552,7 +556,7 @@ export function AppShell() {
                 )}
               </div>
 
-              <div className="relative">
+              <div className="relative" ref={profileRef}>
                 <button type="button" className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-ink-100 transition-colors" onClick={() => setProfileOpen((open) => !open)}>
                   <div className="relative">
                     <Avatar name={user.fullName} src={user.photoUrl} size={32} />
