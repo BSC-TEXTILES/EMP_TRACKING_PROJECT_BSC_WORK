@@ -1,5 +1,7 @@
 # MOBILE_APP.md — mobile experience (PWA)
 
+> The native Android / iOS app (Capacitor) is described in [MOBILE_NATIVE_APP.md](MOBILE_NATIVE_APP.md); its API (token sign-in, push, media links) in [MOBILE_BACKEND.md](MOBILE_BACKEND.md). Section 6 below predates it: bearer-token login now exists (`/api/auth/mobile/*`).
+
 ## 1. Approach
 
 The platform ships as a **responsive web application + installable Progressive Web App**. It uses the same REST API and Socket.IO server as the desktop app, so data is identical and synchronised in real time; there is no second backend or divergent logic.

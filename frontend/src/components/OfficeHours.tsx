@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { Field, Modal } from './ui';
@@ -69,9 +70,12 @@ export function OfficeHoursBar({ onLoaded }: { onLoaded?: (data: OfficeHoursData
         </span>
       ))}
       {data.canEdit && (
-        <button type="button" className="btn-secondary btn-sm ml-auto" onClick={() => setEditing(true)}>
-          <Icon name="edit" size={14} /> Change office hours
-        </button>
+        <span className="ml-auto flex items-center gap-2">
+          <Link to="/admin/office-times" className="text-xs font-medium text-brand-700 hover:underline">Shifts, breaks & work days</Link>
+          <button type="button" className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <Icon name="edit" size={14} /> Change office hours
+          </button>
+        </span>
       )}
       {editing && <OfficeHoursModal data={data} onClose={() => setEditing(false)} onSaved={(next) => { setData(next); onLoaded?.(next); }} />}
     </div>
