@@ -2,6 +2,7 @@ import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
+import { idsFilterSql, locationEmployeeIds } from '../lib/scope.js';
 import { emitToConversation, emitToEmployee, emitToEmployees, isOnline, joinConversationRoom } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 function mapMessage(r, attachments = [], reactions = [], receipts = { recipientCount: 0, readCount: 0 }) {
@@ -519,7 +520,13 @@ export class ChatService {
         }
         await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, memberId]);
     }
-    static async contacts(employeeId) {
+    static async contacts(actor) {
+        const actorId = typeof actor === 'number' ? actor : actor.id;
+        let locationFilter = { clause: '', params: [] };
+        if (typeof actor !== 'number') {
+            const allowedIds = await locationEmployeeIds(actor);
+            locationFilter = idsFilterSql(allowedIds, 'e.id');
+        }
         return query(`SELECT e.id, e.full_name, e.mobile AS phone,
         CASE
           WHEN e.email IS NULL OR e.email = '' OR e.email LIKE '%@workforce.test'
@@ -530,8 +537,8 @@ export class ChatService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND e.id <> ?
-       ORDER BY e.full_name LIMIT 500`, [employeeId]);
+       WHERE e.status = 'active' AND e.id <> ? ${locationFilter.clause}
+       ORDER BY e.full_name LIMIT 500`, [actorId, ...locationFilter.params]);
     }
     static async renameConversation(conversationId, actor, name, description) {
         await ChatService.assertMember(conversationId, actor.id);

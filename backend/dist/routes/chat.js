@@ -16,7 +16,7 @@ chatRouter.get('/unread', asyncHandler(async (req, res) => {
 }));
 chatRouter.get('/contacts', asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    res.json({ contacts: await ChatService.contacts(user.id) });
+    res.json({ contacts: await ChatService.contacts(user) });
 }));
 chatRouter.post('/conversations/direct', asyncHandler(async (req, res) => {
     const user = currentUser(req);

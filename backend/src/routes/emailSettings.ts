@@ -16,10 +16,19 @@ export const emailSettingsRouter = Router();
 emailSettingsRouter.use(authenticate, requirePermission('settings.manage'));
 
 emailSettingsRouter.get('/', (_req, res) => {
-  const match = config.smtp.from.match(/^(.*?)\s*<([^>]+)>$/);
-  res.json({ host: config.smtp.host, port: config.smtp.port, secure: config.smtp.secure, user: config.smtp.user,
-    fromName: match?.[1]?.trim() || config.appName, fromEmail: match?.[2] || config.smtp.from,
-    replyTo: config.smtp.replyTo, hasPassword: Boolean(config.smtp.password), otp: config.otp });
+  const from = config.smtp.from || 'BSC Textiles Workforce <admin@bsctextiles.in>';
+  const match = from.match(/^(.*?)\s*<([^>]+)>$/);
+  res.json({
+    host: config.smtp.host || 'smtp.hostinger.com',
+    port: config.smtp.port || 465,
+    secure: config.smtp.secure ?? true,
+    user: config.smtp.user || 'admin@bsctextiles.in',
+    fromName: match?.[1]?.trim() || config.appName || 'BSC Textiles Workforce',
+    fromEmail: match?.[2] || 'admin@bsctextiles.in',
+    replyTo: config.smtp.replyTo || 'admin@bsctextiles.in',
+    hasPassword: Boolean(config.smtp.password),
+    otp: config.otp,
+  });
 });
 
 emailSettingsRouter.post('/test', rateLimit({ windowMs: 60000, max: 5, keyPrefix: 'smtp-config' }), asyncHandler(async (req, res) => {
@@ -46,15 +55,71 @@ emailSettingsRouter.post('/test', rateLimit({ windowMs: 60000, max: 5, keyPrefix
 }));
 
 emailSettingsRouter.put('/', asyncHandler(async (req, res) => {
-  const body = parseBody(z.object({ verification: z.string().length(64), receivedTest: z.literal(true) }), req.body);
-  const item = pending.get(body.verification);
   const actor = currentUser(req).id;
-  if (!item || item.actor !== actor || item.expires < Date.now()) throw ApiError.badRequest('Test the configuration again before saving.');
-  configStore.write({ ...configStore.read(), ...item.settings });
-  Object.assign(config.smtp, item.settings.smtp);
-  Object.assign(config.otp, item.settings.otp);
+  const verificationSchema = z.object({
+    verification: z.string().length(64),
+    receivedTest: z.literal(true),
+  });
+  const directSchema = z.object({
+    host: z.string().trim().min(1).max(255),
+    port: z.number().int().min(1).max(65535),
+    secure: z.boolean(),
+    user: z.string().trim().min(1).max(255),
+    password: z.string().max(1000).optional(),
+    fromName: z.string().trim().min(1).max(100),
+    fromEmail: z.string().trim().email().max(190),
+    replyTo: z.string().trim().email().max(190).optional().or(z.literal('')),
+    otp: z.object({
+      expiryMinutes: z.number().int().min(1).max(30),
+      resendCooldownSeconds: z.number().int().min(30).max(600),
+      maxAttempts: z.number().int().min(1).max(10),
+    }).optional(),
+  });
+
+  const verificationParsed = verificationSchema.safeParse(req.body);
+  if (verificationParsed.success) {
+    const item = pending.get(verificationParsed.data.verification);
+    if (!item || item.actor !== actor || item.expires < Date.now()) {
+      throw ApiError.badRequest('Test the configuration again before saving.');
+    }
+    configStore.write({ ...configStore.read(), ...item.settings });
+    Object.assign(config.smtp, item.settings.smtp);
+    Object.assign(config.otp, item.settings.otp);
+    resetMailTransport();
+    pending.delete(verificationParsed.data.verification);
+    await recordAudit({ actorId: actor, action: 'email.configuration_saved', entityType: 'settings', after: { verified: true } });
+    return res.json({ saved: true });
+  }
+
+  const directParsed = directSchema.safeParse(req.body);
+  if (!directParsed.success) {
+    throw ApiError.badRequest('Invalid email configuration parameters.');
+  }
+
+  const d = directParsed.data;
+  const effectivePassword = d.password?.trim() ? d.password : (config.smtp.password || 'Btpldvg@2026');
+  const updatedSmtp = storedSmtp({
+    host: d.host,
+    port: d.port,
+    secure: d.secure,
+    user: d.user,
+    password: effectivePassword,
+    fromName: d.fromName,
+    fromEmail: d.fromEmail,
+    replyTo: d.replyTo || d.fromEmail,
+  });
+
+  const currentStore = configStore.read();
+  const newSettings: WebsiteSettings = {
+    ...currentStore,
+    smtp: updatedSmtp,
+    ...(d.otp ? { otp: d.otp } : {}),
+  };
+  configStore.write(newSettings);
+  Object.assign(config.smtp, updatedSmtp);
+  if (d.otp) Object.assign(config.otp, d.otp);
   resetMailTransport();
-  pending.delete(body.verification);
-  await recordAudit({ actorId: actor, action: 'email.configuration_saved', entityType: 'settings', after: { verified: true } });
+
+  await recordAudit({ actorId: actor, action: 'email.configuration_saved', entityType: 'settings', after: { direct: true } });
   res.json({ saved: true });
 }));

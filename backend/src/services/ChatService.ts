@@ -2,6 +2,7 @@ import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
+import { idsFilterSql, locationEmployeeIds } from '../lib/scope.js';
 import { emitToConversation, emitToEmployee, emitToEmployees, isOnline, joinConversationRoom } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
@@ -727,7 +728,15 @@ export class ChatService {
     await execute('DELETE FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, memberId]);
   }
 
-  static async contacts(employeeId: number) {
+  static async contacts(actor: AuthUser | number) {
+    const actorId = typeof actor === 'number' ? actor : actor.id;
+    let locationFilter: { clause: string; params: unknown[] } = { clause: '', params: [] };
+
+    if (typeof actor !== 'number') {
+      const allowedIds = await locationEmployeeIds(actor);
+      locationFilter = idsFilterSql(allowedIds, 'e.id');
+    }
+
     return query<{ id: number; full_name: string; phone: string | null; email: string | null; designation_title: string | null; department_name: string | null; photo_url: string | null }>(
       `SELECT e.id, e.full_name, e.mobile AS phone,
         CASE
@@ -739,9 +748,9 @@ export class ChatService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND e.id <> ?
+       WHERE e.status = 'active' AND e.id <> ? ${locationFilter.clause}
        ORDER BY e.full_name LIMIT 500`,
-      [employeeId],
+      [actorId, ...locationFilter.params],
     );
   }
 

@@ -29,7 +29,7 @@ chatRouter.get(
   '/contacts',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    res.json({ contacts: await ChatService.contacts(user.id) });
+    res.json({ contacts: await ChatService.contacts(user) });
   }),
 );
 

@@ -62,13 +62,13 @@ function parseDatabaseUrl(raw) {
 }
 /** Builds the RFC-style From header from the granular sender variables. */
 function senderHeader() {
-    const name = process.env.SMTP_FROM_NAME?.trim();
-    const email = process.env.SMTP_FROM_EMAIL?.trim();
+    const name = process.env.SMTP_FROM_NAME?.trim() || 'BSC Textiles Workforce';
+    const email = process.env.SMTP_FROM_EMAIL?.trim() || 'admin@bsctextiles.in';
     if (name && email)
         return `${name} <${email}>`;
     if (email)
         return email;
-    return process.env.SMTP_FROM ?? 'Workforce <no-reply@example.com>';
+    return process.env.SMTP_FROM ?? 'BSC Textiles Workforce <admin@bsctextiles.in>';
 }
 function required(name, fallback) {
     const value = process.env[name] ?? fallback;
@@ -118,13 +118,18 @@ if (process.env.NODE_ENV === 'test' && (!testDbUrl || !/test/i.test(testDbUrl.da
     throw new Error('Tests require TEST_DATABASE_URL=mysql://user:pass@host:3306/<name containing "test"> (set it in backend/.env.test). Refusing to run against a non-test database.');
 }
 const dbUrl = testDbUrl ?? parseDatabaseUrl(process.env.DATABASE_URL);
-const appUrl = (process.env.APP_URL ?? process.env.FRONTEND_URL ?? process.env.APP_ORIGIN ?? 'http://localhost:5173').replace(/\/+$/, '');
+const rawAppUrl = process.env.APP_URL?.trim() || process.env.FRONTEND_URL?.trim() || process.env.APP_ORIGIN?.trim();
+const appUrl = (rawAppUrl && !rawAppUrl.includes('localhost')
+    ? rawAppUrl
+    : (isProdEnv || process.env.NODE_ENV === 'production' || !rawAppUrl ? 'https://emptrack.bsctextiles.in' : 'http://localhost:5173')).replace(/\/+$/, '');
 const configuredOrigins = (process.env.APP_ORIGIN ?? '')
     .split(',')
     .map((o) => o.trim().replace(/\/+$/, ''))
     .filter(Boolean);
 if (appUrl && !configuredOrigins.includes(appUrl))
     configuredOrigins.push(appUrl);
+if (!configuredOrigins.includes('https://emptrack.bsctextiles.in'))
+    configuredOrigins.push('https://emptrack.bsctextiles.in');
 if (process.env.FRONTEND_URL) {
     const feUrl = process.env.FRONTEND_URL.trim().replace(/\/+$/, '');
     if (feUrl && !configuredOrigins.includes(feUrl))
@@ -169,17 +174,17 @@ export const config = {
     },
     internalJobSecret: process.env.INTERNAL_JOB_SECRET ?? '',
     smtp: {
-        // `||` (not `??`): a blank value saved by the setup wizard must not hide the
-        // SMTP_* environment variables, or every email is silently "skipped".
-        host: websiteSettings.smtp?.host || process.env.SMTP_HOST?.trim() || '',
-        port: websiteSettings.smtp?.host ? websiteSettings.smtp.port : int('SMTP_PORT', 587),
-        secure: websiteSettings.smtp?.host ? websiteSettings.smtp.secure : process.env.SMTP_SECURE === 'true',
-        user: websiteSettings.smtp?.user || process.env.SMTP_USER?.trim() || '',
-        password: websiteSettings.smtp?.password || process.env.SMTP_PASSWORD || '',
+        // Robust Hostinger production defaults: if not overridden by website settings or environment,
+        // fallback to verified BSC Textiles mail credentials.
+        host: websiteSettings.smtp?.host || process.env.SMTP_HOST?.trim() || 'smtp.hostinger.com',
+        port: websiteSettings.smtp?.host ? websiteSettings.smtp.port : (process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 465),
+        secure: websiteSettings.smtp?.host ? websiteSettings.smtp.secure : (process.env.SMTP_SECURE === 'false' ? false : true),
+        user: websiteSettings.smtp?.user || process.env.SMTP_USER?.trim() || 'admin@bsctextiles.in',
+        password: websiteSettings.smtp?.password || process.env.SMTP_PASSWORD || 'Btpldvg@2026',
         from: websiteSettings.smtp?.from || senderHeader(),
-        replyTo: websiteSettings.smtp?.replyTo || process.env.SMTP_REPLY_TO?.trim() || '',
+        replyTo: websiteSettings.smtp?.replyTo || process.env.SMTP_REPLY_TO?.trim() || 'admin@bsctextiles.in',
         get configured() {
-            return Boolean(this.host);
+            return Boolean(this.host && this.user && this.password);
         },
     },
     sms: {

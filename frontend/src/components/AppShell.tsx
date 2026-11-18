@@ -572,12 +572,17 @@ export function AppShell() {
                     <span className={cx('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white', currentPresence.dot)} />
                   </div>
                   <span className="hidden text-left sm:block">
-                    <span className="block max-w-[120px] truncate text-xs font-semibold text-ink-800">{user.fullName}</span>
-                    <span className="block text-[11px] text-ink-400">{currentPresence.label}</span>
+                    <span className="block max-w-[140px] truncate text-xs font-semibold text-ink-800">{user.fullName}</span>
+                    <span className="block text-[11px] text-ink-400 truncate">
+                      {user.locationCode ? `${user.locationCode} · ${currentPresence.label}` : currentPresence.label}
+                    </span>
                   </span>
                 </button>
                 {profileOpen && (
-                  <div className="absolute right-0 mt-2 w-64 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-xl z-50">
+                  <div
+                    className="absolute right-0 mt-2 w-72 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-xl z-50"
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
                     <div className="border-b border-ink-100 p-3.5 bg-ink-50/50">
                       <Link
                         to="/profile"
@@ -590,6 +595,16 @@ export function AppShell() {
                           <p className="text-xs text-ink-500 truncate font-mono">{user.employeeCode} · {user.email}</p>
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <Badge tone="brand">{user.roleName}</Badge>
+                            {user.locationName ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                <Icon name="map-pin" size={10} />
+                                <span className="truncate max-w-[110px]">{user.locationCode ? `${user.locationCode} · ${user.locationName}` : user.locationName}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                                All Locations
+                              </span>
+                            )}
                             <span className={cx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold border', currentPresence.color)}>
                               <span className={cx('h-1.5 w-1.5 rounded-full', currentPresence.dot)} />
                               {currentPresence.label}
