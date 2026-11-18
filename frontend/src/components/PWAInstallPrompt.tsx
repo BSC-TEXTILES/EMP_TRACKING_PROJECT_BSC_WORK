@@ -11,23 +11,21 @@ import {
 } from '../lib/installPrompt';
 import { Icon } from './icons';
 
-const DISMISSED_KEY = 'bsc_pwa_dismissed_at';
-const DISMISS_DAYS = 3;
 const SHOW_AFTER_MS = 4000;
+/** After "Not now" the popup comes back while the sign-in page stays open. */
+const REPEAT_AFTER_MS = 2 * 60_000;
 
-function dismissedRecently(): boolean {
-  try {
-    const at = Number(localStorage.getItem(DISMISSED_KEY) || 0);
-    return Date.now() - at < DISMISS_DAYS * 86_400_000;
-  } catch {
-    return false;
-  }
+/** Nothing left to offer: running as the installed app, or this browser recorded the install. */
+function alreadyInstalled(p: InstallPlatform): boolean {
+  return runningInstalled() || (markedInstalled() && p !== 'one-tap');
 }
 
 /**
  * "Install app" popup for the website. Appears a few seconds after the page
  * loads when this browser can install the app, and never inside the installed
- * app itself. "Not now" hides it for 3 days; Settings → Install app reopens it.
+ * app itself. Mounted on the sign-in page only (App.tsx). It keeps coming back until
+ * the app is installed: on every visit to the sign-in page, and again 2 minutes
+ * after "Not now" if the page is still open.
  *
  * - Chrome / Edge (Windows, Mac, Android): one-tap Install button.
  * - iPhone / iPad Safari: Share → Add to Home Screen steps.
@@ -43,16 +41,18 @@ export function PWAInstallPrompt() {
   // Track the browser's install capability (the install event can arrive at any time).
   useEffect(() => onInstallChange(() => setPlatform(installPlatform())), []);
 
-  // Show automatically once, a few seconds after load, unless dismissed or installed.
+  // Shows a few seconds after the page opens, and again REPEAT_AFTER_MS after each
+  // "Not now" (changing nextShow re-arms the timer), until the app is installed.
+  const [nextShow, setNextShow] = useState(SHOW_AFTER_MS);
   useEffect(() => {
-    if (runningInstalled()) return;
+    if (nextShow <= 0 || runningInstalled()) return;
     const timer = window.setTimeout(() => {
       const p = installPlatform();
       setPlatform(p);
-      if (p !== 'none' && !dismissedRecently() && !(markedInstalled() && p !== 'one-tap')) setOpen(true);
-    }, SHOW_AFTER_MS);
+      if (p !== 'none' && !alreadyInstalled(p)) setOpen(true);
+    }, nextShow);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [nextShow]);
 
   // Opened on request (Settings) and closed when the browser reports the install.
   useEffect(() => {
@@ -63,6 +63,7 @@ export function PWAInstallPrompt() {
     };
     const installed = () => {
       setOpen(false);
+      setNextShow(0);
       setDone(true);
       if (user) {
         void api.post('/devices/register', {
@@ -93,11 +94,8 @@ export function PWAInstallPrompt() {
 
   const notNow = () => {
     setOpen(false);
-    try {
-      localStorage.setItem(DISMISSED_KEY, String(Date.now()));
-    } catch {
-      /* storage blocked */
-    }
+    // Not remembered: it shows again on the next visit, and in 2 minutes if the page stays open.
+    setNextShow((prev) => (prev === REPEAT_AFTER_MS ? REPEAT_AFTER_MS + 1 : REPEAT_AFTER_MS));
   };
 
   const install = async () => {
@@ -106,6 +104,7 @@ export function PWAInstallPrompt() {
       const accepted = await promptInstall();
       if (accepted) {
         setOpen(false);
+        setNextShow(0);
         setDone(true);
       } else {
         notNow();

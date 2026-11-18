@@ -7,7 +7,6 @@ import { Card, SectionHeader, Badge, Modal, Field, Switch } from '../components/
 import { Icon } from '../components/icons';
 import { DeviceManager } from '../components/DeviceManager';
 import { cx } from '../lib/format';
-import { openInstallPopup, runningInstalled } from '../lib/installPrompt';
 import { setThemePreference, themePreference, type ThemePreference } from '../lib/theme';
 
 interface UserPreferences {
@@ -258,15 +257,8 @@ export default function Settings() {
                   Install to get native app experience with offline support, push notifications, and home screen access.
                 </p>
               </div>
-              {runningInstalled() ? (
-                <p className="rounded-lg bg-emerald-50 p-2 text-center text-sm text-emerald-700">You are using the installed app.</p>
-              ) : (
-                <button type="button" className="btn-primary w-full" onClick={openInstallPopup}>
-                  <Icon name="download" size={15} /> Install app
-                </button>
-              )}
-              <button type="button" className="btn-ghost w-full" onClick={() => setShowInstallInstructions(true)}>
-                <Icon name="helpCircle" size={15} /> Installation instructions
+              <button type="button" className="btn-primary w-full" onClick={() => setShowInstallInstructions(true)}>
+                <Icon name="helpCircle" size={15} /> View Installation Instructions
               </button>
               <button type="button" className="btn-secondary w-full" onClick={() => {
                 if ('serviceWorker' in navigator) {

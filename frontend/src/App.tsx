@@ -74,6 +74,8 @@ export function App() {
           element={
             <GuestOnly>
               <Login />
+              {/* Install-app popup: shown on the sign-in page only. */}
+              <PWAInstallPrompt />
             </GuestOnly>
           }
         />
@@ -135,7 +137,6 @@ export function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <PWAInstallPrompt />
     </Suspense>
   );
 }
