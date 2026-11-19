@@ -195,11 +195,6 @@ export default function Leave() {
 
   const selectedType = types.find((type) => type.id === Number(form.leaveTypeId));
 
-  // Regular annual quota leaves (Casual, Sick, Earned) plus accrued comp-off if any
-  const regularBalances = balances.filter(
-    (b) => ['CL', 'SL', 'EL'].includes(b.code) || (b.code === 'CO' && b.allocated > 0),
-  );
-
   return (
     <div className="space-y-5">
       <PageHeader
@@ -216,37 +211,6 @@ export default function Leave() {
       />
 
       <WeeklyOffPanel showBalances={false} />
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {regularBalances.map((balance) => (
-          <Card key={balance.leaveTypeId} className="p-4 shadow-2xs hover:shadow-xs transition">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">{balance.name}</p>
-                <p className="mt-1 text-2xl font-bold text-ink-900">{balance.available}<span className="text-sm font-normal text-ink-400">/{balance.allocated}</span></p>
-                <p className="text-xs text-ink-400">{balance.used} used</p>
-              </div>
-              <Badge tone={balance.isPaid ? 'success' : 'neutral'}>{balance.isPaid ? 'Paid' : 'Unpaid'}</Badge>
-            </div>
-          </Card>
-        ))}
-
-        <Card className="p-4 bg-slate-50/70 border-ink-200/80 shadow-2xs">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-wide text-brand-700">Special & Unpaid Leaves</p>
-              <div className="mt-2 space-y-1 text-xs text-ink-600">
-                <p>• <strong>Leave Without Pay (LWP)</strong>: Loss of pay</p>
-                <p>• <strong>Maternity / Paternity</strong>: Statutory with doc</p>
-                <p>• <strong>Compensatory Off</strong>: Earned by working a Sunday or holiday</p>
-              </div>
-            </div>
-            <Badge tone="neutral">On demand</Badge>
-          </div>
-        </Card>
-
-        {regularBalances.length === 0 && <Card className="p-4 text-sm text-ink-500 sm:col-span-2 lg:col-span-4">Leave balances load after your first approved allocation.</Card>}
-      </div>
 
       {(tab === 'team' || tab === 'all') && <TeamWeeklyOffs />}
 
