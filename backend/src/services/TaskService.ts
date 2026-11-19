@@ -67,6 +67,7 @@ export interface CreateTaskInput {
 }
 
 interface TaskRow {
+  location_codes?: string | null;
   id: number;
   task_no: string;
   title: string;
@@ -138,7 +139,41 @@ async function taskAccessClause(user: AuthUser): Promise<{ clause: string; param
   };
 }
 
+/** Kanban stages. Must match the four board columns in the frontend. */
+export const TASK_STAGES: Record<string, string[]> = {
+  assigned: ['assigned', 'not_started', 'overdue', 'rejected'],
+  in_progress: ['accepted', 'in_progress'],
+  review: ['pending_approval', 'on_hold', 'escalated'],
+  done: ['completed', 'verified', 'cancelled'],
+};
+
+/** Extra list filters on top of the stages (summary card "Verified & completed" excludes cancelled tasks). */
+const STAGE_FILTERS: Record<string, string[]> = { ...TASK_STAGES, completed: ['completed', 'verified'] };
+
+const OVERDUE_SQL = "(t.due_date < CURDATE() AND t.status NOT IN ('completed','verified','cancelled','rejected'))";
+
+/** Each sort is a list of ORDER BY expressions; the direction applies to all but the NULLS-last guard. */
+const SORTS: Record<string, string[]> = {
+  task: ['t.task_no'],
+  title: ['t.title'],
+  priority: ["FIELD(t.priority, 'critical','high','medium','low')"],
+  status: ["FIELD(t.status, 'overdue','rejected','assigned','not_started','accepted','in_progress','on_hold','escalated','pending_approval','completed','verified','cancelled')"],
+  due: ['t.due_date IS NULL', 't.due_date', 't.due_time'],
+  progress: ['t.progress'],
+  slot: ["FIELD(t.time_slot, 'morning','operations','evening','closing')"],
+};
+
 export class TaskService {
+  /** Throws 404 unless the task exists and is inside the user's task scope (role + location). */
+  static async assertAccess(taskId: number, user: AuthUser): Promise<void> {
+    const access = await taskAccessClause(user);
+    const row = await queryOne<{ id: number }>(`SELECT t.id FROM tasks t WHERE t.id = ? AND t.archived_at IS NULL ${access.clause}`, [
+      taskId,
+      ...access.params,
+    ]);
+    if (!row) throw ApiError.notFound('Task not found or you do not have access to it.');
+  }
+
   static async create(input: CreateTaskInput, actor: AuthUser, context: { ip?: string; userAgent?: string }): Promise<{ id: number; taskNo: string }> {
     if (input.assigneeIds.length === 0) throw ApiError.badRequest('Select at least one employee to allocate this task to.');
     if (!input.title?.trim()) throw ApiError.badRequest('Task title is required.');
@@ -243,6 +278,10 @@ export class TaskService {
       dueTo?: string;
       overdueOnly?: boolean;
       timeSlot?: string;
+      stage?: string;
+      locationId?: number | null;
+      sort?: string;
+      dir?: 'asc' | 'desc';
       page?: number;
       pageSize?: number;
       view?: 'mine' | 'allocated' | 'all';
@@ -255,6 +294,13 @@ export class TaskService {
     clauses.push(`1 = 1${access.clause}`);
     params.push(...access.params);
 
+    // Scope filters (view, store, search, priority) drive both the list and the summary counts.
+    if (filters.locationId) {
+      clauses.push(
+        'EXISTS (SELECT 1 FROM task_assignments ta_l JOIN employees e_l ON e_l.id = ta_l.employee_id WHERE ta_l.task_id = t.id AND e_l.location_id = ?)',
+      );
+      params.push(filters.locationId);
+    }
     if (filters.view === 'mine') {
       clauses.push('EXISTS (SELECT 1 FROM task_assignments ta2 WHERE ta2.task_id = t.id AND ta2.employee_id = ?)');
       params.push(user.id);
@@ -262,17 +308,9 @@ export class TaskService {
       clauses.push('t.created_by = ?');
       params.push(user.id);
     }
-    if (filters.status) {
-      clauses.push('t.status = ?');
-      params.push(filters.status);
-    }
     if (filters.priority) {
       clauses.push('t.priority = ?');
       params.push(filters.priority);
-    }
-    if (filters.timeSlot) {
-      clauses.push('t.time_slot = ?');
-      params.push(filters.timeSlot);
     }
     if (filters.assigneeId) {
       clauses.push('EXISTS (SELECT 1 FROM task_assignments ta3 WHERE ta3.task_id = t.id AND ta3.employee_id = ?)');
@@ -299,36 +337,94 @@ export class TaskService {
       clauses.push('t.due_date <= ?');
       params.push(filters.dueTo);
     }
+
+    // Per-shift progress ignores the shift / status / overdue filters, so all four SOP cards always show real numbers.
+    const slotWhere = clauses.join(' AND ');
+    const slotParams = [...params];
+
+    if (filters.timeSlot) {
+      clauses.push('t.time_slot = ?');
+      params.push(filters.timeSlot);
+    }
     if (filters.overdueOnly) {
-      clauses.push("t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')");
+      clauses.push(OVERDUE_SQL);
+    }
+    // Summary cards ignore the status / stage filter so every card keeps its real count while one is selected.
+    const summaryWhere = clauses.join(' AND ');
+    const summaryParams = [...params];
+
+    if (filters.stage && STAGE_FILTERS[filters.stage]) {
+      clauses.push(`t.status IN (${STAGE_FILTERS[filters.stage].map(() => '?').join(',')})`);
+      params.push(...STAGE_FILTERS[filters.stage]);
+    }
+    if (filters.status) {
+      clauses.push('t.status = ?');
+      params.push(filters.status);
     }
 
     const page = Math.max(1, filters.page ?? 1);
     const pageSize = Math.min(1000, Math.max(5, filters.pageSize ?? 20));
     const where = clauses.join(' AND ');
+    const dir = filters.dir === 'desc' ? 'DESC' : 'ASC';
+    const orderBy =
+      filters.sort && SORTS[filters.sort]
+        ? `${SORTS[filters.sort].map((part) => (part.endsWith('IS NULL') ? part : `${part} ${dir}`)).join(', ')}, t.id DESC`
+        : `FIELD(t.status, 'pending_approval','in_progress','accepted','assigned','not_started','on_hold','overdue','rejected','completed','cancelled'),
+                FIELD(t.priority, 'critical','high','medium','low'), t.due_date IS NULL, t.due_date ASC, t.id DESC`;
 
-    const totalRow = await queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM tasks t WHERE ${where}`, params);
-    const rows = await query<TaskRow>(
-      `SELECT t.*, c.full_name AS creator_name, m.full_name AS manager_name, d.name AS department_name, p.name AS project_name,
+    const [totalRow, rows, statusRows, overdueRow, slotRows] = await Promise.all([
+      queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM tasks t WHERE ${where}`, params),
+      query<TaskRow>(
+        `SELECT t.*, c.full_name AS creator_name, m.full_name AS manager_name, d.name AS department_name, p.name AS project_name,
               (SELECT GROUP_CONCAT(e.full_name SEPARATOR ', ') FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id WHERE ta.task_id = t.id) AS assignee_names,
-              (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids
+              (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids,
+              (SELECT GROUP_CONCAT(DISTINCT l.code ORDER BY l.code SEPARATOR ', ')
+                 FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id JOIN locations l ON l.id = e.location_id
+                WHERE ta.task_id = t.id) AS location_codes
        FROM tasks t
        LEFT JOIN employees c ON c.id = t.created_by
        LEFT JOIN employees m ON m.id = t.manager_id
        LEFT JOIN departments d ON d.id = t.department_id
        LEFT JOIN projects p ON p.id = t.project_id
        WHERE ${where}
-       ORDER BY FIELD(t.status, 'pending_approval','in_progress','accepted','assigned','not_started','on_hold','overdue','rejected','completed','cancelled'),
-                FIELD(t.priority, 'critical','high','medium','low'), t.due_date IS NULL, t.due_date ASC, t.id DESC
+       ORDER BY ${orderBy}
        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
-      params,
-    );
+        params,
+      ),
+      query<{ status: string; total: number }>(`SELECT t.status, COUNT(*) AS total FROM tasks t WHERE ${summaryWhere} GROUP BY t.status`, summaryParams),
+      queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM tasks t WHERE ${summaryWhere} AND ${OVERDUE_SQL}`, summaryParams),
+      query<{ time_slot: string | null; total: number; done: number }>(
+        `SELECT t.time_slot, COUNT(*) AS total, SUM(t.status IN ('completed','verified')) AS done
+         FROM tasks t WHERE ${slotWhere} AND t.status <> 'cancelled' GROUP BY t.time_slot`,
+        slotParams,
+      ),
+    ]);
+
+    const byStatus: Record<string, number> = {};
+    for (const row of statusRows) byStatus[row.status] = Number(row.total);
+    const stages: Record<string, number> = {};
+    for (const [stage, statuses] of Object.entries(TASK_STAGES)) {
+      stages[stage] = statuses.reduce((sum, value) => sum + (byStatus[value] ?? 0), 0);
+    }
+    const slots: Record<string, { total: number; done: number }> = {};
+    for (const row of slotRows) {
+      if (row.time_slot) slots[row.time_slot] = { total: Number(row.total), done: Number(row.done ?? 0) };
+    }
 
     return {
       items: rows.map((r) => TaskService.mapTask(r)),
       total: Number(totalRow?.total ?? 0),
       page,
       pageSize,
+      summary: {
+        total: Object.values(byStatus).reduce((sum, value) => sum + value, 0),
+        overdue: Number(overdueRow?.total ?? 0),
+        byStatus,
+        stages,
+        completed: (byStatus.completed ?? 0) + (byStatus.verified ?? 0),
+        cancelled: byStatus.cancelled ?? 0,
+      },
+      slots,
     };
   }
 
@@ -363,6 +459,7 @@ export class TaskService {
       rejectionReason: r.rejection_reason,
       createdAt: toIso(r.created_at),
       timeSlot: r.time_slot ?? null,
+      locationCodes: r.location_codes ?? null,
       requiresEvidence: Boolean(r.requires_evidence),
       evidenceType: r.evidence_type ?? null,
       evidenceFileId: r.evidence_file_id ? Number(r.evidence_file_id) : null,
@@ -374,7 +471,7 @@ export class TaskService {
       isOverdue:
         Boolean(r.due_date) &&
         String(r.due_date) < today() &&
-        !['completed', 'cancelled', 'rejected'].includes(r.status),
+        !['completed', 'verified', 'cancelled', 'rejected'].includes(r.status),
     };
   }
 
@@ -383,7 +480,10 @@ export class TaskService {
     const row = await queryOne<TaskRow & { instructions: string | null; remarks: string | null }>(
       `SELECT t.*, c.full_name AS creator_name, m.full_name AS manager_name, d.name AS department_name, p.name AS project_name,
               (SELECT GROUP_CONCAT(e.full_name SEPARATOR ', ') FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id WHERE ta.task_id = t.id) AS assignee_names,
-              (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids
+              (SELECT GROUP_CONCAT(ta.employee_id) FROM task_assignments ta WHERE ta.task_id = t.id) AS assignee_ids,
+              (SELECT GROUP_CONCAT(DISTINCT l.code ORDER BY l.code SEPARATOR ', ')
+                 FROM task_assignments ta JOIN employees e ON e.id = ta.employee_id JOIN locations l ON l.id = e.location_id
+                WHERE ta.task_id = t.id) AS location_codes
        FROM tasks t
        LEFT JOIN employees c ON c.id = t.created_by
        LEFT JOIN employees m ON m.id = t.manager_id
@@ -394,7 +494,7 @@ export class TaskService {
     );
     if (!row) throw ApiError.notFound('Task not found or you do not have access to it.');
 
-    const [assignments, subtasks, comments, timeLogs, attachments] = await Promise.all([
+    const [assignments, subtasks, comments, timeLogs, attachments, history] = await Promise.all([
       query<{
         id: number;
         employee_id: number;
@@ -431,6 +531,13 @@ export class TaskService {
          FROM task_attachments ta JOIN files f ON f.id = ta.file_id WHERE ta.task_id = ?`,
         [taskId],
       ),
+      query<{ id: number; action: string; actor_name: string | null; after_data: unknown; created_at: string }>(
+        `SELECT a.id, a.action, e.full_name AS actor_name, a.after_data, a.created_at
+         FROM audit_logs a LEFT JOIN employees e ON e.id = a.actor_id
+         WHERE a.entity_type = 'task' AND a.entity_id = ?
+         ORDER BY a.created_at DESC, a.id DESC LIMIT 100`,
+        [taskId],
+      ).catch(() => []),
     ]);
 
     const totalLogged = timeLogs.reduce((sum, log) => sum + Number(log.minutes), 0);
@@ -471,6 +578,22 @@ export class TaskService {
         note: t.note,
       })),
       attachments,
+      history: history.map((h) => {
+        let after: Record<string, unknown> = {};
+        try {
+          after = (typeof h.after_data === 'string' ? JSON.parse(h.after_data) : h.after_data ?? {}) as Record<string, unknown>;
+        } catch {
+          after = {};
+        }
+        return {
+          id: Number(h.id),
+          action: h.action.replace(/^task\./, ''),
+          actorName: h.actor_name ? h.actor_name.replace(/Gagan(\s+C\s+B)?/gi, 'Renukaradhya') : null,
+          status: typeof after.status === 'string' ? after.status : null,
+          note: typeof after.note === 'string' ? after.note : null,
+          createdAt: toIso(h.created_at),
+        };
+      }),
     };
   }
 
@@ -497,6 +620,8 @@ export class TaskService {
     },
     context: { ip?: string; userAgent?: string },
   ): Promise<void> {
+    // Role + location scope first: a manager with tasks.approve may only act on tasks in their stores / team.
+    await TaskService.assertAccess(taskId, user);
     const task = await TaskService.loadForAction(taskId);
     const assignment = await queryOne<{ id: number; employee_id: number; status: string; started_at: string | null }>(
       'SELECT id, employee_id, status, started_at FROM task_assignments WHERE task_id = ? AND employee_id = ?',
@@ -603,6 +728,9 @@ export class TaskService {
         if (!payload.completionNote || payload.completionNote.trim().length < 5) {
           throw ApiError.badRequest('Describe the completed work before submitting for approval.');
         }
+        if (Number(task.requires_evidence) === 1 && !payload.evidenceFileId && !task.evidence_file_id) {
+          throw ApiError.badRequest('This SOP task needs proof (photo or document) before it can be submitted.');
+        }
         await transaction(async (conn) => {
           await closeOpenLog(conn, user.id);
           await conn.query(
@@ -693,6 +821,7 @@ export class TaskService {
         break;
       }
       case 'escalate': {
+        if (!isAssignee && !isManager) throw ApiError.forbidden('Only the assignee or the allocating manager can escalate this task.');
         const escalationNote = (payload.note || 'Task escalated for immediate supervisor resolution.').trim();
         await transaction(async (conn) => {
           await conn.query(
@@ -807,6 +936,13 @@ export class TaskService {
         if (!isAssignee && !isManager) {
           throw ApiError.forbidden('You are not authorized to update this task status.');
         }
+        // Verification and cancellation are manager decisions; submission must go through "submit" (note + proof).
+        if (['completed', 'cancelled'].includes(nextStatus) && !isManager) {
+          throw ApiError.forbidden('Only the allocating manager can mark this task completed or cancelled.');
+        }
+        if (nextStatus === 'pending_approval' && !isManager) {
+          throw ApiError.badRequest('Use "Submit for verification" so the completion note and proof are recorded.');
+        }
         await transaction(async (conn) => {
           if (nextStatus === 'completed') {
             await closeOpenLog(conn, user.id);
@@ -855,18 +991,22 @@ export class TaskService {
         throw ApiError.badRequest('Unsupported task action');
     }
 
+    const detail = await TaskService.detail(taskId, user);
     await recordAudit({
       actorId: user.id,
       action: `task.${action}`,
       entityType: 'task',
       entityId: taskId,
       before,
-      after: { status: action, note: payload.note ?? null },
+      after: {
+        status: detail.status,
+        progress: detail.progress,
+        note: payload.note ?? payload.rejectionReason ?? payload.completionNote ?? null,
+      },
       ip: context.ip,
       userAgent: context.userAgent,
     });
 
-    const detail = await TaskService.detail(taskId, user);
     emitToEmployees([...detail.assigneeIds, detail.createdBy, ...(detail.managerId ? [detail.managerId] : [])].filter(Boolean), 'task:updated', {
       id: taskId,
       status: detail.status,

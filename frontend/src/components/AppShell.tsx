@@ -735,7 +735,7 @@ export function AppShell() {
 
         <NotificationPermissionBanner />
 
-        <main className={cx('mx-auto w-full max-w-[1400px] flex-1 px-4 py-5 sm:px-6 sm:py-6', isNative && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
+        <main className={cx('mx-auto w-full flex-1 px-4 py-5 sm:px-6 sm:py-6', location.pathname.startsWith('/tasks') ? 'max-w-[1920px]' : 'max-w-[1400px]', isNative && 'pb-[calc(5rem+env(safe-area-inset-bottom))]')}>
           {isNative ? (
             <PullToRefresh onRefresh={pullRefresh}>
               <ErrorBoundary key={refreshKey}>

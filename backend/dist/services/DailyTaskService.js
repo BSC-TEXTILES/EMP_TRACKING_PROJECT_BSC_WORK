@@ -2,6 +2,17 @@ import { execute, nextSequence, query, queryOne, transaction } from '../db/index
 import { ApiError } from '../lib/http.js';
 import { NotificationService } from './NotificationService.js';
 import { recordAudit } from '../lib/audit.js';
+import { localTime, today } from '../lib/dates.js';
+/** "09:30 AM - 10:00 AM" -> 570 (minutes after midnight of the window start). */
+function slotStartMinutes(hours) {
+    const match = /(\d{1,2}):(\d{2})\s*(AM|PM)/i.exec(hours);
+    if (!match)
+        return 0;
+    let hour = Number(match[1]) % 12;
+    if (match[3].toUpperCase() === 'PM')
+        hour += 12;
+    return hour * 60 + Number(match[2]);
+}
 export const TIMELINE_SLOTS = [
     { timeSlot: 'morning_briefing', label: 'Morning Briefing & Task Acknowledgement', hours: '09:30 AM - 10:00 AM' },
     { timeSlot: '10am_12pm', label: 'Morning Store Operations & Inspection', hours: '10:00 AM - 12:00 PM' },
@@ -308,8 +319,13 @@ export class DailyTaskService {
         }
         const managerId = employee.manager_id ?? actor.id;
         let createdCount = 0;
+        // Even when forced, never create a second copy of an SOP task the employee already has today.
+        const alreadyToday = new Set((await query(`SELECT t.title FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
+           WHERE ta.employee_id = ? AND t.start_date = ? AND t.archived_at IS NULL`, [employeeId, todayStr])).map((row) => row.title));
         await transaction(async (conn) => {
             for (const tpl of templatesToUse) {
+                if (alreadyToday.has(tpl.title))
+                    continue;
                 let taskNo = `TSK-${Date.now().toString().slice(-6)}${String(createdCount + 1).padStart(2, '0')}${Math.floor(Math.random() * 90 + 10)}`;
                 try {
                     const seq = await nextSequence(conn, 'task_no_seq');
@@ -389,7 +405,7 @@ export class DailyTaskService {
             entityId: employeeId,
             after: { createdCount, date: todayStr },
         });
-        return { created: createdCount, existing: 0 };
+        return { created: createdCount, existing: existingCount };
     }
     /**
      * Retrieves timeline checkpoints for an employee for a specific date.
@@ -454,90 +470,130 @@ export class DailyTaskService {
         }
     }
     /**
-     * Calculates the 100-Point Performance Model score for an employee on a given date.
+     * 100-point performance model for one employee on one day.
+     *
+     * Category weights are unchanged (30 / 15 / 20 / 10 / 10 / 10 / 5). Every number comes from recorded data:
+     * a category with nothing to measure yet (no tasks, a weekly off, no data source) is reported as
+     * "not measured" and left out, and the total is scaled to 100 over the measured categories only.
+     * Nothing is defaulted to full marks.
      */
     static async calculateDailyScore(employeeId, dateStr) {
-        const targetDate = dateStr || new Date().toISOString().slice(0, 10);
-        let taskScore = 30.0;
-        let timelyScore = 15.0;
-        let qualityScore = 20.0;
-        let reportingScore = 10.0;
-        let attendanceScore = 10.0;
-        const coordinationScore = 9.5;
-        const escalationScore = 5.0;
-        try {
-            // 1. Task Completion (Max 30) & Timely Completion (Max 15)
-            const taskStats = await queryOne(`SELECT 
-          COUNT(*) AS total,
-          COALESCE(SUM(CASE WHEN t.status IN ('completed', 'verified') THEN 1 ELSE 0 END), 0) AS completed,
-          COALESCE(SUM(CASE WHEN t.status IN ('completed', 'verified') THEN 1 ELSE 0 END), 0) AS verified,
-          COALESCE(SUM(CASE WHEN t.status = 'delayed' THEN 1 ELSE 0 END), 0) AS delayed
-         FROM tasks t
-         JOIN task_assignments ta ON ta.task_id = t.id
-         WHERE ta.employee_id = ? AND (t.start_date = ? OR t.due_date = ?)`, [employeeId, targetDate, targetDate]);
-            const totalTasks = Number(taskStats?.total ?? 0);
-            const verifiedTasks = Number(taskStats?.verified ?? 0);
-            const delayedTasks = Number(taskStats?.delayed ?? 0);
-            taskScore = totalTasks > 0 ? Number(((verifiedTasks / totalTasks) * 30).toFixed(2)) : 30.0;
-            timelyScore = totalTasks > 0 ? Number((Math.max(0, (totalTasks - delayedTasks) / totalTasks) * 15).toFixed(2)) : 15.0;
+        const targetDate = dateStr || today();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate))
+            throw ApiError.badRequest('Invalid date.');
+        const isToday = targetDate === today();
+        const [nowH, nowM] = localTime().split(':').map(Number);
+        const nowMinutes = nowH * 60 + nowM;
+        const round = (value) => Math.round(value * 100) / 100;
+        const breakdown = [];
+        const add = (key, label, max, score, basis) => breakdown.push({ key, label, max, score: score === null ? null : round(Math.min(max, Math.max(0, score))), measured: score !== null, basis });
+        // Tasks that belong to this day (started or due), cancelled ones excluded.
+        const stats = await queryOne(`SELECT
+         COUNT(*) AS total,
+         COALESCE(SUM(t.status IN ('completed','verified')), 0) AS completed,
+         COALESCE(SUM(t.status = 'pending_approval'), 0) AS submitted,
+         COALESCE(SUM(COALESCE(t.submitted_at, t.completed_at) IS NOT NULL), 0) AS finished,
+         COALESCE(SUM(COALESCE(t.submitted_at, t.completed_at) IS NOT NULL
+                      AND (t.due_date IS NULL OR COALESCE(t.submitted_at, t.completed_at) <= TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')))), 0) AS on_time,
+         COALESCE(SUM(COALESCE(t.submitted_at, t.completed_at) IS NULL AND t.due_date IS NOT NULL
+                      AND TIMESTAMP(t.due_date, COALESCE(t.due_time, '23:59:59')) < NOW()), 0) AS overdue_open,
+         COALESCE(SUM(t.status = 'rejected' OR t.verification_status = 'rejected'), 0) AS rejected,
+         COALESCE(SUM(t.status IN ('completed','verified','rejected') OR t.verification_status IN ('verified','rejected')), 0) AS reviewed,
+         COALESCE(SUM(t.requires_evidence = 1 AND COALESCE(t.submitted_at, t.completed_at) IS NOT NULL), 0) AS evidence_required,
+         COALESCE(SUM(t.requires_evidence = 1 AND COALESCE(t.submitted_at, t.completed_at) IS NOT NULL
+                      AND (t.evidence_file_id IS NOT NULL OR EXISTS (SELECT 1 FROM task_attachments tat WHERE tat.task_id = t.id))), 0) AS evidence_given
+       FROM tasks t
+       JOIN task_assignments ta ON ta.task_id = t.id
+       WHERE ta.employee_id = ? AND t.archived_at IS NULL AND t.status <> 'cancelled'
+         AND (t.start_date = ? OR t.due_date = ?)`, [employeeId, targetDate, targetDate]);
+        const n = (value) => Number(value ?? 0);
+        const total = n(stats?.total);
+        const completed = n(stats?.completed);
+        const submitted = n(stats?.submitted);
+        const finished = n(stats?.finished);
+        const onTime = n(stats?.on_time);
+        const overdueOpen = n(stats?.overdue_open);
+        const rejected = n(stats?.rejected);
+        const reviewed = n(stats?.reviewed);
+        const evidenceRequired = n(stats?.evidence_required);
+        const evidenceGiven = n(stats?.evidence_given);
+        // 1. Task completion (30): verified-complete share of the day's tasks.
+        add('task', 'Task completion', 30, total > 0 ? (completed / total) * 30 : null, total > 0
+            ? `${completed} of ${total} task(s) completed and verified${submitted ? ` · ${submitted} awaiting verification` : ''}`
+            : 'No tasks scheduled for this day');
+        // 2. Timely completion (15): submitted before the due time; open tasks already past due count as late.
+        const timelyBase = finished + overdueOpen;
+        add('timely', 'Timely completion', 15, timelyBase > 0 ? (onTime / timelyBase) * 15 : null, timelyBase > 0
+            ? `${onTime} of ${timelyBase} on time${overdueOpen ? ` · ${overdueOpen} past due and not submitted` : ''}`
+            : 'Nothing submitted or past due yet');
+        // 3. Quality & accuracy (20): existing rule, 5 points off per rejected task, once work has been reviewed.
+        add('quality', 'Quality & accuracy', 20, reviewed > 0 ? 20 - rejected * 5 : null, reviewed > 0 ? `${rejected} rejection(s) across ${reviewed} reviewed task(s) · 5 points per rejection` : 'No work reviewed by a manager yet');
+        // 4. Reporting & documentation (10): activity checkpoints that are due so far + proof attached to submitted tasks.
+        const checkpointRows = await query(`SELECT time_slot FROM store_daily_checkpoints WHERE employee_id = ? AND checkpoint_date = ? AND status IN ('submitted','verified')`, [employeeId, targetDate]);
+        const submittedSlots = new Set(checkpointRows.map((row) => row.time_slot));
+        const dueSlots = TIMELINE_SLOTS.filter((slot) => !isToday || slotStartMinutes(slot.hours) <= nowMinutes);
+        const checkpointsDone = dueSlots.filter((slot) => submittedSlots.has(slot.timeSlot)).length;
+        const reportingBase = dueSlots.length + evidenceRequired;
+        add('reporting', 'Reporting & documentation', 10, reportingBase > 0 ? ((checkpointsDone + evidenceGiven) / reportingBase) * 10 : null, reportingBase > 0
+            ? `${checkpointsDone} of ${dueSlots.length} checkpoint(s) due so far${evidenceRequired ? ` · proof on ${evidenceGiven} of ${evidenceRequired} task(s) needing it` : ''}`
+            : 'No checkpoints due yet');
+        // 5. Attendance & punctuality (10): existing rule (absent 0, late 7, on time 10). Weekly offs are not scored.
+        const att = await queryOne('SELECT status, COALESCE(is_late, 0) AS is_late FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, targetDate]);
+        const weeklyOff = new Date(`${targetDate}T00:00:00Z`).getUTCDay() === 0;
+        if (!att && weeklyOff) {
+            add('attendance', 'Attendance & punctuality', 10, null, 'Sunday weekly off');
         }
-        catch {
-            taskScore = 30.0;
-            timelyScore = 15.0;
+        else if (!att || att.status === 'absent') {
+            add('attendance', 'Attendance & punctuality', 10, 0, isToday && !att ? 'Not checked in today' : 'Absent');
         }
-        try {
-            // 2. Quality & Accuracy (Max 20)
-            const rejections = await queryOne(`SELECT COUNT(*) AS rejected FROM tasks t
-         JOIN task_assignments ta ON ta.task_id = t.id
-         WHERE ta.employee_id = ? AND (t.start_date = ? OR t.due_date = ?) AND t.status = 'rejected'`, [employeeId, targetDate, targetDate]);
-            const rejectedCount = Number(rejections?.rejected ?? 0);
-            qualityScore = Math.max(0, Number((20 - rejectedCount * 5).toFixed(2)));
+        else if (Number(att.is_late) === 1) {
+            add('attendance', 'Attendance & punctuality', 10, 7, 'Checked in late');
         }
-        catch {
-            qualityScore = 20.0;
+        else {
+            add('attendance', 'Attendance & punctuality', 10, 10, 'Checked in on time');
         }
-        try {
-            // 3. Reporting & Documentation (Max 10)
-            const checkpoints = await queryOne(`SELECT COUNT(*) AS submitted FROM store_daily_checkpoints
-         WHERE employee_id = ? AND checkpoint_date = ? AND status IN ('submitted', 'verified')`, [employeeId, targetDate]);
-            const submittedCheckpoints = Number(checkpoints?.submitted ?? 0);
-            reportingScore = Math.min(10, Number(((submittedCheckpoints / 4) * 10).toFixed(2)));
+        // 6 & 7. No data is recorded for these yet, so they are not scored (previously fixed at 9.5 and 5).
+        add('coordination', 'Team coordination', 10, null, 'Not tracked yet: no coordination data is recorded');
+        add('escalation', 'Escalation discipline', 5, null, 'Not tracked yet: no escalation-handling data is recorded');
+        const measured = breakdown.filter((item) => item.measured);
+        const measuredMax = measured.reduce((sum, item) => sum + item.max, 0);
+        const earned = measured.reduce((sum, item) => sum + (item.score ?? 0), 0);
+        const totalScore = measuredMax > 0 ? Math.round((earned / measuredMax) * 1000) / 10 : null;
+        let rating = 'Not enough data';
+        if (totalScore !== null) {
+            if (totalScore >= 90)
+                rating = 'Excellent';
+            else if (totalScore >= 80)
+                rating = 'Very Good';
+            else if (totalScore >= 70)
+                rating = 'Good';
+            else if (totalScore >= 60)
+                rating = 'Needs Improvement';
+            else
+                rating = 'Unsatisfactory';
         }
-        catch {
-            reportingScore = 10.0;
-        }
-        try {
-            // 4. Attendance & Punctuality (Max 10)
-            const att = await queryOne(`SELECT status, COALESCE(is_late, 0) AS is_late
-         FROM attendance WHERE employee_id = ? AND work_date = ?`, [employeeId, targetDate]);
-            if (!att || att.status === 'absent') {
-                attendanceScore = 0.0;
-            }
-            else if (Number(att.is_late) === 1) {
-                attendanceScore = 7.0;
-            }
-        }
-        catch {
-            attendanceScore = 10.0;
-        }
-        const totalScore = Number((taskScore + timelyScore + qualityScore + reportingScore + attendanceScore + coordinationScore + escalationScore).toFixed(2));
-        let rating = 'Good';
-        if (totalScore >= 90)
-            rating = 'Excellent';
-        else if (totalScore >= 80)
-            rating = 'Very Good';
-        else if (totalScore >= 70)
-            rating = 'Good';
-        else if (totalScore >= 60)
-            rating = 'Needs Improvement';
-        else
-            rating = 'Unsatisfactory';
+        const score = (key) => breakdown.find((item) => item.key === key)?.score ?? 0;
+        const result = {
+            date: targetDate,
+            taskScore: score('task'),
+            timelyScore: score('timely'),
+            qualityScore: score('quality'),
+            reportingScore: score('reporting'),
+            attendanceScore: score('attendance'),
+            coordinationScore: score('coordination'),
+            escalationScore: score('escalation'),
+            totalScore,
+            earnedPoints: round(earned),
+            measuredMax,
+            rating,
+            breakdown,
+        };
         try {
             await execute(`INSERT INTO employee_daily_performance (
           employee_id, evaluation_date, task_completion_score, timely_completion_score,
           quality_accuracy_score, reporting_doc_score, attendance_punctuality_score,
-          team_coordination_score, escalation_score, total_score, rating
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          team_coordination_score, escalation_score, total_score, rating, remarks
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           task_completion_score = VALUES(task_completion_score),
           timely_completion_score = VALUES(timely_completion_score),
@@ -548,34 +604,27 @@ export class DailyTaskService {
           escalation_score = VALUES(escalation_score),
           total_score = VALUES(total_score),
           rating = VALUES(rating),
+          remarks = VALUES(remarks),
           updated_at = NOW(3)`, [
                 employeeId,
                 targetDate,
-                taskScore,
-                timelyScore,
-                qualityScore,
-                reportingScore,
-                attendanceScore,
-                coordinationScore,
-                escalationScore,
-                totalScore,
+                result.taskScore,
+                result.timelyScore,
+                result.qualityScore,
+                result.reportingScore,
+                result.attendanceScore,
+                result.coordinationScore,
+                result.escalationScore,
+                totalScore ?? 0,
                 rating,
+                `Measured ${measuredMax}/100 points. Not measured: ${breakdown.filter((item) => !item.measured).map((item) => item.label).join(', ') || 'none'}.`,
             ]);
         }
-        catch {
-            // safe fallback if table is unavailable
+        catch (error) {
+            // The score is still returned; persisting the daily snapshot is best effort.
+            console.warn('[performance] could not store daily score:', error.message);
         }
-        return {
-            taskScore,
-            timelyScore,
-            qualityScore,
-            reportingScore,
-            attendanceScore,
-            coordinationScore,
-            escalationScore,
-            totalScore,
-            rating,
-        };
+        return result;
     }
     /**
      * Retrieves role-specific operational metrics for dashboards.

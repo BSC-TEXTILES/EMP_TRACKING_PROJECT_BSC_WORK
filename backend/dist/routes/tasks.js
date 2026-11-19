@@ -5,7 +5,7 @@ import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { TaskService } from '../services/TaskService.js';
 import { ProjectService } from '../services/ProjectService.js';
 import { DailyTaskService } from '../services/DailyTaskService.js';
-import { visibleEmployeeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, requestedLocation, visibleEmployeeIds } from '../lib/scope.js';
 import { query } from '../db/index.js';
 export const tasksRouter = Router();
 tasksRouter.use(authenticate);
@@ -24,7 +24,12 @@ tasksRouter.get('/', requireAny('tasks.view.own', 'tasks.view.team', 'tasks.view
             // non-blocking
         }
     }
+    const locationId = await requestedLocation(user, req.query.locationId);
     const result = await TaskService.list(user, {
+        stage: req.query.stage ? String(req.query.stage) : undefined,
+        locationId,
+        sort: req.query.sort ? String(req.query.sort) : undefined,
+        dir: req.query.dir === 'desc' ? 'desc' : 'asc',
         status: req.query.status ? String(req.query.status) : undefined,
         priority: req.query.priority ? String(req.query.priority) : undefined,
         timeSlot: req.query.timeSlot ? String(req.query.timeSlot) : undefined,
@@ -76,6 +81,8 @@ tasksRouter.post('/daily/generate', asyncHandler(async (req, res) => {
         force: z.boolean().optional(),
     }), req.body);
     const targetEmployeeId = body.employeeId ?? user.id;
+    if (targetEmployeeId !== user.id)
+        await assertEmployeeAccess(user, targetEmployeeId, 'tasks');
     try {
         const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user, { force: body.force });
         res.json(result);
@@ -94,6 +101,7 @@ tasksRouter.get('/daily/dashboard', asyncHandler(async (req, res) => {
 tasksRouter.get('/timeline', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    await assertEmployeeAccess(user, employeeId, 'tasks');
     const date = req.query.date ? String(req.query.date) : undefined;
     const checkpoints = await DailyTaskService.getTimelineCheckpoints(employeeId, date);
     res.json({ checkpoints });
@@ -112,24 +120,10 @@ tasksRouter.post('/timeline', asyncHandler(async (req, res) => {
 tasksRouter.get('/performance', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : user.id;
+    await assertEmployeeAccess(user, employeeId, 'tasks');
     const date = req.query.date ? String(req.query.date) : undefined;
-    try {
-        const score = await DailyTaskService.calculateDailyScore(employeeId, date);
-        res.json(score);
-    }
-    catch {
-        res.json({
-            taskScore: 30.0,
-            timelyScore: 15.0,
-            qualityScore: 20.0,
-            reportingScore: 10.0,
-            attendanceScore: 10.0,
-            coordinationScore: 9.5,
-            escalationScore: 5.0,
-            totalScore: 99.5,
-            rating: 'Excellent',
-        });
-    }
+    // No fallback numbers: if the score cannot be calculated the client shows the error instead of a fake score.
+    res.json(await DailyTaskService.calculateDailyScore(employeeId, date));
 }));
 tasksRouter.get('/:id', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);

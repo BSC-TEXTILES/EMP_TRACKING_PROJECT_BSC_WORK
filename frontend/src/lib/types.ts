@@ -73,7 +73,10 @@ export interface TaskSummary {
   projectName: string | null;
   createdBy: number;
   creatorName: string | null;
+  managerId?: number | null;
   managerName: string | null;
+  /** Store codes of the assignees, e.g. "BEL" or "DAV, SHI". */
+  locationCodes?: string | null;
   assigneeNames: string | null;
   assigneeIds: number[];
   startDate: string | null;
@@ -115,6 +118,8 @@ export interface TaskSummary {
   comments?: { id: number; authorId: number; authorName: string; body: string; createdAt: string }[];
   timeLogs?: { id: number; employeeName: string; startedAt: string; endedAt: string | null; minutes: number; note: string | null }[];
   attachments?: { id: number; file_id: number; original_name: string; mime_type: string; size_bytes: number }[];
+  /** Audit trail of every action taken on the task (newest first). */
+  history?: { id: number; action: string; actorName: string | null; status: string | null; note: string | null; createdAt: string | null }[];
 }
 
 export interface ConversationSummary {
