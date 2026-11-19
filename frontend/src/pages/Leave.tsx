@@ -8,7 +8,7 @@ import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, titleize } from '../lib/format';
 import type { LeaveItem } from '../lib/types';
 import { useSocketEvent } from '../contexts/RealtimeContext';
-import { WeeklyOffPanel } from '../components/WeeklyOffPanel';
+import { WeeklyOffPanel, useWeeklyOffSummary } from '../components/WeeklyOffPanel';
 import { LeavePolicyModal, TeamWeeklyOffs } from '../components/TeamWeeklyOffs';
 
 interface DayBreakdown {
@@ -80,6 +80,9 @@ export default function Leave() {
   const [policyOpen, setPolicyOpen] = useState(false);
   const [breakdown, setBreakdown] = useState<DayBreakdown | null>(null);
   const [breakdownError, setBreakdownError] = useState('');
+  // Weekly offs for the month the leave starts in (or this month), shown in the leave-type section.
+  const weeklyOffMonth = /^\d{4}-\d{2}/.test(form.startDate) ? form.startDate : new Date().toISOString().slice(0, 10);
+  const { data: weeklyOff } = useWeeklyOffSummary(undefined, Number(weeklyOffMonth.slice(0, 4)), Number(weeklyOffMonth.slice(5, 7)));
 
   const load = async () => {
     try {
@@ -325,13 +328,21 @@ export default function Leave() {
               required
             >
               <option value="">Select leave type</option>
+              {weeklyOff && (
+                <option value="" disabled>
+                  {`Weekly Off · Sundays (${weeklyOff.monthName}: ${weeklyOff.weeklyOffs.allocated} weekly offs · ${weeklyOff.weeklyOffs.taken} taken · ${weeklyOff.weeklyOffs.remaining} remaining · ${weeklyOff.weeklyOffs.worked} worked) · automatic, no need to apply`}
+                </option>
+              )}
               {types.map((type) => {
                 const balance = balances.find((item) => item.leaveTypeId === type.id);
                 let label = type.name;
                 if (type.code === 'LWP') {
                   label += ' (Unpaid · Loss of Pay)';
                 } else if (type.code === 'CO') {
-                  label += balance && balance.allocated > 0 ? ` (${balance.available} day(s) credited)` : ' (Comp-off · Holiday shift)';
+                  const available = weeklyOff?.compOff.available ?? balance?.available ?? 0;
+                  label += available > 0
+                    ? ` (${available} day(s) available · earned for weekly offs not taken)`
+                    : ' (0 available · earned when you work on a Sunday instead of taking the weekly off)';
                 } else if (type.code === 'ML') {
                   label += ' (Maternity · 26 weeks · Medical doc required)';
                 } else if (type.code === 'PL') {
@@ -347,6 +358,52 @@ export default function Leave() {
               })}
             </select>
           </Field>
+          {weeklyOff && (() => {
+            const notTaken = weeklyOff.sundays.filter((sunday) => sunday.status === 'worked');
+            const coSelected = selectedType?.code === 'CO';
+            return (
+              <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                <p className="font-semibold">
+                  Weekly offs · {weeklyOff.monthName} {weeklyOff.year}: {weeklyOff.totalSundays} Sundays
+                </p>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <span>Allocated: <strong>{weeklyOff.weeklyOffs.allocated}</strong></span>
+                  <span>Taken: <strong>{weeklyOff.weeklyOffs.taken}</strong></span>
+                  <span>Remaining: <strong>{weeklyOff.weeklyOffs.remaining}</strong></span>
+                  <span>Not taken (worked): <strong>{weeklyOff.weeklyOffs.worked}</strong></span>
+                </div>
+                {notTaken.length > 0 ? (
+                  <div>
+                    <p className="font-medium">Weekly offs you did not take (you worked):</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {notTaken.map((sunday) => (
+                        <li key={sunday.date}>
+                          • {formatDate(sunday.date)} — worked {Math.floor(sunday.workedMinutes / 60)}h {sunday.workedMinutes % 60}m ·{' '}
+                          {sunday.compOffDays > 0
+                            ? <strong>{sunday.compOffDays === 1 ? '1 comp-off day' : 'half comp-off day'} earned</strong>
+                            : weeklyOff.policy.compOffEnabled
+                              ? 'not enough hours for comp-off'
+                              : 'comp-off is disabled by HR'}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>You have taken every weekly off so far this month.</p>
+                )}
+                <p>
+                  Comp-off available to use: <strong>{weeklyOff.compOff.available} day(s)</strong>
+                  {weeklyOff.policy.compOffExpiryDays > 0 ? ` · each credit is valid for ${weeklyOff.policy.compOffExpiryDays} days` : ''}.
+                  {' '}Weekly offs are given automatically and are never deducted from CL, SL or EL.
+                </p>
+                {coSelected && weeklyOff.compOff.available <= 0 && (
+                  <p role="alert" className="font-semibold text-red-700">
+                    You have no comp-off available. Comp-off is earned only when you work on a weekly off (Sunday).
+                  </p>
+                )}
+              </div>
+            );
+          })()}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Start date" required>
               <input type="date" className="input" value={form.startDate} min={new Date().toISOString().slice(0, 10)} onChange={(event) => setForm({ ...form, startDate: event.target.value })} required />
