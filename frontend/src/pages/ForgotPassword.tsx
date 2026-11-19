@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
 import { useDocumentTitle } from '../lib/hooks';
 import { Field } from '../components/ui';
+import { Icon } from '../components/icons';
+import { cx } from '../lib/format';
 
 export default function ForgotPassword() {
   useDocumentTitle('Reset password');
@@ -14,9 +16,18 @@ export default function ForgotPassword() {
   const [code, setCode] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [devCode, setDevCode] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const hasMinLength = password.length >= 10;
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSymbol = /[^A-Za-z0-9]/.test(password);
+  const isPasswordValid = hasMinLength && hasUpper && hasLower && hasNumber && hasSymbol;
 
   const request = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -36,6 +47,10 @@ export default function ForgotPassword() {
 
   const reset = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (!isPasswordValid) {
+      setError('Password must be at least 10 characters with upper, lower, number and symbol.');
+      return;
+    }
     if (password !== confirm) {
       setError('Passwords do not match.');
       return;
@@ -56,9 +71,9 @@ export default function ForgotPassword() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-ink-100 px-4 py-8">
       <div className="w-full max-w-md">
-        <div className="card p-6 sm:p-7">
+        <div className="card p-6 sm:p-7 shadow-md">
           <div className="mb-5 flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-700 font-bold text-white">W</span>
+            <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-700 font-bold text-white shadow-sm">W</span>
             <p className="font-semibold text-ink-900">Workforce</p>
           </div>
           <h1 className="text-xl font-semibold text-ink-900">{step === 'request' ? 'Reset your password' : 'Choose a new password'}</h1>
@@ -102,11 +117,80 @@ export default function ForgotPassword() {
                 />
               </Field>
               <Field label="New password" hint="Minimum 10 characters with upper, lower, number and symbol." required>
-                <input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={10} required />
+                <div className="relative">
+                  <input
+                    className={cx('input pr-10', password && isPasswordValid && 'border-emerald-400')}
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    minLength={10}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700 p-1 rounded"
+                    title={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
+                  </button>
+                </div>
               </Field>
+
+              {password && (
+                <div className="rounded-lg border border-ink-200 bg-surface-alt/50 p-2.5 text-xs space-y-1">
+                  <p className="font-semibold text-ink-700 text-[11px] uppercase tracking-wider">Password Requirements:</p>
+                  <ul className="space-y-0.5">
+                    <li className={cx('flex items-center gap-1.5', hasMinLength ? 'text-emerald-700 font-medium' : 'text-ink-500')}>
+                      <span>{hasMinLength ? '✓' : '•'}</span> 10+ characters
+                    </li>
+                    <li className={cx('flex items-center gap-1.5', hasUpper ? 'text-emerald-700 font-medium' : 'text-ink-500')}>
+                      <span>{hasUpper ? '✓' : '•'}</span> Uppercase letter (A-Z)
+                    </li>
+                    <li className={cx('flex items-center gap-1.5', hasLower ? 'text-emerald-700 font-medium' : 'text-ink-500')}>
+                      <span>{hasLower ? '✓' : '•'}</span> Lowercase letter (a-z)
+                    </li>
+                    <li className={cx('flex items-center gap-1.5', hasNumber ? 'text-emerald-700 font-medium' : 'text-ink-500')}>
+                      <span>{hasNumber ? '✓' : '•'}</span> Number (0-9)
+                    </li>
+                    <li className={cx('flex items-center gap-1.5', hasSymbol ? 'text-emerald-700 font-medium' : 'text-ink-500')}>
+                      <span>{hasSymbol ? '✓' : '•'}</span> Symbol (!@#$%^&*)
+                    </li>
+                  </ul>
+                </div>
+              )}
+
               <Field label="Confirm new password" required>
-                <input className="input" type="password" value={confirm} onChange={(event) => setConfirm(event.target.value)} minLength={10} required />
+                <div className="relative">
+                  <input
+                    className={cx('input pr-10', confirm && confirm === password && 'border-emerald-400')}
+                    type={showConfirm ? 'text' : 'password'}
+                    value={confirm}
+                    onChange={(event) => setConfirm(event.target.value)}
+                    minLength={10}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirm((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700 p-1 rounded"
+                    title={showConfirm ? 'Hide password' : 'Show password'}
+                  >
+                    <Icon name={showConfirm ? 'eyeOff' : 'eye'} size={18} />
+                  </button>
+                </div>
               </Field>
+
+              {confirm && (
+                <div>
+                  {confirm === password ? (
+                    <p className="text-xs font-medium text-emerald-600 flex items-center gap-1">✓ Passwords match</p>
+                  ) : (
+                    <p className="text-xs font-medium text-red-600 flex items-center gap-1">✕ Passwords do not match</p>
+                  )}
+                </div>
+              )}
+
               <button type="submit" className="btn-primary w-full" disabled={submitting}>
                 {submitting ? 'Updating…' : 'Update password'}
               </button>

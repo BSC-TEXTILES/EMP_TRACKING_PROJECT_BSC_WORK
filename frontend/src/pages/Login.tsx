@@ -240,9 +240,11 @@ export default function Login() {
                     <button
                       type="button"
                       onClick={() => setShowPassword((value) => !value)}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-xs text-ink-500 hover:bg-ink-100"
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-ink-400 hover:text-ink-700 hover:bg-ink-100 transition-colors focus:outline-none"
+                      title={showPassword ? 'Hide password' : 'Show password'}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
                     >
-                      {showPassword ? 'Hide' : 'Show'}
+                      <Icon name={showPassword ? 'eyeOff' : 'eye'} size={18} />
                     </button>
                   </div>
                 </div>

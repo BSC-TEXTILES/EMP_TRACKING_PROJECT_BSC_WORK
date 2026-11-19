@@ -61,6 +61,9 @@ export function AppShell() {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordBusy, setPasswordBusy] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
 
   useEffect(() => {
     if (user?.id) {
@@ -788,34 +791,73 @@ export function AppShell() {
         >
           <form onSubmit={handlePasswordSubmit} className="space-y-4 py-1">
             <Field label="Current password" required>
-              <input
-                className="input"
-                type="password"
-                value={passwordForm.currentPassword}
-                onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
-                required
-              />
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showCurrentPassword ? 'text' : 'password'}
+                  value={passwordForm.currentPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowCurrentPassword((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700 p-1 rounded"
+                  title={showCurrentPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Icon name={showCurrentPassword ? 'eyeOff' : 'eye'} size={18} />
+                </button>
+              </div>
             </Field>
             <Field label="New password" hint="At least 10 characters with upper, lower, number and symbol." required>
-              <input
-                className="input"
-                type="password"
-                minLength={10}
-                value={passwordForm.newPassword}
-                onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
-                required
-              />
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showNewPassword ? 'text' : 'password'}
+                  minLength={10}
+                  value={passwordForm.newPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700 p-1 rounded"
+                  title={showNewPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Icon name={showNewPassword ? 'eyeOff' : 'eye'} size={18} />
+                </button>
+              </div>
             </Field>
             <Field label="Confirm new password" required>
-              <input
-                className="input"
-                type="password"
-                minLength={10}
-                value={passwordForm.confirmPassword}
-                onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
-                required
-              />
+              <div className="relative">
+                <input
+                  className="input pr-10"
+                  type={showConfirmNewPassword ? 'text' : 'password'}
+                  minLength={10}
+                  value={passwordForm.confirmPassword}
+                  onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmNewPassword((v) => !v)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-400 hover:text-ink-700 p-1 rounded"
+                  title={showConfirmNewPassword ? 'Hide password' : 'Show password'}
+                >
+                  <Icon name={showConfirmNewPassword ? 'eyeOff' : 'eye'} size={18} />
+                </button>
+              </div>
             </Field>
+            {passwordForm.confirmPassword && (
+              <div>
+                {passwordForm.newPassword === passwordForm.confirmPassword ? (
+                  <p className="text-xs font-medium text-emerald-600 flex items-center gap-1">✓ Passwords match</p>
+                ) : (
+                  <p className="text-xs font-medium text-red-600 flex items-center gap-1">✕ Passwords do not match</p>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-ink-100">
               <button type="button" className="btn-secondary btn-sm" onClick={() => setPasswordModalOpen(false)} disabled={passwordBusy}>
                 Cancel

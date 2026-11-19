@@ -155,14 +155,18 @@ export function Modal({
   );
 }
 
-export function Field({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: ReactNode }) {
+export function Field({ label, hint, error, required, children }: { label: string; hint?: string; error?: string; required?: boolean; children: ReactNode }) {
   return (
     <label className="block">
       <span className="label">
         {label} {required && <span className="text-red-500">*</span>}
       </span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-ink-400">{hint}</span>}
+      {error ? (
+        <span className="mt-1 block text-xs font-medium text-red-600">{error}</span>
+      ) : hint ? (
+        <span className="mt-1 block text-xs text-ink-400">{hint}</span>
+      ) : null}
     </label>
   );
 }
