@@ -365,7 +365,7 @@ function CreateProject({ open, onClose, employees, onCreated }: { open: boolean;
           <Field label="Project manager">
             <select className="input" value={form.managerId} onChange={(event) => setForm({ ...form, managerId: event.target.value })}>
               <option value="">Select manager</option>
-              {employees.filter((e) => !e.full_name.toLowerCase().includes('gagan')).map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
+              {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
             </select>
           </Field>
           <Field label="Start date"><input type="date" className="input" value={form.startDate} onChange={(event) => setForm({ ...form, startDate: event.target.value })} /></Field>

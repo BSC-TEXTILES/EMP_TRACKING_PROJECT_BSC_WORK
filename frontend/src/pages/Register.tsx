@@ -53,7 +53,7 @@ export default function Register() {
   }, [options, form.departmentId]);
 
   const visibleManagers = useMemo(() => {
-    const list = (options?.managers || []).filter((m) => !m.full_name.toLowerCase().includes('gagan'));
+    const list = options?.managers || [];
     if (list.length > 0) return list;
     return [{ id: 1, full_name: 'Renukaradhya', location_name: 'Head Office' }];
   }, [options?.managers]);

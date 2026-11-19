@@ -38,7 +38,7 @@ authRouter.get(
     const renuka = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
       "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1",
     );
-    const email = renuka?.email || 'renuka.adhya@bsctextiles.in';
+    const email = renuka?.email || 'renukaradhya@bsctextiles.in';
     const name = renuka?.full_name || 'Renukaradhya';
     const code = renuka?.employee_code || 'EMP-1001';
 
@@ -320,7 +320,6 @@ authRouter.get(
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
          WHERE e.status = 'active'
-           AND e.full_name NOT LIKE '%Gagan%'
            AND (
              e.full_name LIKE '%Renuka%'
              OR e.full_name LIKE '%Chetan%'

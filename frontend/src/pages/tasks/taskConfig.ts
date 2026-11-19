@@ -74,10 +74,10 @@ export const slotLabel = (slot?: string | null) => SLOTS.find((s) => s.id === sl
 
 export const ALL_STATUSES = ['assigned', 'accepted', 'in_progress', 'on_hold', 'pending_approval', 'completed', 'rejected', 'escalated', 'overdue', 'cancelled'];
 
-/** Names on old records were renamed; an empty assignee list is shown as "Unassigned", never as a real person. */
+/** An empty assignee list is shown as "Unassigned", never as a real person. */
 export const displayName = (name?: string | null): string => {
   if (!name || name === '—') return 'Unassigned';
-  return name.replace(/Gagan(\s+C\s+B)?/gi, 'Renukaradhya');
+  return name;
 };
 
 export interface TaskRole {

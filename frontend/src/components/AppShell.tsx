@@ -33,10 +33,10 @@ const AVAILABILITY_OPTIONS: { key: string; label: string; color: string; dot: st
 
 export function AppShell() {
   const { user, logout, has, canAny, unreadNotifications, setUnreadNotifications } = useAuth();
-  const displayName = user?.fullName.includes('Gagan') ? 'Renukaradhya' : (user?.fullName ?? '');
-  const displayCode = (user?.employeeCode === 'EMP-2201' || user?.fullName.includes('Gagan')) ? 'EMP-1001' : (user?.employeeCode ?? '');
-  const displayDept = user?.fullName.includes('Gagan') ? 'Executive Office' : (user?.departmentName ?? 'Organisation');
-  const displayEmail = user?.email.includes('gagan') ? 'renuka.adhya@bsctextiles.in' : (user?.email ?? '');
+  const displayName = user?.fullName ?? '';
+  const displayCode = user?.employeeCode ?? '';
+  const displayDept = user?.departmentName ?? 'Organisation';
+  const displayEmail = user?.email ?? '';
   const { connected, onlineIds, status, retry } = useRealtime();
   const toast = useToast();
   const location = useLocation();

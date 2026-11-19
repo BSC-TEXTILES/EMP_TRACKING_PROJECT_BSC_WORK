@@ -762,7 +762,7 @@ export default function Employees() {
                         <select className="input" value={orgForm.managerId} onChange={(event) => setOrgForm({ ...orgForm, managerId: event.target.value })}>
                           <option value="">None</option>
                           {structure?.designations && (data?.items ?? [])
-                            .filter((employee) => employee.id !== detail.id && !employee.fullName.toLowerCase().includes('gagan') && (employee.roleSlug?.includes('manager') || employee.roleSlug?.includes('admin') || employee.fullName.toLowerCase().includes('renuka') || employee.fullName.toLowerCase().includes('chetan')))
+                            .filter((employee) => employee.id !== detail.id && (employee.roleSlug?.includes('manager') || employee.roleSlug?.includes('admin') || employee.fullName.toLowerCase().includes('renuka') || employee.fullName.toLowerCase().includes('chetan')))
                             .map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
                         </select>
                       </Field>
@@ -987,7 +987,7 @@ export default function Employees() {
             >
               <option value="">Select Manager</option>
               {employeesList
-                .filter((e) => e.id !== approveTarget?.id && !e.fullName.toLowerCase().includes('gagan'))
+                .filter((e) => e.id !== approveTarget?.id)
                 .map((e) => (
                   <option key={e.id} value={e.id}>
                     {e.fullName} ({e.employeeCode})
@@ -1315,7 +1315,7 @@ function CreateEmployee({
               >
                 <option value="">Select manager</option>
                 {employees
-                  .filter((e) => !e.fullName.toLowerCase().includes('gagan') && (e.roleSlug?.includes('manager') || e.roleSlug?.includes('admin') || e.fullName.toLowerCase().includes('renuka') || e.fullName.toLowerCase().includes('chetan') || (user?.roleLevel ?? 0) >= 70))
+                  .filter((e) => (e.roleSlug?.includes('manager') || e.roleSlug?.includes('admin') || e.fullName.toLowerCase().includes('renuka') || e.fullName.toLowerCase().includes('chetan') || (user?.roleLevel ?? 0) >= 70))
                   .map((employee) => (
                     <option key={employee.id} value={employee.id}>
                       {employee.fullName} ({employee.employeeCode})

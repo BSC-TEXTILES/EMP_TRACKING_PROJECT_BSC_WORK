@@ -314,9 +314,11 @@ export class AuthService {
       );
     }
 
-    if (!employee && ['renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'emp-1001', 'emp-1003', 'renuka', 'software_manager', 'super_admin'].includes(emailCandidate)) {
+    if (!employee && ['gagan.cb@bsctextiles.in', 'renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'emp-1001', 'emp-1003', 'renuka', 'software_manager', 'super_admin'].includes(emailCandidate)) {
       employee = await queryOne<EmployeeWithJoins>(
-        `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Renuka%' OR e.employee_code = 'EMP-1001' LIMIT 1`,
+        // Old Super Admin logins resolve to the renamed account (migration 037), never to the inactive placeholder.
+        `${EMPLOYEE_SELECT} WHERE e.status = 'active' AND (e.email = 'renukaradhya@bsctextiles.in' OR e.full_name = 'Renukaradhya' OR e.employee_code = 'EMP-1001')
+         ORDER BY (e.email = 'renukaradhya@bsctextiles.in') DESC, e.id LIMIT 1`,
       );
     }
 

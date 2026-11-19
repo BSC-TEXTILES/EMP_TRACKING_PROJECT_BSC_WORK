@@ -20,7 +20,7 @@ const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
     role: 'Super Admin',
     employeeId: 'EMP-1001',
     name: 'Renukaradhya',
-    email: 'renuka.adhya@bsctextiles.in',
+    email: 'renukaradhya@bsctextiles.in',
     password: 'Workforce@2026',
   },
   {
