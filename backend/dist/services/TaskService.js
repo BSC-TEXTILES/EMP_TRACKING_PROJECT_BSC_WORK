@@ -200,7 +200,7 @@ export class TaskService {
             clauses.push("t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')");
         }
         const page = Math.max(1, filters.page ?? 1);
-        const pageSize = Math.min(100, Math.max(5, filters.pageSize ?? 20));
+        const pageSize = Math.min(1000, Math.max(5, filters.pageSize ?? 20));
         const where = clauses.join(' AND ');
         const totalRow = await queryOne(`SELECT COUNT(*) AS total FROM tasks t WHERE ${where}`, params);
         const rows = await query(`SELECT t.*, c.full_name AS creator_name, m.full_name AS manager_name, d.name AS department_name, p.name AS project_name,

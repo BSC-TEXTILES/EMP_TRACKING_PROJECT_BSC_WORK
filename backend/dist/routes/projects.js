@@ -39,6 +39,11 @@ projectsRouter.post('/:id/status', asyncHandler(async (req, res) => {
     await ProjectService.updateStatus(id, user, body.status);
     res.json({ ok: true });
 }));
+projectsRouter.delete('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    await ProjectService.remove(id, currentUser(req));
+    res.json({ ok: true });
+}));
 projectsRouter.post('/:id/milestones', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);

@@ -114,6 +114,7 @@ export class ProjectService {
       progress: number;
       start_date: string | null;
       end_date: string | null;
+      manager_id: number | null;
       manager_name: string | null;
       department_name: string | null;
       member_count: number;
@@ -122,7 +123,7 @@ export class ProjectService {
       conversation_id: number | null;
     }>(
       `SELECT p.id, p.code, p.name, p.description, p.status, p.progress, p.start_date, p.end_date,
-              m.full_name AS manager_name, d.name AS department_name, p.conversation_id,
+              p.manager_id, m.full_name AS manager_name, d.name AS department_name, p.conversation_id,
               (SELECT COUNT(*) FROM project_members pm WHERE pm.project_id = p.id) AS member_count,
               (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.archived_at IS NULL) AS task_count,
               (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status = 'completed') AS completed_tasks
@@ -142,6 +143,7 @@ export class ProjectService {
       progress: Number(r.progress),
       startDate: r.start_date,
       endDate: r.end_date,
+      managerId: r.manager_id ? Number(r.manager_id) : null,
       managerName: r.manager_name,
       departmentName: r.department_name,
       memberCount: Number(r.member_count),
@@ -269,6 +271,29 @@ export class ProjectService {
     if (!['planning', 'active', 'on_hold', 'completed', 'cancelled'].includes(status)) throw ApiError.badRequest('Invalid project status.');
     await execute('UPDATE projects SET status = ? WHERE id = ?', [status, projectId]);
     await recordAudit({ actorId: actor.id, action: 'project.status_updated', entityType: 'project', entityId: projectId, after: { status } });
+  }
+
+  /**
+   * Permanently deletes a project. Members and milestones are removed (FK cascade);
+   * linked tasks are kept and simply unlinked (FK SET NULL). The project chat keeps its history.
+   */
+  static async remove(projectId: number, actor: AuthUser) {
+    const project = await queryOne<{ id: number; name: string; code: string; manager_id: number | null; status: string }>(
+      'SELECT id, name, code, manager_id, status FROM projects WHERE id = ?',
+      [projectId],
+    );
+    if (!project) throw ApiError.notFound('Project not found.');
+    if (!actor.permissions.includes('projects.manage') && Number(project.manager_id) !== actor.id) {
+      throw ApiError.forbidden('Only the project manager or an administrator can delete this project.');
+    }
+    await execute('DELETE FROM projects WHERE id = ?', [projectId]);
+    await recordAudit({
+      actorId: actor.id,
+      action: 'project.deleted',
+      entityType: 'project',
+      entityId: projectId,
+      before: { name: project.name, code: project.code, status: project.status },
+    });
   }
 
   static async recalculateProgress(projectId: number): Promise<number> {

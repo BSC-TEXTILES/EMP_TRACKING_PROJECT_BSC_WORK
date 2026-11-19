@@ -304,7 +304,7 @@ export class TaskService {
     }
 
     const page = Math.max(1, filters.page ?? 1);
-    const pageSize = Math.min(100, Math.max(5, filters.pageSize ?? 20));
+    const pageSize = Math.min(1000, Math.max(5, filters.pageSize ?? 20));
     const where = clauses.join(' AND ');
 
     const totalRow = await queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM tasks t WHERE ${where}`, params);

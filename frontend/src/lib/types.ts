@@ -276,6 +276,7 @@ export interface ProjectSummary {
   progress: number;
   startDate: string | null;
   endDate: string | null;
+  managerId?: number | null;
   managerName: string | null;
   departmentName: string | null;
   memberCount: number;

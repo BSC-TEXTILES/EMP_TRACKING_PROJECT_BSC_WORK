@@ -19,7 +19,7 @@ interface ProjectDetail extends ProjectSummary {
 
 export default function Projects() {
   useDocumentTitle('Projects');
-  const { has } = useAuth();
+  const { has, user } = useAuth();
   const toast = useToast();
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
@@ -50,6 +50,23 @@ export default function Projects() {
   const openDetail = async (id: number) => {
     try {
       setDetail(await api.get<ProjectDetail>(`/projects/${id}`));
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
+
+  const canDelete = (project: { managerId?: number | null; managerName?: string | null }) =>
+    has('projects.manage') || (project.managerId != null && Number(project.managerId) === user?.id);
+
+  const deleteProject = async (project: { id: number; name: string }) => {
+    if (!window.confirm(`Delete project "${project.name}"?
+
+Its members and milestones will be removed. Linked tasks are kept but unlinked from the project. This cannot be undone.`)) return;
+    try {
+      await api.del(`/projects/${project.id}`);
+      toast.success('Project deleted.');
+      setDetail((current) => (current?.id === project.id ? null : current));
+      setProjects((current) => (current ? current.filter((item) => item.id !== project.id) : current));
     } catch (caught) {
       toast.error(errorMessage(caught));
     }
@@ -92,13 +109,33 @@ export default function Projects() {
       ) : view === 'grid' ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {projects.map((project) => (
-            <button key={project.id} type="button" onClick={() => void openDetail(project.id)} className="card p-4 text-left transition hover:border-brand-300 hover:shadow-md">
+            <div
+              key={project.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => void openDetail(project.id)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void openDetail(project.id); } }}
+              className="card cursor-pointer p-4 text-left transition hover:border-brand-300 hover:shadow-md"
+            >
               <div className="flex items-start justify-between gap-2">
-                <div>
+                <div className="min-w-0">
                   <p className="text-sm font-semibold text-ink-900">{project.name}</p>
                   <p className="text-xs text-ink-400">{project.code} · {project.departmentName ?? 'No department'}</p>
                 </div>
-                <StatusBadge status={project.status} />
+                <div className="flex shrink-0 items-center gap-1">
+                  <StatusBadge status={project.status} />
+                  {canDelete(project) && (
+                    <button
+                      type="button"
+                      className="rounded-md p-1 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                      onClick={(event) => { event.stopPropagation(); void deleteProject(project); }}
+                      aria-label={`Delete project ${project.name}`}
+                      title="Delete project"
+                    >
+                      <Icon name="trash" size={15} />
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="mt-2 line-clamp-2 text-xs text-ink-500">{project.description ?? 'No description'}</p>
               <div className="mt-3"><ProgressBar value={project.progress} label={`${project.completedTasks}/${project.taskCount} tasks`} /></div>
@@ -107,14 +144,14 @@ export default function Projects() {
                 <span>{project.endDate ? `Due ${formatDate(project.endDate)}` : 'No deadline'}</span>
               </div>
               <p className="mt-1 text-xs text-ink-400">Manager: {project.managerName ?? '—'}</p>
-            </button>
+            </div>
           ))}
         </div>
       ) : view === 'list' ? (
         <Card>
           <div className="overflow-x-auto">
             <table className="table-base">
-              <thead><tr><th>Project</th><th>Manager</th><th>Status</th><th>Progress</th><th>Timeline</th><th>Team</th></tr></thead>
+              <thead><tr><th>Project</th><th>Manager</th><th>Status</th><th>Progress</th><th>Timeline</th><th>Team</th><th className="w-10"><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {projects.map((project) => (
                   <tr key={project.id} className="cursor-pointer" onClick={() => void openDetail(project.id)}>
@@ -124,6 +161,19 @@ export default function Projects() {
                     <td className="w-32"><ProgressBar value={project.progress} /></td>
                     <td className="whitespace-nowrap text-xs text-ink-500">{project.startDate ? formatDate(project.startDate) : '—'} → {project.endDate ? formatDate(project.endDate) : '—'}</td>
                     <td className="text-ink-600">{project.memberCount}</td>
+                    <td>
+                      {canDelete(project) && (
+                        <button
+                          type="button"
+                          className="rounded-md p-1 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                          onClick={(event) => { event.stopPropagation(); void deleteProject(project); }}
+                          aria-label={`Delete project ${project.name}`}
+                          title="Delete project"
+                        >
+                          <Icon name="trash" size={15} />
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -166,7 +216,14 @@ export default function Projects() {
               </select>
             )}
           </div>
-          <button className="btn-secondary btn-sm" onClick={() => setDetail(null)}>Close</button>
+          <div className="flex gap-1.5">
+            {canDelete(detail) && (
+              <button type="button" className="btn-secondary btn-sm text-red-600 hover:bg-red-50" onClick={() => void deleteProject(detail)}>
+                <Icon name="trash" size={14} /> Delete project
+              </button>
+            )}
+            <button className="btn-secondary btn-sm" onClick={() => setDetail(null)}>Close</button>
+          </div>
         </div> : null}>
         {detail && (
           <div className="space-y-5">

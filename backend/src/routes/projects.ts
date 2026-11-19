@@ -62,6 +62,15 @@ projectsRouter.post(
   }),
 );
 
+projectsRouter.delete(
+  '/:id',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    await ProjectService.remove(id, currentUser(req));
+    res.json({ ok: true });
+  }),
+);
+
 projectsRouter.post(
   '/:id/milestones',
   asyncHandler(async (req: AuthedRequest, res) => {
