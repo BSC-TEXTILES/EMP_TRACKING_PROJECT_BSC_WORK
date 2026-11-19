@@ -208,6 +208,7 @@ export default function Register() {
                     <input
                       className={cx('input', touched.fullName && !isNameValid && 'border-red-400 focus:border-red-500 focus:ring-red-100')}
                       value={form.fullName}
+                      autoComplete="name"
                       onChange={(event) => setForm({ ...form, fullName: event.target.value })}
                       onBlur={() => handleBlur('fullName')}
                       placeholder="e.g. Ananya Rao"
@@ -225,6 +226,7 @@ export default function Register() {
                   <input
                     className={cx('input', touched.email && !isEmailValid && 'border-red-400 focus:border-red-500 focus:ring-red-100')}
                     type="email"
+                    autoComplete="username"
                     value={form.email}
                     onChange={(event) => setForm({ ...form, email: event.target.value })}
                     onBlur={() => handleBlur('email')}
@@ -256,6 +258,7 @@ export default function Register() {
                         form.mobile.length === 10 && isMobileValid && 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100',
                       )}
                       type="tel"
+                      autoComplete="tel"
                       inputMode="numeric"
                       maxLength={10}
                       pattern="[0-9]{10}"

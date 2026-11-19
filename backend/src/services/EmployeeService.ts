@@ -71,7 +71,9 @@ const SUPER_ADMIN_LEVEL = 100;
  * below your own (Super Admin may manage anyone except themselves).
  */
 async function assertCanManageEmployee(actor: AuthUser, employeeId: number, verb: string) {
-  if (employeeId === actor.id) throw ApiError.badRequest(`You cannot ${verb} your own account.`);
+  if (employeeId === actor.id && actor.roleLevel < SUPER_ADMIN_LEVEL) {
+    throw ApiError.badRequest(`You cannot ${verb} your own account.`);
+  }
   const target = await queryOne<{ level: number; name: string }>(
     'SELECT r.level, r.name FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = ?',
     [employeeId],
@@ -428,6 +430,9 @@ export class EmployeeService {
     const target = await queryOne<Record<string, unknown>>('SELECT * FROM employees WHERE id = ?', [employeeId]);
     if (!target) throw ApiError.notFound('Employee not found');
     await assertCanManageEmployee(actor, employeeId, 'change the role or reporting line of');
+    if (employeeId === actor.id && input.roleId && input.roleId !== actor.roleId) {
+      throw ApiError.badRequest('Administrators cannot change their own role.');
+    }
     await assertCanAssignRole(actor, input.roleId);
     if (input.managerId === employeeId) throw ApiError.badRequest('An employee cannot report to themselves.');
     if (input.teamLeaderId === employeeId) throw ApiError.badRequest('An employee cannot be their own team leader.');
@@ -468,7 +473,7 @@ export class EmployeeService {
         params.push(value);
       }
     }
-    if (fields.length === 0) throw ApiError.badRequest('Nothing to update.');
+    if (fields.length === 0) return;
     await execute(`UPDATE employees SET ${fields.join(', ')} WHERE id = ?`, [...params, employeeId]);
     const previousManager = target.manager_id ? Number(target.manager_id) : null;
     if (input.managerId !== undefined && (input.managerId ?? null) !== previousManager) {

@@ -146,15 +146,22 @@ employeesRouter.patch(
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
+    const idSchema = z.preprocess(
+      (v) => (v === 0 || v === '0' || v === '' || v === null || v === undefined ? null : Number(v)),
+      z.number().int().positive().nullable().optional(),
+    );
     const body = parseBody(
       z.object({
-        roleId: z.number().int().positive().optional(),
-        departmentId: z.number().int().positive().nullable().optional(),
-        designationId: z.number().int().positive().nullable().optional(),
-        managerId: z.number().int().positive().nullable().optional(),
-        locationId: z.number().int().positive().nullable().optional(),
-        groupId: z.number().int().positive().nullable().optional(),
-        teamLeaderId: z.number().int().positive().nullable().optional(),
+        roleId: z.preprocess(
+          (v) => (v === 0 || v === '0' || v === '' || v === null || v === undefined ? undefined : Number(v)),
+          z.number().int().positive().optional(),
+        ),
+        departmentId: idSchema,
+        designationId: idSchema,
+        managerId: idSchema,
+        locationId: idSchema,
+        groupId: idSchema,
+        teamLeaderId: idSchema,
         employmentType: z.string().max(32).optional(),
       }),
       req.body,

@@ -727,6 +727,8 @@ export default function Employees() {
                         designationId: orgForm.designationId ? Number(orgForm.designationId) : null,
                         managerId: orgForm.managerId ? Number(orgForm.managerId) : null,
                         locationId: orgForm.locationId ? Number(orgForm.locationId) : null,
+                        groupId: orgForm.groupId ? Number(orgForm.groupId) : null,
+                        teamLeaderId: orgForm.teamLeaderId ? Number(orgForm.teamLeaderId) : null,
                         employmentType: orgForm.employmentType || undefined,
                       });
                       toast.success('Organisational assignment and role updated.');
