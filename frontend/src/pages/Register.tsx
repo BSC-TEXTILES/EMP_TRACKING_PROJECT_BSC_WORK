@@ -61,9 +61,8 @@ export default function Register() {
   const isNameValid = form.fullName.trim().length >= 2;
   const isEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
 
-  const cleanMobile = form.mobile.replace(/[\s-]/g, '');
-  // Matches 10-digit Indian numbers [6-9]XXXXXXXXX or with +91 / 91 country code prefix
-  const isMobileValid = /^(?:\+91|91)?[6-9]\d{9}$/.test(cleanMobile);
+  // Strictly 10 numbers only, starting with valid telecom prefix (6, 7, 8, or 9)
+  const isMobileValid = /^[6-9]\d{9}$/.test(form.mobile) && form.mobile.length === 10;
 
   const isDeptValid = Boolean(form.departmentId);
 
@@ -115,8 +114,14 @@ export default function Register() {
       setError('Please enter a valid email address.');
       return;
     }
-    if (!isMobileValid) {
-      setError('Please enter a valid 10-digit mobile number (e.g. 9876543210).');
+    if (!isMobileValid || form.mobile.length !== 10) {
+      if (form.mobile.length === 0) {
+        setError('Mobile number is required.');
+      } else if (form.mobile.length !== 10) {
+        setError(`Mobile number must be exactly 10 digits (${form.mobile.length}/10).`);
+      } else {
+        setError('Mobile number must start with 6, 7, 8, or 9.');
+      }
       return;
     }
     if (!isDeptValid) {
@@ -146,7 +151,7 @@ export default function Register() {
       }>('/auth/register', {
         fullName: form.fullName.trim(),
         email: form.email.trim(),
-        mobile: cleanMobile,
+        mobile: form.mobile.trim(),
         departmentId: Number(form.departmentId),
         designationId: form.designationId ? Number(form.designationId) : null,
         managerId: form.managerId ? Number(form.managerId) : null,
@@ -234,19 +239,43 @@ export default function Register() {
                   required
                   error={
                     touched.mobile && !isMobileValid
-                      ? 'Enter a valid 10-digit mobile number (e.g. 9876543210).'
+                      ? form.mobile.length === 0
+                        ? 'Mobile number is required.'
+                        : form.mobile.length !== 10
+                        ? `Mobile number must be exactly 10 digits (${form.mobile.length}/10).`
+                        : 'Mobile number must start with 6, 7, 8, or 9.'
                       : undefined
                   }
+                  hint="10 numbers only"
                 >
-                  <input
-                    className={cx('input', touched.mobile && !isMobileValid && 'border-red-400 focus:border-red-500 focus:ring-red-100')}
-                    type="tel"
-                    value={form.mobile}
-                    onChange={(event) => setForm({ ...form, mobile: event.target.value })}
-                    onBlur={() => handleBlur('mobile')}
-                    placeholder="98XXXXXXXX"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      className={cx(
+                        'input pr-16',
+                        touched.mobile && !isMobileValid && 'border-red-400 focus:border-red-500 focus:ring-red-100',
+                        form.mobile.length === 10 && isMobileValid && 'border-emerald-400 focus:border-emerald-500 focus:ring-emerald-100',
+                      )}
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={10}
+                      pattern="[0-9]{10}"
+                      value={form.mobile}
+                      onChange={(event) => {
+                        // Strictly numbers only, max 10 digits
+                        const digitsOnly = event.target.value.replace(/\D/g, '').slice(0, 10);
+                        setForm({ ...form, mobile: digitsOnly });
+                      }}
+                      onBlur={() => handleBlur('mobile')}
+                      placeholder="98XXXXXXXX"
+                      required
+                    />
+                    <span className={cx(
+                      'absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono font-medium',
+                      form.mobile.length === 10 ? 'text-emerald-600 font-bold' : 'text-ink-400'
+                    )}>
+                      {form.mobile.length}/10
+                    </span>
+                  </div>
                 </Field>
 
                 {/* Department */}

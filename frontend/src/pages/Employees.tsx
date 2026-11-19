@@ -707,7 +707,7 @@ export default function Employees() {
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Full name" required><input className="input" value={editForm.fullName} onChange={(event) => setEditForm({ ...editForm, fullName: event.target.value })} required /></Field>
-                    <Field label="Mobile" required><input className="input" value={editForm.mobile} onChange={(event) => setEditForm({ ...editForm, mobile: event.target.value })} required /></Field>
+                    <Field label="Mobile (10 digits)" required><input className="input" type="tel" inputMode="numeric" maxLength={10} value={editForm.mobile} onChange={(event) => setEditForm({ ...editForm, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) })} required /></Field>
                     <Field label="Address"><input className="input" value={editForm.address} onChange={(event) => setEditForm({ ...editForm, address: event.target.value })} placeholder="Residential or work address" /></Field>
                     <Field label="Emergency contact"><input className="input" value={editForm.emergencyContact} onChange={(event) => setEditForm({ ...editForm, emergencyContact: event.target.value })} placeholder="Contact name & phone" /></Field>
                     <Field label="Date of birth"><input type="date" className="input" value={editForm.dateOfBirth} onChange={(event) => setEditForm({ ...editForm, dateOfBirth: event.target.value })} /></Field>
@@ -1212,11 +1212,15 @@ function CreateEmployee({
                 required
               />
             </Field>
-            <Field label="Mobile" required>
+            <Field label="Mobile (10 digits)" required hint="10 numbers only">
               <input
                 className="input"
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="98XXXXXXXX"
                 value={form.mobile}
-                onChange={(event) => setForm({ ...form, mobile: event.target.value })}
+                onChange={(event) => setForm({ ...form, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) })}
                 required
               />
             </Field>

@@ -367,7 +367,7 @@ authRouter.post(
         fullName: z.string().min(2).max(160),
         employeeCode: z.string().max(24).optional(),
         email: z.string().email(),
-        mobile: z.string().min(7).max(20),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits'),
         departmentId: z.number().int().positive(),
         designationId: z.number().int().positive().nullable().optional(),
         managerId: z.number().int().positive().nullable().optional(),

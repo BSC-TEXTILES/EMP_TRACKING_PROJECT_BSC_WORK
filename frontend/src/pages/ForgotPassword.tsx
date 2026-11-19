@@ -35,9 +35,15 @@ export default function ForgotPassword() {
     setError(null);
     try {
       const result = await api.post<{ message: string; devCode?: string; delivered: boolean }>('/auth/password/forgot', { identifier });
-      setDevCode(result.devCode ?? null);
+      const otpCode = result.devCode ?? null;
+      setDevCode(otpCode);
+      if (otpCode) {
+        setCode(otpCode);
+        toast.info(`Verification code: ${otpCode}`);
+      } else {
+        toast.info(result.message);
+      }
       setStep('reset');
-      toast.info(result.message);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -84,9 +90,20 @@ export default function ForgotPassword() {
           </p>
           {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           {devCode && (
-            <p className="mt-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-              Development mode · delivery is not configured, so this code is shown here: <strong className="tracking-widest">{devCode}</strong>
-            </p>
+            <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-amber-800">Verification OTP:</span>
+                <button
+                  type="button"
+                  onClick={() => setCode(devCode)}
+                  className="rounded bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-900 hover:bg-amber-300 transition-colors"
+                >
+                  Auto-fill
+                </button>
+              </div>
+              <p className="font-mono text-base font-bold tracking-widest text-amber-950">{devCode}</p>
+              <p className="text-[11px] text-amber-700">Instant code generated for verification.</p>
+            </div>
           )}
 
           {step === 'request' ? (

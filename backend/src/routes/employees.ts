@@ -88,7 +88,7 @@ employeesRouter.post(
       z.object({
         fullName: z.string().min(2).max(160),
         email: z.string().email(),
-        mobile: z.string().min(7).max(20),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits'),
         employeeCode: z.string().max(24).optional(),
         roleId: z.number().int().positive(),
         departmentId: z.number().int().positive(),
@@ -127,7 +127,7 @@ employeesRouter.patch(
     const body = parseBody(
       z.object({
         fullName: z.string().min(2).max(160).optional(),
-        mobile: z.string().min(7).max(20).optional(),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits').optional(),
         address: z.string().max(255).optional(),
         emergencyContact: z.string().max(64).optional(),
         dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

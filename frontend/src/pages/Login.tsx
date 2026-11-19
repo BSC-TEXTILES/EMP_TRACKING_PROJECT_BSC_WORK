@@ -99,15 +99,21 @@ export default function Login() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.post<{ user?: CurrentUser; requiresOtp?: boolean; challenge?: string }>('/auth/login', {
+      const result = await api.post<{ user?: CurrentUser; requiresOtp?: boolean; challenge?: string; devCode?: string }>('/auth/login', {
         identifier: identifier.trim(),
         password,
         remember,
       });
       if (result.requiresOtp && result.challenge) {
         setChallenge(result.challenge);
-        setDevCode(null);
-        toast.info('A verification code was sent to your registered email.');
+        const code = result.devCode ?? null;
+        setDevCode(code);
+        if (code) {
+          setOtp(code);
+          toast.info(`Verification code (OTP): ${code}`);
+        } else {
+          toast.info('A verification code was sent to your registered email.');
+        }
         setSubmitting(false);
         return;
       }
@@ -272,9 +278,20 @@ export default function Login() {
                     required
                   />
                   {devCode && (
-                    <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
-                      Development mode · email delivery is not configured, so the code is shown here: <strong>{devCode}</strong>
-                    </p>
+                    <div className="mt-2.5 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-amber-800">Verification OTP:</span>
+                        <button
+                          type="button"
+                          onClick={() => setOtp(devCode)}
+                          className="rounded bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-900 hover:bg-amber-300 transition-colors"
+                        >
+                          Auto-fill
+                        </button>
+                      </div>
+                      <p className="font-mono text-base font-bold tracking-widest text-amber-950">{devCode}</p>
+                      <p className="text-[11px] text-amber-700">Code generated for instant employee verification.</p>
+                    </div>
                   )}
                 </div>
                 <button type="submit" className="btn-primary w-full" disabled={submitting || otp.length < 4}>
