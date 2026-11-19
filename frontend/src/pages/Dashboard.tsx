@@ -7,6 +7,7 @@ import { useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useAttendance } from '../lib/useAttendance';
 import { AttendanceTimer } from '../components/AttendanceTimer';
+import { WeeklyOffPanel } from '../components/WeeklyOffPanel';
 import { Avatar, Badge, Card, EmptyState, PriorityBadge, ProgressBar, SectionHeader, Skeleton, StatCard, StatusBadge } from '../components/ui';
 import { BarChart, Donut } from '../components/Charts';
 import { Icon } from '../components/icons';
@@ -391,6 +392,8 @@ export default function Dashboard() {
           </dl>
         </Card>
       </div>
+
+      <WeeklyOffPanel compact />
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="card-pad">

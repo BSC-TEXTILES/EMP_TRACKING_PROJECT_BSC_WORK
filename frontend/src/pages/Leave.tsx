@@ -7,6 +7,18 @@ import { Badge, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, Skele
 import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, titleize } from '../lib/format';
 import type { LeaveItem } from '../lib/types';
+import { useSocketEvent } from '../contexts/RealtimeContext';
+import { WeeklyOffPanel } from '../components/WeeklyOffPanel';
+import { LeavePolicyModal, TeamWeeklyOffs } from '../components/TeamWeeklyOffs';
+
+interface DayBreakdown {
+  calendarDays: number;
+  chargedDays: number;
+  weeklyOffDays: number;
+  holidayDays: number;
+  holidays: { date: string; name: string }[];
+  calendarCounted: boolean;
+}
 
 interface ApplicationContext {
   employeeName: string;
@@ -65,6 +77,9 @@ export default function Leave() {
   const [form, setForm] = useState({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
   const [document, setDocument] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const [breakdown, setBreakdown] = useState<DayBreakdown | null>(null);
+  const [breakdownError, setBreakdownError] = useState('');
 
   const load = async () => {
     try {
@@ -95,6 +110,36 @@ export default function Leave() {
       .catch((caught) => toast.error(errorMessage(caught)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const refreshBalances = async () => {
+    try {
+      const refreshed = await api.get<{ balances: Balance[] }>('/leave/balances');
+      setBalances(refreshed.balances);
+    } catch {
+      /* the next event retries */
+    }
+  };
+  useSocketEvent('leave:updated', () => {
+    void refreshBalances();
+    void load();
+  });
+
+  // Preview how many days will be charged (Sundays and public holidays are free).
+  useEffect(() => {
+    setBreakdown(null);
+    setBreakdownError('');
+    if (!applyOpen || !form.startDate || !form.endDate || form.endDate < form.startDate) return;
+    const params = new URLSearchParams({ startDate: form.startDate, endDate: form.endDate });
+    if (form.leaveTypeId) params.set('leaveTypeId', form.leaveTypeId);
+    let cancelled = false;
+    api
+      .get<DayBreakdown>(`/leave/preview?${params.toString()}`)
+      .then((result) => !cancelled && setBreakdown(result))
+      .catch((caught) => !cancelled && setBreakdownError(errorMessage(caught)));
+    return () => {
+      cancelled = true;
+    };
+  }, [applyOpen, form.startDate, form.endDate, form.leaveTypeId]);
 
   const loadRouting = async () => {
     setRouting(null); setRoutingError('');
@@ -150,29 +195,60 @@ export default function Leave() {
 
   const selectedType = types.find((type) => type.id === Number(form.leaveTypeId));
 
+  // Regular annual quota leaves (Casual, Sick, Earned) plus accrued comp-off if any
+  const regularBalances = balances.filter(
+    (b) => ['CL', 'SL', 'EL'].includes(b.code) || (b.code === 'CO' && b.allocated > 0),
+  );
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Leave & holiday management"
-        description="Two-stage approval (manager, then HR) with balance enforcement and a company holiday calendar."
-        actions={has('leave.apply') ? <button type="button" className="btn-primary btn-sm" onClick={() => setApplyOpen(true)}><Icon name="plus" size={15} /> Apply for leave</button> : undefined}
+        description="Sunday weekly offs calculated from the calendar, two-stage leave approval (manager, then HR) and the holiday calendar."
+        actions={
+          <>
+            {has('leave.manage') && (
+              <button type="button" className="btn-secondary btn-sm" onClick={() => setPolicyOpen(true)}><Icon name="settings" size={15} /> Weekly off policy</button>
+            )}
+            {has('leave.apply') && <button type="button" className="btn-primary btn-sm" onClick={() => setApplyOpen(true)}><Icon name="plus" size={15} /> Apply for leave</button>}
+          </>
+        }
       />
 
+      <WeeklyOffPanel showBalances={false} />
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {balances.map((balance) => (
-          <Card key={balance.leaveTypeId} className="p-4">
+        {regularBalances.map((balance) => (
+          <Card key={balance.leaveTypeId} className="p-4 shadow-2xs hover:shadow-xs transition">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-ink-500">{balance.name}</p>
-                <p className="mt-1 text-2xl font-semibold text-ink-900">{balance.available}<span className="text-sm text-ink-400">/{balance.allocated}</span></p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">{balance.name}</p>
+                <p className="mt-1 text-2xl font-bold text-ink-900">{balance.available}<span className="text-sm font-normal text-ink-400">/{balance.allocated}</span></p>
                 <p className="text-xs text-ink-400">{balance.used} used</p>
               </div>
               <Badge tone={balance.isPaid ? 'success' : 'neutral'}>{balance.isPaid ? 'Paid' : 'Unpaid'}</Badge>
             </div>
           </Card>
         ))}
-        {balances.length === 0 && <Card className="p-4 text-sm text-ink-500 sm:col-span-2 lg:col-span-4">Leave balances load after your first approved allocation.</Card>}
+
+        <Card className="p-4 bg-slate-50/70 border-ink-200/80 shadow-2xs">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-brand-700">Special & Unpaid Leaves</p>
+              <div className="mt-2 space-y-1 text-xs text-ink-600">
+                <p>• <strong>Leave Without Pay (LWP)</strong>: Loss of pay</p>
+                <p>• <strong>Maternity / Paternity</strong>: Statutory with doc</p>
+                <p>• <strong>Compensatory Off</strong>: Earned by working a Sunday or holiday</p>
+              </div>
+            </div>
+            <Badge tone="neutral">On demand</Badge>
+          </div>
+        </Card>
+
+        {regularBalances.length === 0 && <Card className="p-4 text-sm text-ink-500 sm:col-span-2 lg:col-span-4">Leave balances load after your first approved allocation.</Card>}
       </div>
+
+      {(tab === 'team' || tab === 'all') && <TeamWeeklyOffs />}
 
       <Card>
         <div className="px-4 pt-2">
@@ -199,6 +275,8 @@ export default function Leave() {
                     <p className="text-sm font-medium text-ink-900">{leave.leaveType}</p>
                     <StatusBadge status={leave.status} />
                     <Badge tone="neutral">{leave.days} day(s)</Badge>
+                    {Boolean(leave.weeklyOffDays) && <Badge tone="success">{leave.weeklyOffDays} Sunday(s) not charged</Badge>}
+                    {Boolean(leave.holidayDays) && <Badge tone="info">{leave.holidayDays} holiday(s) not charged</Badge>}
                     {tab !== 'mine' && <Badge tone="brand">{leave.employeeName}</Badge>}
                   </div>
                   <p className="mt-1 text-xs text-ink-500">{formatDate(leave.startDate)} → {formatDate(leave.endDate)} · applied {formatDateTime(leave.createdAt)}</p>
@@ -239,7 +317,7 @@ export default function Leave() {
       </Card>
 
       <Card className="card-pad">
-        <SectionHeader title="Holiday calendar" description="Company holidays for the next months" />
+        <SectionHeader title="Holiday calendar" description="Public holidays for your location over the coming months. Every Sunday is also a weekly off." />
         <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {holidays.map((holiday) => (
             <div key={holiday.id} className="flex items-center gap-2 rounded-lg border border-ink-200 p-2.5">
@@ -257,7 +335,7 @@ export default function Leave() {
       </Card>
 
       <Modal open={applyOpen} onClose={() => setApplyOpen(false)} title="Apply for leave" description="Your manager approves first, then HR. Balances are validated on the server."
-        footer={<><button className="btn-secondary" onClick={() => setApplyOpen(false)}>Cancel</button><button className="btn-primary" form="leave-form" type="submit" disabled={busy || !routing?.canApply || !hrApproverId}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
+        footer={<><button className="btn-secondary" onClick={() => setApplyOpen(false)}>Cancel</button><button className="btn-primary" form="leave-form" type="submit" disabled={busy || !routing?.canApply || !hrApproverId || breakdown?.chargedDays === 0}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
         <form id="leave-form" onSubmit={apply} className="space-y-4">
           {routingError ? <div role="alert" className="text-sm text-red-600">{routingError}<button type="button" className="btn-secondary ml-2" onClick={() => void loadRouting()}>Retry</button></div> : !routing ? <p role="status">Loading your approval route…</p> : (
             <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50 p-3">
@@ -276,11 +354,32 @@ export default function Leave() {
             </div>
           )}
           <Field label="Leave type" required>
-            <select className="input" value={form.leaveTypeId} onChange={(event) => setForm({ ...form, leaveTypeId: event.target.value })} required>
+            <select
+              className="input"
+              value={form.leaveTypeId}
+              onChange={(event) => setForm({ ...form, leaveTypeId: event.target.value })}
+              required
+            >
               <option value="">Select leave type</option>
               {types.map((type) => {
                 const balance = balances.find((item) => item.leaveTypeId === type.id);
-                return <option key={type.id} value={type.id}>{type.name} ({balance?.available ?? type.annual_quota} available)</option>;
+                let label = type.name;
+                if (type.code === 'LWP') {
+                  label += ' (Unpaid · Loss of Pay)';
+                } else if (type.code === 'CO') {
+                  label += balance && balance.allocated > 0 ? ` (${balance.available} day(s) credited)` : ' (Comp-off · Holiday shift)';
+                } else if (type.code === 'ML') {
+                  label += ' (Maternity · 26 weeks · Medical doc required)';
+                } else if (type.code === 'PL') {
+                  label += ' (Paternity · Up to 10 days · Doc required)';
+                } else {
+                  label += ` (${balance?.available ?? type.annual_quota} days available)`;
+                }
+                return (
+                  <option key={type.id} value={type.id}>
+                    {label}
+                  </option>
+                );
               })}
             </select>
           </Field>
@@ -304,9 +403,29 @@ export default function Leave() {
               <input type="file" className="input" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
             </Field>
           )}
+          {breakdownError ? (
+            <p role="alert" className="text-xs text-red-600">{breakdownError}</p>
+          ) : breakdown ? (
+            <div className={breakdown.chargedDays > 0 ? 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700' : 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'}>
+              {breakdown.calendarCounted ? (
+                <p><strong>{breakdown.chargedDays}</strong> calendar day(s) (maternity leave is counted in calendar days).</p>
+              ) : breakdown.chargedDays > 0 ? (
+                <p>
+                  <strong>{breakdown.chargedDays}</strong> day(s) will be deducted from your balance
+                  {breakdown.weeklyOffDays + breakdown.holidayDays > 0 &&
+                    ` (${breakdown.calendarDays} calendar days; ${breakdown.weeklyOffDays ? `${breakdown.weeklyOffDays} Sunday weekly off(s)` : ''}${breakdown.weeklyOffDays && breakdown.holidayDays ? ' and ' : ''}${breakdown.holidayDays ? `${breakdown.holidayDays} public holiday(s): ${breakdown.holidays.map((h) => h.name).join(', ')}` : ''} not charged)`}
+                  .
+                </p>
+              ) : (
+                <p>These dates are all Sunday weekly offs or public holidays, so you do not need to apply for leave.</p>
+              )}
+            </div>
+          ) : null}
           <p className="text-xs text-ink-500">Requests are checked for overlaps and available balance before they are submitted.</p>
         </form>
       </Modal>
+
+      <LeavePolicyModal open={policyOpen} onClose={() => setPolicyOpen(false)} />
 
       {user && (
         <p className="text-xs text-ink-400">

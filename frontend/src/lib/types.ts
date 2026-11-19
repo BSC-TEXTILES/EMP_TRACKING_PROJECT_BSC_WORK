@@ -299,6 +299,10 @@ export interface LeaveItem {
   startDate: string;
   endDate: string;
   days: number;
+  /** Sundays inside the range that were not charged (null for requests made before this was tracked). */
+  weeklyOffDays?: number | null;
+  /** Public holidays inside the range that were not charged. */
+  holidayDays?: number | null;
   reason: string;
   status: string;
   decisionNote: string | null;
@@ -360,6 +364,7 @@ export interface DashboardData {
     halfDays: number;
     onLeaveDays: number;
     holidayCount: number;
+    weeklyOffCount?: number;
     totalMinutes: number;
     averageMinutesPerDay: number;
     attendancePercent: number;

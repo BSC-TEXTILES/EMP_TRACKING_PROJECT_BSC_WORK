@@ -101,6 +101,7 @@ export const statusTone: Record<string, string> = {
   half_day: 'bg-orange-100 text-orange-700',
   absent: 'bg-red-100 text-red-700',
   on_leave: 'bg-sky-100 text-sky-700',
+  weekly_off: 'bg-emerald-100 text-emerald-700',
   holiday: 'bg-violet-100 text-violet-700',
   active: 'bg-emerald-100 text-emerald-700',
   inactive: 'bg-ink-200 text-ink-600',

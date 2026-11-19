@@ -37,6 +37,8 @@ const CONNECTION_EVENTS = [
   'presence:update',
   'presence:list',
   'attendance:update',
+  'leave:updated',
+  'leave:policy',
   'task:created',
   'task:updated',
   'report:updated',

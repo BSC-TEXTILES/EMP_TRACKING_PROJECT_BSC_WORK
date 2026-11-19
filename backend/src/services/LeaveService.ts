@@ -1,6 +1,9 @@
 import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
-import { daysBetween, today, toIso } from '../lib/dates.js';
+import { today, toIso } from '../lib/dates.js';
+import { chargeableDays, isValidIsoDate } from '../lib/calendar.js';
+import { emitToEmployee } from '../realtime/io.js';
+import { WeeklyOffService } from './WeeklyOffService.js';
 import { ApiError } from '../lib/http.js';
 import { assertEmployeeAccess, locationEmployeeClause, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
@@ -108,10 +111,12 @@ export class LeaveService {
       'SELECT leave_type_id, allocated, used FROM leave_balances WHERE employee_id = ? AND balance_year = ?',
       [employeeId, year],
     );
+    const compOff = types.some((t) => t.code === 'CO') ? await WeeklyOffService.compOffTotals(employeeId) : null;
     return types.map((t) => {
       const row = rows.find((r) => Number(r.leave_type_id) === Number(t.id));
-      const allocated = row ? Number(row.allocated) : Number(t.annual_quota);
-      const used = row ? Number(row.used) : 0;
+      // Comp-off is earned by working Sundays / holidays and does not reset on 1 January.
+      const allocated = t.code === 'CO' && compOff ? compOff.allocated : row ? Number(row.allocated) : Number(t.annual_quota);
+      const used = t.code === 'CO' && compOff ? compOff.used : row ? Number(row.used) : 0;
       return {
         leaveTypeId: Number(t.id),
         name: t.name,
@@ -123,6 +128,30 @@ export class LeaveService {
         isPaid: Boolean(t.is_paid),
       };
     });
+  }
+
+  /**
+   * Days charged for a leave range: Sundays (weekly offs) and public holidays that
+   * apply to the employee's location are never deducted from CL / SL / EL / CO.
+   * Maternity leave is statutory and counted in calendar days.
+   */
+  static async dayBreakdown(employeeId: number, startDate: string, endDate: string, leaveTypeCode?: string | null) {
+    if (!isValidIsoDate(startDate) || !isValidIsoDate(endDate)) throw ApiError.badRequest('Enter valid leave dates.');
+    if (endDate < startDate) throw ApiError.badRequest('End date cannot be before the start date.');
+    const holidays = await WeeklyOffService.employeeHolidays(employeeId, startDate, endDate);
+    const split = chargeableDays(startDate, endDate, holidays.keys());
+    const calendarCounted = leaveTypeCode === 'ML';
+    return {
+      startDate,
+      endDate,
+      calendarDays: split.calendarDays,
+      chargedDays: calendarCounted ? split.calendarDays : split.charged.length,
+      weeklyOffDays: calendarCounted ? 0 : split.weeklyOffs.length,
+      holidayDays: calendarCounted ? 0 : split.publicHolidays.length,
+      weeklyOffDates: split.weeklyOffs,
+      holidays: split.publicHolidays.map((date) => ({ date, name: holidays.get(date) ?? 'Holiday' })),
+      calendarCounted,
+    };
   }
 
   static async apply(
@@ -146,8 +175,13 @@ export class LeaveService {
     if (input.endDate < input.startDate) throw ApiError.badRequest('End date cannot be before the start date.');
     if (input.startDate < today()) throw ApiError.badRequest('Leave cannot be requested for past dates.');
     if (!input.reason?.trim()) throw ApiError.badRequest('Provide a reason for the leave.');
-    const days = daysBetween(input.startDate, input.endDate) + 1;
-    if (days > 60) throw ApiError.badRequest('Leave requests cannot exceed 60 consecutive days.');
+    const typeCode = await queryOne<{ code: string }>('SELECT code FROM leave_types WHERE id = ?', [input.leaveTypeId]);
+    const breakdown = await LeaveService.dayBreakdown(employeeId, input.startDate, input.endDate, typeCode?.code);
+    if (typeCode?.code !== 'ML' && breakdown.calendarDays > 60) throw ApiError.badRequest('Leave requests cannot exceed 60 consecutive days.');
+    const days = breakdown.chargedDays;
+    if (days <= 0) {
+      throw ApiError.badRequest('The selected dates are all weekly offs (Sundays) or public holidays, so no leave is needed.');
+    }
 
     const overlap = await queryOne<{ id: number }>(
       `SELECT id FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
@@ -156,8 +190,8 @@ export class LeaveService {
     );
     if (overlap) throw ApiError.conflict('You already have a leave request overlapping these dates.');
 
-    const type = await queryOne<{ id: number; annual_quota: number; requires_document: number; name: string }>(
-      'SELECT id, annual_quota, requires_document, name FROM leave_types WHERE id = ? AND is_active = 1',
+    const type = await queryOne<{ id: number; annual_quota: number; requires_document: number; name: string; code: string; is_paid: number }>(
+      'SELECT id, annual_quota, requires_document, name, code, is_paid FROM leave_types WHERE id = ? AND is_active = 1',
       [input.leaveTypeId],
     );
     if (!type) throw ApiError.badRequest('Select a valid leave type.');
@@ -166,7 +200,15 @@ export class LeaveService {
     const year = Number(input.startDate.slice(0, 4));
     const balance = await LeaveService.balances(employeeId, year);
     const selected = balance.find((b) => b.leaveTypeId === Number(input.leaveTypeId));
-    if (selected && days > selected.available) {
+
+    // Special validation by leave type
+    if (type.code === 'ML') {
+      if (days > 182) throw ApiError.badRequest('Maternity leave cannot exceed 182 days (26 weeks).');
+    } else if (type.code === 'PL') {
+      if (days > 15) throw ApiError.badRequest('Paternity leave cannot exceed 15 days.');
+    } else if (type.code === 'LWP' || !type.is_paid) {
+      // Unpaid leave (Leave Without Pay) is uncapped upon approval
+    } else if (selected && selected.allocated > 0 && days > selected.available) {
       throw ApiError.badRequest(`Insufficient ${selected.name} balance (${selected.available} day(s) available).`);
     }
 
@@ -180,9 +222,9 @@ export class LeaveService {
       const [overlaps] = await conn.query<any[]>("SELECT id FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?", [employeeId, input.endDate, input.startDate]);
       if (overlaps.length) throw ApiError.conflict('You already have a leave request overlapping these dates.');
       const [created] = await conn.query<any>(
-      `INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?, ?, ?)`,
-      [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, input.reason.trim(), input.documentFileId ?? null, routing.manager!.id, routing.locationId, hr.id],
+      `INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?, ?, ?)`,
+      [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, breakdown.weeklyOffDays, breakdown.holidayDays, input.reason.trim(), input.documentFileId ?? null, routing.manager!.id, routing.locationId, hr.id],
     );
       return created;
     });
@@ -192,7 +234,7 @@ export class LeaveService {
       action: 'leave.applied',
       entityType: 'leave_request',
       entityId: result.insertId,
-      after: { ...input, days },
+      after: { ...input, days, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays },
       ip: context.ip,
       userAgent: context.userAgent,
     });
@@ -208,7 +250,8 @@ export class LeaveService {
         actorId: employeeId,
       });
     }
-    return { id: result.insertId, days };
+    emitToEmployee(employeeId, 'leave:updated', { reason: 'applied', id: result.insertId });
+    return { id: result.insertId, days, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays };
   }
 
   static async list(
@@ -259,6 +302,8 @@ export class LeaveService {
       start_date: string;
       end_date: string;
       days: number;
+      weekly_off_days: number | null;
+      holiday_days: number | null;
       reason: string;
       status: string;
       decision_note: string | null;
@@ -301,6 +346,8 @@ export class LeaveService {
         startDate: r.start_date,
         endDate: r.end_date,
         days: Number(r.days),
+        weeklyOffDays: r.weekly_off_days === null || r.weekly_off_days === undefined ? null : Number(r.weekly_off_days),
+        holidayDays: r.holiday_days === null || r.holiday_days === undefined ? null : Number(r.holiday_days),
         reason: r.reason,
         status: r.status,
         decisionNote: r.decision_note,
@@ -378,19 +425,35 @@ export class LeaveService {
           ]);
           if (!updated.affectedRows) throw ApiError.conflict('This request was already processed.');
           const year = Number(String(leave.start_date).slice(0, 4));
-          const [balanceRows] = await conn.query<any[]>(
-            `SELECT COALESCE(b.allocated, t.annual_quota) allocated, COALESCE(b.used, 0) used
-             FROM leave_types t LEFT JOIN leave_balances b ON b.leave_type_id = t.id AND b.employee_id = ? AND b.balance_year = ? WHERE t.id = ?`,
-            [leave.employee_id, year, leave.leave_type_id]);
-          if (!balanceRows.length || Number(balanceRows[0].allocated) - Number(balanceRows[0].used) < Number(leave.days)) {
-            throw ApiError.conflict('The employee no longer has sufficient leave balance.');
+          const [typeRows] = await conn.query<any[]>('SELECT is_paid, code FROM leave_types WHERE id = ?', [leave.leave_type_id]);
+          const isPaid = Boolean(typeRows?.[0]?.is_paid);
+          const isLwp = typeRows?.[0]?.code === 'LWP';
+
+          if (isPaid && !isLwp && typeRows?.[0]?.code === 'CO') {
+            // Comp-off: availability comes from earned credits (running balance), not an annual quota.
+            const compOff = await WeeklyOffService.compOffTotals(Number(leave.employee_id));
+            if (compOff.available < Number(leave.days)) throw ApiError.conflict(`The employee has only ${compOff.available} comp-off day(s) available.`);
+            await conn.query(
+              `INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
+               VALUES (?, ?, ?, 0, ?)
+               ON DUPLICATE KEY UPDATE used = used + VALUES(used)`,
+              [leave.employee_id, leave.leave_type_id, year, leave.days],
+            );
+          } else if (isPaid && !isLwp) {
+            const [balanceRows] = await conn.query<any[]>(
+              `SELECT COALESCE(b.allocated, t.annual_quota) allocated, COALESCE(b.used, 0) used
+               FROM leave_types t LEFT JOIN leave_balances b ON b.leave_type_id = t.id AND b.employee_id = ? AND b.balance_year = ? WHERE t.id = ?`,
+              [leave.employee_id, year, leave.leave_type_id]);
+            if (balanceRows.length && Number(balanceRows[0].allocated) > 0 && Number(balanceRows[0].allocated) - Number(balanceRows[0].used) < Number(leave.days)) {
+              throw ApiError.conflict('The employee no longer has sufficient leave balance.');
+            }
+            await conn.query(
+              `INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
+               VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
+               ON DUPLICATE KEY UPDATE used = used + VALUES(used)`,
+              [leave.employee_id, leave.leave_type_id, year, leave.leave_type_id, leave.days],
+            );
           }
-          await conn.query(
-            `INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
-             VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
-             ON DUPLICATE KEY UPDATE used = used + VALUES(used)`,
-            [leave.employee_id, leave.leave_type_id, year, leave.leave_type_id, leave.days],
-          );
         });
         await AttendanceService.markLeaveRange(Number(leave.employee_id), String(leave.start_date), String(leave.end_date));
       } else {
@@ -413,6 +476,7 @@ export class LeaveService {
       userAgent: context.userAgent,
     });
 
+    emitToEmployee(Number(leave.employee_id), 'leave:updated', { reason: 'decided', id: leaveId });
     await NotificationService.notify({
       employeeIds: [Number(leave.employee_id)],
       type: 'leave',
@@ -447,12 +511,23 @@ export class LeaveService {
     if (!['pending_manager', 'pending_hr'].includes(leave.status)) throw ApiError.badRequest('Only pending requests can be cancelled.');
     await execute("UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND status IN ('pending_manager','pending_hr')", [leaveId]);
     await recordAudit({ actorId: employeeId, action: 'leave.cancelled', entityType: 'leave_request', entityId: leaveId });
+    emitToEmployee(employeeId, 'leave:updated', { reason: 'cancelled', id: leaveId });
   }
 
-  static async holidays(from: string, to: string) {
+  /** Holidays for the viewer's location plus organisation-wide ones (location_id NULL). */
+  static async holidays(from: string, to: string, employeeId?: number) {
+    if (!employeeId) {
+      return query<{ id: number; name: string; holiday_date: string; holiday_type: string }>(
+        'SELECT id, name, holiday_date, holiday_type FROM holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date',
+        [from, to],
+      );
+    }
     return query<{ id: number; name: string; holiday_date: string; holiday_type: string }>(
-      'SELECT id, name, holiday_date, holiday_type FROM holidays WHERE holiday_date BETWEEN ? AND ? ORDER BY holiday_date',
-      [from, to],
+      `SELECT id, name, holiday_date, holiday_type FROM holidays
+       WHERE holiday_date BETWEEN ? AND ?
+         AND (location_id IS NULL OR location_id = (SELECT location_id FROM employees WHERE id = ?))
+       ORDER BY holiday_date`,
+      [from, to, employeeId],
     );
   }
 
@@ -467,6 +542,7 @@ export class LeaveService {
        ON DUPLICATE KEY UPDATE allocated = VALUES(allocated)`,
       [employeeId, leaveTypeId, year, allocated],
     );
+    emitToEmployee(employeeId, 'leave:updated', { reason: 'balance' });
     await recordAudit({
       actorId: actor.id,
       action: 'leave.balance_updated',

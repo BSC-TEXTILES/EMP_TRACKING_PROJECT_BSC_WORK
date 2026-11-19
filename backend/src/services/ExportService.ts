@@ -56,13 +56,16 @@ export class ExportService {
     switch (type) {
       case 'attendance': {
         const rows = await query<Record<string, unknown>>(
-          `SELECT a.work_date AS date, e.employee_code AS code, e.full_name AS employee, d.name AS department,
+          `SELECT a.work_date AS date, DAYNAME(a.work_date) AS day, e.employee_code AS code, e.full_name AS employee, d.name AS department,
                   a.status, TIME(a.check_in_at) AS check_in, TIME(a.check_out_at) AS check_out,
                   a.total_minutes AS worked_minutes, a.break_minutes, a.overtime_minutes,
-                  IF(a.is_late, 'Yes', 'No') AS late
+                  IF(a.is_late, 'Yes', 'No') AS late,
+                  IF(DAYOFWEEK(a.work_date) = 1, 'Yes', 'No') AS weekly_off,
+                  COALESCE(IF(co.status = 'revoked', 0, co.days), 0) AS comp_off_days
            FROM attendance a
            JOIN employees e ON e.id = a.employee_id
            LEFT JOIN departments d ON d.id = e.department_id
+           LEFT JOIN comp_off_credits co ON co.employee_id = a.employee_id AND co.work_date = a.work_date
            WHERE a.work_date BETWEEN ? AND ?
              ${placeholders ? `AND a.employee_id IN (${placeholders})` : ''}
              ${filters.employeeId ? 'AND a.employee_id = ?' : ''}
@@ -74,6 +77,7 @@ export class ExportService {
           title: `Attendance report ${from} to ${to}`,
           columns: [
             { header: 'Date', key: 'date', width: 14 },
+            { header: 'Day', key: 'day', width: 11 },
             { header: 'Employee ID', key: 'code', width: 14 },
             { header: 'Employee', key: 'employee', width: 26 },
             { header: 'Department', key: 'department', width: 20 },
@@ -84,6 +88,8 @@ export class ExportService {
             { header: 'Break (min)', key: 'break_minutes', width: 12 },
             { header: 'Overtime (min)', key: 'overtime_minutes', width: 14 },
             { header: 'Late', key: 'late', width: 8 },
+            { header: 'Weekly off (Sunday)', key: 'weekly_off', width: 18 },
+            { header: 'Comp-off earned', key: 'comp_off_days', width: 15 },
           ],
           rows,
         };

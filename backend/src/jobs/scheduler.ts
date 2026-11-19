@@ -9,6 +9,7 @@ import { TaskService } from '../services/TaskService.js';
 import { TicketService } from '../services/TicketService.js';
 import { ActivityService } from '../services/ActivityService.js';
 import { FileService } from '../services/FileService.js';
+import { WeeklyOffService } from '../services/WeeklyOffService.js';
 import { processEmailQueue } from '../lib/mailer.js';
 import { addDays, today } from '../lib/dates.js';
 
@@ -157,6 +158,19 @@ export function startJobs(): void {
         if (!user) return 'KPI administrator could not be loaded';
         const result = await service.generate(period, user);
         return `generated ${result.generated} KPI record(s) for ${period}`;
+      });
+    },
+    { timezone: config.timezone },
+  );
+
+  // Comp-off: credit any worked Sunday / holiday a live hook missed, then lapse expired credits.
+  cron.schedule(
+    '45 0 * * *',
+    () => {
+      void runJob('comp_off_maintenance', async () => {
+        const checked = await WeeklyOffService.reconcileRecent(7);
+        const lapsed = await WeeklyOffService.expireCompOffs();
+        return `${checked} worked weekly-off/holiday day(s) reconciled, ${lapsed} comp-off credit(s) lapsed`;
       });
     },
     { timezone: config.timezone },

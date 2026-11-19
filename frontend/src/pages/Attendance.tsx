@@ -10,6 +10,7 @@ import { AttendanceTimer } from '../components/AttendanceTimer';
 import { Badge, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { minutesToHours } from '../lib/format';
 import type { AttendanceState } from '../lib/types';
+import { WeeklyOffPanel } from '../components/WeeklyOffPanel';
 
 interface HistoryRecord {
   id: number;
@@ -33,6 +34,7 @@ interface Summary {
   halfDays: number;
   onLeaveDays: number;
   holidayCount: number;
+  weeklyOffCount?: number;
   totalMinutes: number;
   averageMinutesPerDay: number;
   attendancePercent: number;
@@ -187,6 +189,8 @@ export default function Attendance() {
         ))}
       </div>
 
+      {tab === 'history' && <WeeklyOffPanel title="Attendance calendar & weekly offs" showBalances={false} />}
+
       <Card>
         <div className="px-4 pt-2">
           <Tabs
@@ -256,6 +260,7 @@ export default function Attendance() {
               <div className="flex flex-wrap gap-4 border-t border-ink-200 px-4 py-3 text-xs text-ink-500">
                 <span>Half days: <strong className="text-ink-800">{summary.halfDays}</strong></span>
                 <span>Leave days: <strong className="text-ink-800">{summary.onLeaveDays}</strong></span>
+                <span>Weekly offs (Sundays): <strong className="text-ink-800">{summary.weeklyOffCount ?? '—'}</strong></span>
                 <span>Holidays: <strong className="text-ink-800">{summary.holidayCount}</strong></span>
                 <span>Average/day: <strong className="text-ink-800">{minutesToHours(summary.averageMinutesPerDay)}</strong></span>
               </div>

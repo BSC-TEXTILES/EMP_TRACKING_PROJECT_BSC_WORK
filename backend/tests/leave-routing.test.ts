@@ -3,6 +3,7 @@ import { LeaveService } from '../src/services/LeaveService.js';
 import { AuthService, type AuthUser } from '../src/services/AuthService.js';
 import { execute, queryOne, closePool } from '../src/db/index.js';
 import { addDays, today } from '../src/lib/dates.js';
+import { isWeeklyOff } from '../src/lib/calendar.js';
 let employee: AuthUser; let manager: AuthUser; let hr: AuthUser; let other: AuthUser;
 let requestId: number;
 beforeAll(async () => {
@@ -24,7 +25,10 @@ describe('location leave approval workflow', () => {
   });
   it('rejects forged HR selection and persists the valid route', async () => {
     const type = (await LeaveService.types()).find((t) => !t.requires_document)!;
-    const input = { leaveTypeId: type.id, startDate: addDays(today(), 45), endDate: addDays(today(), 45), reason: 'Local workflow test request', hrApproverId: other.id };
+    // A working day: Sundays are weekly offs and a Sunday-only request is (correctly) refused.
+    let leaveDay = addDays(today(), 45);
+    if (isWeeklyOff(leaveDay)) leaveDay = addDays(leaveDay, 1);
+    const input = { leaveTypeId: type.id, startDate: leaveDay, endDate: leaveDay, reason: 'Local workflow test request', hrApproverId: other.id };
     await expect(LeaveService.apply(employee.id, input, {})).rejects.toMatchObject({ status: 400 });
     const result = await LeaveService.apply(employee.id, { ...input, hrApproverId: hr.id }, {});
     requestId = result.id;
