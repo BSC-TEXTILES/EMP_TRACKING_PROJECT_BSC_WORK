@@ -153,7 +153,7 @@ async function ensureDatabaseReady() {
                 await execute(`UPDATE employees 
           SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
           WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
-                // Configure Renukaradhya as the ONLY Super Admin and root of hierarchy
+                // Renukaradhya (renukaradhya@bsctextiles.in) is the only Super Admin and the root of the hierarchy
                 const { pool } = await import('./db/index.js');
                 const dbConn = await pool.getConnection();
                 try {
@@ -162,27 +162,22 @@ async function ensureDatabaseReady() {
                     const validHash = await hashPassword('Workforce@2026');
                     const [superAdminRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'super_admin' LIMIT 1");
                     const superAdminRoleId = superAdminRole.length > 0 ? Number(superAdminRole[0].id) : 1;
-                    // Ensure Renukaradhya is the sole Super Admin (EMP-1001)
-                    const [renukaRows] = await dbConn.query("SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Renuka%' OR employee_code = 'EMP-1001' ORDER BY id ASC LIMIT 1");
+                    // The Super Admin is the real account renamed by migration 037 (formerly gagan.cb@bsctextiles.in).
+                    // Never overwrite its password or create a second account on restart.
+                    const [renukaRows] = await dbConn.query(`SELECT id FROM employees
+             WHERE LOWER(email) IN ('renukaradhya@bsctextiles.in', 'gagan.cb@bsctextiles.in', 'renuka.adhya@bsctextiles.in')
+               AND status <> 'inactive'
+             ORDER BY FIELD(LOWER(email), 'renukaradhya@bsctextiles.in', 'gagan.cb@bsctextiles.in', 'renuka.adhya@bsctextiles.in')
+             LIMIT 1`);
                     let renukaId;
                     if (renukaRows.length > 0) {
                         renukaId = Number(renukaRows[0].id);
-                        await dbConn.query(`UPDATE employees 
-               SET employee_code = 'EMP-1001',
-                   full_name = 'Renukaradhya',
-                   email = 'renuka.adhya@bsctextiles.in',
-                   mobile = '9876543210',
-                   manager_id = NULL,
-                   role_id = ?,
-                   status = 'active',
-                   failed_login_attempts = 0,
-                   locked_until = NULL,
-                   password_hash = ?
-               WHERE id = ?`, [superAdminRoleId, validHash, renukaId]);
+                        await dbConn.query(`UPDATE employees SET manager_id = NULL, role_id = ?, status = 'active' WHERE id = ?`, [superAdminRoleId, renukaId]);
                     }
                     else {
+                        // Brand-new database only: create the Super Admin with the default password (change it after first login).
                         const [insertRes] = await dbConn.query(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
-               VALUES ('EMP-1001', 'Renukaradhya', 'renuka.adhya@bsctextiles.in', '9876543210', ?, ?, NULL, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, superAdminRoleId]);
+               VALUES ('EMP-1001', 'Renukaradhya', 'renukaradhya@bsctextiles.in', '9876543210', ?, ?, NULL, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, superAdminRoleId]);
                         renukaId = Number(insertRes.insertId);
                     }
                     // Strip super_admin role from all other employees
@@ -206,26 +201,14 @@ async function ensureDatabaseReady() {
                    role_id = ?,
                    department_id = COALESCE(?, department_id),
                    designation_id = COALESCE(?, designation_id),
-                   status = 'active',
-                   failed_login_attempts = 0,
-                   locked_until = NULL,
-                   password_hash = ?
-               WHERE id = ?`, [renukaId, hrRoleId, hrDeptId, hrDesigId, validHash, chetanId]);
+                   status = 'active'
+               WHERE id = ?`, [renukaId, hrRoleId, hrDeptId, hrDesigId, chetanId]);
                     }
                     else {
                         const [chetanInsert] = await dbConn.query(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
                VALUES ('EMP-1002', 'Chetan TK', 'chetan.tk@bsctextiles.in', '9876543211', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, hrRoleId, hrDeptId, hrDesigId, renukaId]);
                         chetanId = Number(chetanInsert.insertId);
                     }
-                    // If Gagan exists, ensure Gagan is not a manager or super admin and does not act as reporting manager
-                    await dbConn.query(`UPDATE employees 
-             SET role_id = (SELECT id FROM roles WHERE slug = 'employee' LIMIT 1),
-                 manager_id = ?
-             WHERE full_name LIKE '%Gagan%' AND id != ?`, [renukaId, renukaId]);
-                    // Reassign any employees currently reporting to Gagan to Renukaradhya
-                    await dbConn.query(`UPDATE employees 
-             SET manager_id = ?
-             WHERE manager_id IN (SELECT id FROM (SELECT id FROM employees WHERE full_name LIKE '%Gagan%') AS g)`, [renukaId]);
                     // Purge deprecated mock/test accounts with @workforce.test domain
                     try {
                         await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test'");

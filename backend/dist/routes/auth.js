@@ -30,7 +30,7 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
     const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1");
-    const email = renuka?.email || 'renuka.adhya@bsctextiles.in';
+    const email = renuka?.email || 'renukaradhya@bsctextiles.in';
     const name = renuka?.full_name || 'Renukaradhya';
     const code = renuka?.employee_code || 'EMP-1001';
     const chetan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1");
@@ -235,7 +235,6 @@ authRouter.get('/registration-options', asyncHandler(async (_req, res) => {
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
          WHERE e.status = 'active'
-           AND e.full_name NOT LIKE '%Gagan%'
            AND (
              e.full_name LIKE '%Renuka%'
              OR e.full_name LIKE '%Chetan%'

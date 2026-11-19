@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
-import { ApiError, asyncHandler, intParam } from '../lib/http.js';
+import { ApiError, asyncHandler, clientIp, intParam } from '../lib/http.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
 import { ActivityService } from '../services/ActivityService.js';
 import { ActivityAnalyticsService } from '../services/ActivityAnalyticsService.js';
+import { ActivityDeletionService } from '../services/ActivityDeletionService.js';
 import { DeviceTelemetryService } from '../services/DeviceTelemetryService.js';
 import { today } from '../lib/dates.js';
 export const activityRouter = Router();
@@ -213,7 +214,9 @@ activityRouter.post('/module-activity', rateLimit({ windowMs: 60000, max: 40, ke
     }));
 }));
 activityRouter.get('/dashboard', asyncHandler(async (req, res) => {
-    res.json(await ActivityAnalyticsService.selfDashboard(currentUser(req), dateParam(req.query.date)));
+    const user = currentUser(req);
+    const targetEmployeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
+    res.json(await ActivityAnalyticsService.selfDashboard(user, dateParam(req.query.date), targetEmployeeId));
 }));
 activityRouter.get('/team', asyncHandler(async (req, res) => {
     const user = currentUser(req);
@@ -355,6 +358,51 @@ activityRouter.get('/access-history', asyncHandler(async (req, res) => {
 }));
 activityRouter.get('/devices/all', asyncHandler(async (req, res) => {
     res.json({ devices: await ActivityService.allDevices(currentUser(req)) });
+}));
+// ---------------------- Activity Deletion & Recycle Bin Routes ----------------
+activityRouter.delete('/records/:type/:id', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const type = String(req.params.type);
+    const id = intParam(req.params.id);
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : (typeof req.query.reason === 'string' ? req.query.reason : undefined);
+    res.json(await ActivityDeletionService.softDeleteRecord(user, type, id, reason, clientIp(req)));
+}));
+activityRouter.post('/records/bulk-delete', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : (typeof req.query.reason === 'string' ? req.query.reason : undefined);
+    res.json(await ActivityDeletionService.bulkSoftDelete(user, items, reason, clientIp(req)));
+}));
+activityRouter.get('/trash', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const type = typeof req.query.type === 'string' ? req.query.type : undefined;
+    const employeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+    const limit = req.query.limit ? Number(req.query.limit) : 50;
+    const offset = req.query.offset ? Number(req.query.offset) : 0;
+    res.json(await ActivityDeletionService.listTrash(user, { type, employeeId, search, limit, offset }));
+}));
+activityRouter.post('/records/:type/:id/restore', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const type = String(req.params.type);
+    const id = intParam(req.params.id);
+    res.json(await ActivityDeletionService.restoreRecord(user, type, id, clientIp(req)));
+}));
+activityRouter.post('/records/bulk-restore', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    res.json(await ActivityDeletionService.bulkRestore(user, items, clientIp(req)));
+}));
+activityRouter.delete('/records/:type/:id/permanent', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const type = String(req.params.type);
+    const id = intParam(req.params.id);
+    res.json(await ActivityDeletionService.permanentDeleteRecord(user, type, id, clientIp(req)));
+}));
+activityRouter.post('/records/bulk-permanent', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    res.json(await ActivityDeletionService.bulkPermanentDelete(user, items, clientIp(req)));
 }));
 // ---------------------- Master Activity & Workforce Routes ------------------
 activityRouter.get('/login-history', asyncHandler(async (req, res) => {

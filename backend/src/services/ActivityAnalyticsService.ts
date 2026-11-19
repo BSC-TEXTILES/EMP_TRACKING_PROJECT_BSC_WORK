@@ -81,17 +81,17 @@ export class ActivityAnalyticsService {
       ),
       query<Record<string, unknown>>(
         `SELECT app_name, app_category, SUM(active_seconds) AS seconds FROM application_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) = ? GROUP BY app_name, app_category ORDER BY seconds DESC`,
+         WHERE employee_id = ? AND DATE(started_at) = ? AND deleted_at IS NULL GROUP BY app_name, app_category ORDER BY seconds DESC`,
         [employeeId, date],
       ),
       query<Record<string, unknown>>(
         `SELECT domain, category, SUM(active_seconds) AS seconds FROM browser_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) = ? GROUP BY domain, category ORDER BY seconds DESC LIMIT 30`,
+         WHERE employee_id = ? AND DATE(started_at) = ? AND deleted_at IS NULL GROUP BY domain, category ORDER BY seconds DESC LIMIT 30`,
         [employeeId, date],
       ),
       query<Record<string, unknown>>(
         `SELECT module, SUM(active_seconds) AS seconds, COUNT(*) AS visits FROM internal_module_activity
-         WHERE employee_id = ? AND DATE(entered_at) = ? GROUP BY module ORDER BY seconds DESC`,
+         WHERE employee_id = ? AND DATE(entered_at) = ? AND deleted_at IS NULL GROUP BY module ORDER BY seconds DESC`,
         [employeeId, date],
       ),
       queryOne<Record<string, unknown>>(
@@ -760,44 +760,67 @@ export class ActivityAnalyticsService {
     return rows.map((row) => ActivityAnalyticsService.mapWeekly(row));
   }
 
-  static async selfDashboard(user: AuthUser, date: string) {
-    const consent = await ActivityService.consentStatus(user);
-    const session = await ActivityService.currentSession(user);
+  static async selfDashboard(user: AuthUser, date: string, targetEmployeeId?: number) {
+    const targetId = (targetEmployeeId && (user.permissions.includes('activity.view.team') || user.permissions.includes('activity.view.all') || (user.roleLevel && user.roleLevel >= 70)))
+      ? targetEmployeeId
+      : user.id;
+
+    const targetEmployee = targetId === user.id ? null : await queryOne<{
+      id: number;
+      full_name: string;
+      email: string;
+      employee_code: string;
+      department_name: string | null;
+      designation_title: string | null;
+      location_name: string | null;
+    }>(
+      `SELECT e.id, e.full_name, e.email, e.employee_code, d.name AS department_name, dg.title AS designation_title, l.name AS location_name
+       FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       WHERE e.id = ?`,
+      [targetId],
+    );
+
+    const consent = await ActivityService.consentStatus(targetId === user.id ? user : ({ id: targetId, email: targetEmployee?.email ?? '' } as AuthUser));
+    const session = await ActivityService.currentSession({ id: targetId } as AuthUser);
     const [daily, errors, tickets, weekly, devices, browser, recentSessions] = await Promise.all([
-      ActivityAnalyticsService.daily(user, user.id, date),
-      ActivityService.listErrors(user, { ownOnly: true }),
+      ActivityAnalyticsService.daily(user, targetId, date),
+      ActivityService.listErrors(user, { ownOnly: targetId === user.id }),
       query<Record<string, unknown>>(
         `SELECT t.id, t.ticket_no, t.subject, t.status, t.priority, t.created_at,
                 (SELECT COUNT(*) FROM automatic_ticket_links l WHERE l.ticket_id = t.id) AS automatic
          FROM tickets t WHERE t.requester_id = ? ORDER BY t.created_at DESC LIMIT 8`,
-        [user.id],
+        [targetId],
       ),
       query<Record<string, unknown>>(
         'SELECT * FROM weekly_performance_reports WHERE employee_id = ? ORDER BY week_start DESC LIMIT 4',
-        [user.id],
+        [targetId],
       ),
-      ActivityService.listDevices(user),
+      ActivityService.listDevices({ id: targetId } as AuthUser),
       query<Record<string, unknown>>(
         `SELECT domain, category, SUM(active_seconds) AS seconds FROM browser_usage_logs
-         WHERE employee_id = ? AND DATE(started_at) = ? GROUP BY domain, category ORDER BY seconds DESC LIMIT 12`,
-        [user.id, date],
+         WHERE employee_id = ? AND DATE(started_at) = ? AND deleted_at IS NULL GROUP BY domain, category ORDER BY seconds DESC LIMIT 12`,
+        [targetId, date],
       ),
       query<Record<string, unknown>>(
         `SELECT s.*, d.device_name FROM monitoring_sessions s JOIN employee_devices d ON d.id = s.device_id
-         WHERE s.employee_id = ? ORDER BY s.started_at DESC LIMIT 7`,
-        [user.id],
+         WHERE s.employee_id = ? AND s.deleted_at IS NULL ORDER BY s.started_at DESC LIMIT 7`,
+        [targetId],
       ),
     ]);
     return {
       date,
+      targetEmployee,
       policy: consent.policy,
       consent: { acknowledged: consent.acknowledged, acknowledgedAt: consent.acknowledgedAt },
       session,
       devices,
       daily,
       errors: errors.slice(0, 10),
-      timeline: await ActivityAnalyticsService.timeline(user, user.id, date),
-      corrections: await ActivityService.listCorrections(user).then((rows) => rows.filter((row) => row.employeeId === user.id).slice(0, 20)),
+      timeline: await ActivityAnalyticsService.timeline(user, targetId, date),
+      corrections: await ActivityService.listCorrections(user).then((rows) => rows.filter((row) => row.employeeId === targetId).slice(0, 20)),
       accessHistory: (await ActivityService.accessHistory(user)).slice(0, 20),
       tickets,
       browser: browser.map((row) => ({ domain: row.domain, category: row.category, minutes: Math.round(number(row.seconds) / 60) })),
