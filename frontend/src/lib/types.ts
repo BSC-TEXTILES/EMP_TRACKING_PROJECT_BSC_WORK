@@ -365,5 +365,7 @@ export interface DashboardData {
     attendancePercent: number;
     breakdown: { status: string; count: number; minutes: number }[];
   };
+  myTasks?: TaskSummary[];
+  teamTasks?: TaskSummary[];
   date: string;
 }

@@ -13,36 +13,87 @@ export class LeaveService {
       `SELECT e.id, e.full_name, e.location_id, l.name location_name, e.manager_id
        FROM employees e LEFT JOIN locations l ON l.id = e.location_id WHERE e.id = ?`, [employeeId]);
     if (!employee) throw ApiError.notFound('Employee not found');
-    // When HR is assigned to the location, only they handle its requests (independent HR per location).
-    const assignedHr = employee.location_id ? await query<{ id: number; full_name: string }>(
-      `SELECT e.id, e.full_name FROM location_hr_assignments lh JOIN employees e ON e.id = lh.employee_id
-       WHERE lh.location_id = ? AND e.status = 'active' AND e.id <> ? ORDER BY e.full_name`, [employee.location_id, employeeId]).catch(() => []) : [];
-    const candidates = employee.location_id ? await query<{ id: number; full_name: string }>(
-      `SELECT e.id, e.full_name FROM employees e WHERE e.status = 'active' AND e.id <> ?
-       AND (e.location_id = ? OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.employee_id = e.id AND el.location_id = ?))
-       ORDER BY e.full_name`, [employeeId, employee.location_id, employee.location_id]) : [];
-    const hrApprovers: { id: number; name: string }[] = [];
+
+    // 1. Resolve manager (direct manager first, then location manager, then fallback to Super Admin)
     let manager: { id: number; name: string } | null = null;
-    for (const candidate of candidates) {
-      const approver = await AuthService.buildUser(Number(candidate.id));
-      if (Number(candidate.id) === Number(employee.manager_id) && approver?.permissions.includes('leave.approve.manager')) {
-        manager = { id: Number(candidate.id), name: candidate.full_name };
-      }
-      if (!assignedHr.length && approver?.permissions.includes('leave.approve.hr') && Number(candidate.id) !== Number(employee.manager_id)) {
-        hrApprovers.push({ id: Number(candidate.id), name: candidate.full_name });
+    if (employee.manager_id) {
+      const directMgr = await queryOne<{ id: number; full_name: string }>(
+        `SELECT id, full_name FROM employees WHERE id = ? AND status = 'active'`,
+        [employee.manager_id],
+      );
+      if (directMgr) {
+        manager = { id: Number(directMgr.id), name: directMgr.full_name };
       }
     }
-    for (const hr of assignedHr) {
-      const approver = await AuthService.buildUser(Number(hr.id));
-      if (approver?.permissions.includes('leave.approve.hr')) hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
+    if (!manager && employee.location_id) {
+      const locMgr = await queryOne<{ id: number; full_name: string }>(
+        `SELECT e.id, e.full_name FROM employees e
+         JOIN roles r ON r.id = e.role_id
+         WHERE e.status = 'active' AND e.id <> ?
+         AND (e.location_id = ? OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.employee_id = e.id AND el.location_id = ?))
+         AND (r.slug IN ('store_manager', 'department_manager', 'location_manager', 'manager') OR r.level >= 40)
+         ORDER BY r.level DESC, e.full_name LIMIT 1`,
+        [employeeId, employee.location_id, employee.location_id],
+      );
+      if (locMgr) {
+        manager = { id: Number(locMgr.id), name: locMgr.full_name };
+      }
     }
-    const issues = [
-      ...(!employee.location_id ? ['Your employee record needs an assigned location.'] : []),
-      ...(!manager ? ['An active reporting manager with leave approval access must be assigned to your location.'] : []),
-      ...(!hrApprovers.length ? ['An HR approver must be assigned to your location. Contact administration.'] : []),
-    ];
-    return { employeeName: employee.full_name, locationId: employee.location_id, locationName: employee.location_name,
-      manager, hrApprovers, canApply: issues.length === 0, issues };
+    if (!manager) {
+      const defaultAdmin = await queryOne<{ id: number; full_name: string }>(
+        `SELECT e.id, e.full_name FROM employees e
+         JOIN roles r ON r.id = e.role_id
+         WHERE e.status = 'active' AND e.id <> ? AND (r.slug IN ('super_admin', 'admin') OR r.level >= 90)
+         ORDER BY e.id ASC LIMIT 1`,
+        [employeeId],
+      );
+      if (defaultAdmin) {
+        manager = { id: Number(defaultAdmin.id), name: defaultAdmin.full_name };
+      }
+    }
+
+    // 2. Resolve HR approvers (location-assigned HR first, then global HR / Admin)
+    const hrApprovers: { id: number; name: string }[] = [];
+    if (employee.location_id) {
+      const assignedHr = await query<{ id: number; full_name: string }>(
+        `SELECT e.id, e.full_name FROM location_hr_assignments lh JOIN employees e ON e.id = lh.employee_id
+         WHERE lh.location_id = ? AND e.status = 'active' AND e.id <> ? ORDER BY e.full_name`,
+        [employee.location_id, employeeId],
+      ).catch(() => []);
+      for (const hr of assignedHr) {
+        hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
+      }
+    }
+    if (hrApprovers.length === 0) {
+      const globalHrs = await query<{ id: number; full_name: string }>(
+        `SELECT e.id, e.full_name FROM employees e
+         JOIN roles r ON r.id = e.role_id
+         WHERE e.status = 'active' AND e.id <> ? AND (r.slug IN ('hr', 'hr_manager', 'super_admin', 'admin') OR r.level >= 60)
+         ORDER BY r.level DESC, e.full_name LIMIT 5`,
+        [employeeId],
+      );
+      for (const hr of globalHrs) {
+        hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
+      }
+    }
+
+    // Default location fallback
+    const effectiveLocationId = employee.location_id ?? 1;
+    const effectiveLocationName = employee.location_name ?? 'Head Office (HUB-HQ)';
+
+    const issues: string[] = [];
+    if (!manager) issues.push('No reporting manager could be assigned. Contact administration.');
+    if (!hrApprovers.length) issues.push('No HR approver could be found. Contact administration.');
+
+    return {
+      employeeName: employee.full_name,
+      locationId: effectiveLocationId,
+      locationName: effectiveLocationName,
+      manager,
+      hrApprovers,
+      canApply: issues.length === 0,
+      issues,
+    };
   }
 
   static async types() {
@@ -290,15 +341,16 @@ export class LeaveService {
 
     if (Number(leave.employee_id) === actor.id) throw ApiError.forbidden('You cannot approve your own leave.');
     const routing = await LeaveService.applicationContext(Number(leave.employee_id));
+    const isSuperOrOrgWide = actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90 || actor.permissions.includes('locations.manage');
     const assignedLocations = await query<{ location_id: number }>('SELECT location_id FROM employee_locations WHERE employee_id = ?', [actor.id]);
     const requestLocation = Number(leave.request_location_id ?? routing.locationId);
-    if (Number(actor.locationId) !== requestLocation && !assignedLocations.some((l) => Number(l.location_id) === requestLocation)) {
+    if (!isSuperOrOrgWide && requestLocation > 0 && Number(actor.locationId) !== requestLocation && !assignedLocations.some((l) => Number(l.location_id) === requestLocation)) {
       throw ApiError.forbidden('You can only approve leave for your assigned locations.');
     }
     if (input.stage === 'manager') {
       if (leave.status !== 'pending_manager') throw ApiError.conflict('This request is not awaiting manager approval.');
-      const isManager = Number(leave.manager_id) === actor.id;
-      if (!isManager || !actor.permissions.includes('leave.approve.manager')) {
+      const isManager = Number(leave.manager_id) === actor.id || isSuperOrOrgWide || leave.manager_id === null;
+      if (!isManager || (!actor.permissions.includes('leave.approve.manager') && !isSuperOrOrgWide)) {
         throw ApiError.forbidden('You are not the reporting manager for this employee.');
       }
       if (input.approve) {

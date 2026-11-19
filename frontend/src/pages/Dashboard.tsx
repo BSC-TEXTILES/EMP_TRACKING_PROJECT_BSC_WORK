@@ -7,10 +7,10 @@ import { useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
 import { useAttendance } from '../lib/useAttendance';
 import { AttendanceTimer } from '../components/AttendanceTimer';
-import { Avatar, Badge, Card, EmptyState, ProgressBar, SectionHeader, Skeleton, StatCard, StatusBadge } from '../components/ui';
+import { Avatar, Badge, Card, EmptyState, PriorityBadge, ProgressBar, SectionHeader, Skeleton, StatCard, StatusBadge } from '../components/ui';
 import { BarChart, Donut } from '../components/Charts';
 import { Icon } from '../components/icons';
-import { formatDate, formatTime, minutesToHours, titleize, weekday } from '../lib/format';
+import { cx, formatDate, formatTime, minutesToHours, titleize, weekday } from '../lib/format';
 import type { DashboardData } from '../lib/types';
 
 interface TeamSnapshot {
@@ -38,6 +38,20 @@ export default function Dashboard() {
     present: number;
   }>>([]);
   const [dashboardLocationId, setDashboardLocationId] = useState<number | null>(user?.locationId ?? null);
+  const [taskUpdatingId, setTaskUpdatingId] = useState<number | null>(null);
+
+  const handleTaskAction = async (taskId: number, action: string, note?: string) => {
+    setTaskUpdatingId(taskId);
+    try {
+      await api.post(`/tasks/${taskId}/action`, { action, note });
+      toast.success(`Task ${action.replace('_', ' ')}d successfully.`);
+      void reload();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setTaskUpdatingId(null);
+    }
+  };
 
   const isManager = canAny('employees.view.team', 'tasks.view.team', 'reports.view.team');
 
@@ -215,6 +229,117 @@ export default function Dashboard() {
           onClick={() => navigate('/chat')}
         />
       </div>
+
+      {/* My Assigned Tasks Section - Strictly Personal to Logged-in Employee */}
+      <Card className="card-pad border-brand-200/80 shadow-2xs">
+        <SectionHeader
+          title="My Assigned Tasks"
+          description={`Tasks allocated specifically to your account (${data.myTasks?.length ?? 0} active)`}
+          action={
+            <div className="flex items-center gap-2">
+              <Link to="/tasks?view=mine" className="btn-secondary btn-sm font-semibold">
+                All my tasks <Icon name="chevronRight" size={13} className="ml-0.5 inline" />
+              </Link>
+            </div>
+          }
+        />
+
+        {!data.myTasks || data.myTasks.length === 0 ? (
+          <div className="mt-4 rounded-xl border border-dashed border-ink-200 bg-ink-50/50 p-6 text-center">
+            <Icon name="check" size={26} className="mx-auto text-emerald-600 mb-1.5" />
+            <p className="text-sm font-semibold text-ink-800">You are all caught up!</p>
+            <p className="text-xs text-ink-500 mt-0.5">No active tasks currently assigned to your account.</p>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {data.myTasks.map((task) => (
+              <div
+                key={task.id}
+                className="flex flex-col justify-between rounded-xl border border-ink-200 bg-white p-3.5 shadow-2xs hover:border-brand-400 hover:shadow-xs transition"
+              >
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-1.5">
+                    <span className="font-mono text-xs font-bold bg-ink-100 text-ink-800 px-2 py-0.5 rounded border border-ink-200/60">
+                      #{task.taskNo}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <PriorityBadge priority={task.priority} />
+                      <StatusBadge status={task.status} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <Link
+                      to={`/tasks?task=${task.id}`}
+                      className="text-sm font-bold text-ink-900 hover:text-brand-600 line-clamp-1"
+                    >
+                      {task.title}
+                    </Link>
+                    {task.description && (
+                      <p className="mt-1 text-xs text-ink-600 line-clamp-2 leading-relaxed">
+                        {task.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500 pt-1 border-t border-ink-100">
+                    {task.managerName && (
+                      <span>Manager: <strong className="text-ink-700">{task.managerName}</strong></span>
+                    )}
+                    {task.dueDate && (
+                      <span className={cx(task.isOverdue ? 'text-red-600 font-bold' : 'text-ink-600')}>
+                        Due: {formatDate(task.dueDate)} {task.dueTime ? `(${task.dueTime.slice(0, 5)})` : ''}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-3 pt-2.5 border-t border-ink-100 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {(task.status === 'assigned' || task.status === 'not_started') && (
+                      <button
+                        type="button"
+                        disabled={taskUpdatingId === task.id}
+                        onClick={() => void handleTaskAction(task.id, 'start')}
+                        className="btn-primary btn-xs"
+                      >
+                        Start task
+                      </button>
+                    )}
+                    {task.status === 'in_progress' && (
+                      <button
+                        type="button"
+                        disabled={taskUpdatingId === task.id}
+                        onClick={() => void handleTaskAction(task.id, 'submit', 'Completed work ready for approval')}
+                        className="btn-primary btn-xs !bg-emerald-600 hover:!bg-emerald-700"
+                      >
+                        Submit work
+                      </button>
+                    )}
+                    {task.status === 'pending_approval' && (
+                      <span className="text-[10px] font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                        Under review
+                      </span>
+                    )}
+                    {task.status === 'completed' && (
+                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                        ✓ Completed
+                      </span>
+                    )}
+                  </div>
+
+                  <Link
+                    to={`/tasks?task=${task.id}`}
+                    className="text-xs font-semibold text-brand-600 hover:text-brand-800 hover:underline"
+                  >
+                    Details →
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="card-pad lg:col-span-2">
@@ -400,6 +525,41 @@ export default function Dashboard() {
               </Link>
             )}
           </div>
+
+          {data.teamTasks && data.teamTasks.length > 0 && (
+            <div className="mt-5 pt-4 border-t border-ink-100">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs font-bold uppercase tracking-wider text-ink-600">
+                  Recent Tasks Assigned to Team ({data.teamTasks.length})
+                </p>
+                <Link to="/tasks?view=allocated" className="text-xs font-semibold text-brand-600 hover:underline">
+                  View all team tasks →
+                </Link>
+              </div>
+              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+                {data.teamTasks.map((task) => (
+                  <div key={task.id} className="rounded-lg border border-ink-200 bg-ink-50/50 p-3 space-y-1.5 hover:bg-white hover:shadow-2xs transition">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-mono font-bold text-ink-700">#{task.taskNo}</span>
+                      <div className="flex items-center gap-1">
+                        <PriorityBadge priority={task.priority} />
+                        <StatusBadge status={task.status} />
+                      </div>
+                    </div>
+                    <Link to={`/tasks?task=${task.id}`} className="text-xs font-bold text-ink-900 hover:text-brand-600 truncate block">
+                      {task.title}
+                    </Link>
+                    <div className="flex items-center justify-between text-[11px] text-ink-500 pt-1 border-t border-ink-100">
+                      <span className="truncate">
+                        Assigned to: <strong className="text-ink-700">{task.assigneeNames || 'Team member'}</strong>
+                      </span>
+                      {task.dueDate && <span>{task.dueDate.slice(5)}</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 

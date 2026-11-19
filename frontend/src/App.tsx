@@ -57,6 +57,20 @@ function Protected({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { user, loading, canAny } = useAuth();
+  if (loading) return <FullPageLoader />;
+  const isAuthorized = Boolean(
+    user && (
+      ['super_admin', 'admin', 'hr', 'hr_manager', 'store_manager', 'department_manager', 'location_manager', 'manager'].includes(user.roleSlug) ||
+      (user.roleLevel ?? 0) >= 40 ||
+      canAny('employees.view.team', 'employees.view.all', 'org.manage', 'roles.manage', 'settings.manage', 'audit.view', 'admin.dashboard')
+    )
+  );
+  if (!isAuthorized) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function GuestOnly({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) return <FullPageLoader />;
@@ -135,15 +149,15 @@ export function App() {
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
           <Route path="collections" element={<Collections />} />
-          <Route path="groups" element={<Groups />} />
-          <Route path="admin/employees" element={<Employees />} />
-          <Route path="organization" element={<Organization />} />
-          <Route path="admin/organization" element={<OrganizationSettings />} />
-          <Route path="admin/office-times" element={<OfficeTimesAdmin />} />
-          <Route path="analytics" element={<Analytics />} />
-          <Route path="admin/roles" element={<RolesAdmin />} />
-          <Route path="admin/settings" element={<SettingsAdmin />} />
-          <Route path="admin/email" element={<EmailConfiguration />} />
+          <Route path="groups" element={<RequireAdmin><Groups /></RequireAdmin>} />
+          <Route path="admin/employees" element={<RequireAdmin><Employees /></RequireAdmin>} />
+          <Route path="organization" element={<RequireAdmin><Organization /></RequireAdmin>} />
+          <Route path="admin/organization" element={<RequireAdmin><OrganizationSettings /></RequireAdmin>} />
+          <Route path="admin/office-times" element={<RequireAdmin><OfficeTimesAdmin /></RequireAdmin>} />
+          <Route path="analytics" element={<RequireAdmin><Analytics /></RequireAdmin>} />
+          <Route path="admin/roles" element={<RequireAdmin><RolesAdmin /></RequireAdmin>} />
+          <Route path="admin/settings" element={<RequireAdmin><SettingsAdmin /></RequireAdmin>} />
+          <Route path="admin/email" element={<RequireAdmin><EmailConfiguration /></RequireAdmin>} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="calls" element={<Calls />} />
           <Route path="settings" element={<Settings />} />

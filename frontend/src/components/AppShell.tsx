@@ -210,6 +210,14 @@ export function AppShell() {
     };
   }, [location.pathname, user]);
 
+  const isAdministrative = Boolean(
+    user && (
+      ['super_admin', 'admin', 'hr', 'hr_manager', 'store_manager', 'department_manager', 'location_manager', 'manager'].includes(user.roleSlug) ||
+      (user.roleLevel ?? 0) >= 40 ||
+      canAny('employees.view.team', 'employees.view.all', 'org.manage', 'roles.manage', 'settings.manage', 'audit.view', 'admin.dashboard')
+    )
+  );
+
   const nav: { label: string; items: NavItem[] }[] = useMemo(
     () => [
       {
@@ -236,52 +244,61 @@ export function AppShell() {
           },
         ],
       },
-      {
-        label: 'Administration',
-        items: [
-          {
-            to: '/groups',
-            label: 'Groups & Teams',
-            icon: 'users',
-            show: canAny('groups.view.own', 'groups.view.all', 'groups.manage', 'employees.view.team', 'employees.view.all'),
-          },
-          {
-            to: '/admin/employees',
-            label: 'Employees',
-            icon: 'users',
-            show: canAny('employees.view.team', 'employees.view.all'),
-          },
-          { to: '/organization', label: 'Organisation', icon: 'org', show: true },
-          { to: '/admin/organization', label: 'Organization data', icon: 'building', show: has('org.manage') },
-          {
-            to: '/admin/office-times',
-            label: 'Office times',
-            icon: 'clock',
-            show: has('settings.manage') || has('org.manage') || (user?.roleLevel ?? 0) >= 60 || user?.roleSlug === 'super_admin',
-          },
-          {
-            to: '/analytics',
-            label: 'Analytics',
-            icon: 'chart',
-            show: canAny('analytics.view', 'analytics.view.all', 'admin.dashboard'),
-          },
-          { to: '/admin/roles', label: 'Roles & Access', icon: 'shield', show: has('roles.manage') },
-          {
-            to: '/admin/email',
-            label: 'Email delivery',
-            icon: 'mail',
-            show: canAny('settings.manage', 'admin.dashboard'),
-          },
-          {
-            to: '/admin/settings',
-            label: 'Settings & Audit',
-            icon: 'settings',
-            show: canAny('settings.manage', 'audit.view', 'admin.dashboard'),
-          },
-        ],
-      },
+      ...(isAdministrative
+        ? [
+            {
+              label: 'Administration',
+              items: [
+                {
+                  to: '/groups',
+                  label: 'Groups & Teams',
+                  icon: 'users',
+                  show: canAny('groups.view.own', 'groups.view.all', 'groups.manage', 'employees.view.team', 'employees.view.all'),
+                },
+                {
+                  to: '/admin/employees',
+                  label: 'Employees',
+                  icon: 'users',
+                  show: canAny('employees.view.team', 'employees.view.all'),
+                },
+                {
+                  to: '/organization',
+                  label: 'Organisation',
+                  icon: 'org',
+                  show: canAny('org.manage', 'locations.manage', 'hierarchy.view.all', 'employees.view.all'),
+                },
+                { to: '/admin/organization', label: 'Organization data', icon: 'building', show: has('org.manage') },
+                {
+                  to: '/admin/office-times',
+                  label: 'Office times',
+                  icon: 'clock',
+                  show: has('settings.manage') || has('org.manage') || (user?.roleLevel ?? 0) >= 60 || user?.roleSlug === 'super_admin',
+                },
+                {
+                  to: '/analytics',
+                  label: 'Analytics',
+                  icon: 'chart',
+                  show: canAny('analytics.view', 'analytics.view.all', 'admin.dashboard'),
+                },
+                { to: '/admin/roles', label: 'Roles & Access', icon: 'shield', show: has('roles.manage') },
+                {
+                  to: '/admin/email',
+                  label: 'Email delivery',
+                  icon: 'mail',
+                  show: canAny('settings.manage', 'admin.dashboard'),
+                },
+                {
+                  to: '/admin/settings',
+                  label: 'Settings & Audit',
+                  icon: 'settings',
+                  show: canAny('settings.manage', 'audit.view', 'admin.dashboard'),
+                },
+              ],
+            },
+          ]
+        : []),
     ],
-    [has, canAny, user],
+    [has, canAny, user, isAdministrative],
   );
 
   const activeTitle = useMemo(() => {
