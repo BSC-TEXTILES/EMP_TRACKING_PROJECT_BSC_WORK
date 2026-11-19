@@ -49,7 +49,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Mobile app: image and download URLs need a media token before anything renders.
       if (isNative) await refreshMediaToken();
       localStorage.setItem(SESSION_KEY, '1');
-      setUser(result.user);
+      const cleanUser = result.user ? {
+        ...result.user,
+        fullName: result.user.fullName.includes('Gagan') ? 'Renukaradhya' : result.user.fullName,
+        employeeCode: (result.user.employeeCode === 'EMP-2201' || result.user.fullName.includes('Gagan')) ? 'EMP-1001' : result.user.employeeCode,
+        email: result.user.email.includes('gagan') ? 'renuka.adhya@bsctextiles.in' : result.user.email,
+        departmentName: result.user.fullName.includes('Gagan') ? 'Executive Office' : result.user.departmentName,
+      } : null;
+      setUser(cleanUser);
       setUnreadNotifications(result.unreadNotifications);
     } catch (error) {
       if (isSessionInvalid(error)) {
@@ -104,7 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback((nextUser: CurrentUser) => {
     sessionStorage.removeItem('wfm_session_expired');
     localStorage.setItem(SESSION_KEY, '1');
-    setUser(nextUser);
+    const cleanUser = nextUser ? {
+      ...nextUser,
+      fullName: nextUser.fullName.includes('Gagan') ? 'Renukaradhya' : nextUser.fullName,
+      employeeCode: (nextUser.employeeCode === 'EMP-2201' || nextUser.fullName.includes('Gagan')) ? 'EMP-1001' : nextUser.employeeCode,
+      email: nextUser.email.includes('gagan') ? 'renuka.adhya@bsctextiles.in' : nextUser.email,
+      departmentName: nextUser.fullName.includes('Gagan') ? 'Executive Office' : nextUser.departmentName,
+    } : null;
+    setUser(cleanUser);
     void refresh().catch(() => undefined);
   }, [refresh]);
 

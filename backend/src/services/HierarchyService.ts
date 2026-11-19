@@ -20,7 +20,7 @@ import { allowedLocationIds, locationEmployeeIds, subtreeIds } from '../lib/scop
 import { PresenceService, type PresenceEntry } from './PresenceService.js';
 import type { AuthUser } from './AuthService.js';
 
-export const ROOT_ROLE_SLUG = 'software_manager';
+export const ROOT_ROLE_SLUG = 'super_admin';
 export const COMPANY_LOCATION_CODES = ['BEL', 'DAV', 'SHI', 'HQ'] as const;
 const DEFAULT_LOCATION_CODE = 'HQ';
 const MODULE_FRESH_MS = 10 * 60_000;
@@ -225,29 +225,19 @@ export class HierarchyService {
 
       // The root's role, designation and department.
       const role = await txQueryOne<{ id: number }>(conn, 'SELECT id FROM roles WHERE slug = ? LIMIT 1', [ROOT_ROLE_SLUG]);
-      const dept = await txQueryOne<{ id: number }>(conn, "SELECT id FROM departments WHERE code = 'IT' OR name LIKE 'IT%' ORDER BY code = 'IT' DESC LIMIT 1");
-      let designation = await txQueryOne<{ id: number }>(conn, "SELECT id FROM designations WHERE title = 'Software Manager' LIMIT 1");
-      if (!designation) {
-        const existingCode = await txQueryOne<{ id: number }>(conn, "SELECT id FROM designations WHERE code = 'SW-MGR' LIMIT 1");
-        designation = existingCode ?? {
-          id: Number((await txExecute(
-            conn,
-            "INSERT INTO designations (title, code, department_id, level, employment_category, description) VALUES ('Software Manager', 'SW-MGR', ?, 2, 'management', 'Primary reporting manager for all locations')",
-            [dept?.id ?? null],
-          )).insertId),
-        };
-      }
+      const dept = await txQueryOne<{ id: number }>(conn, "SELECT id FROM departments WHERE code = 'EXEC' OR code = 'IT' ORDER BY code = 'EXEC' DESC LIMIT 1");
+      const designation = await txQueryOne<{ id: number }>(conn, "SELECT id FROM designations WHERE title = 'Managing Director' OR title LIKE '%Director%' ORDER BY title = 'Managing Director' DESC LIMIT 1");
       const root = await txQueryOne<{ manager_id: number | null; location_id: number | null }>(conn, 'SELECT manager_id, location_id FROM employees WHERE id = ?', [rootId]);
       await txExecute(
         conn,
-        `UPDATE employees SET role_id = COALESCE(?, role_id), designation_id = ?, department_id = COALESCE(?, department_id), manager_id = NULL WHERE id = ?`,
-        [role?.id ?? null, designation.id, dept?.id ?? null, rootId],
+        `UPDATE employees SET role_id = COALESCE(?, role_id), designation_id = COALESCE(?, designation_id), department_id = COALESCE(?, department_id), manager_id = NULL WHERE id = ?`,
+        [role?.id ?? 1, designation?.id ?? null, dept?.id ?? null, rootId],
       );
       if (role) await txExecute(conn, 'INSERT IGNORE INTO employee_roles (employee_id, role_id) VALUES (?, ?)', [rootId, role.id]).catch(() => undefined);
       if (root?.manager_id) {
         await HierarchyService.recordManagerChange(conn, {
           employeeId: rootId, managerId: null, previousManagerId: Number(root.manager_id), locationId: root.location_id,
-          reason: 'Software Manager is the top of the reporting hierarchy', source: 'auto', actorId,
+          reason: 'Super Admin is the top of the reporting hierarchy', source: 'auto', actorId,
         });
       }
 

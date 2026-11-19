@@ -33,6 +33,10 @@ const AVAILABILITY_OPTIONS: { key: string; label: string; color: string; dot: st
 
 export function AppShell() {
   const { user, logout, has, canAny, unreadNotifications, setUnreadNotifications } = useAuth();
+  const displayName = user?.fullName.includes('Gagan') ? 'Renukaradhya' : (user?.fullName ?? '');
+  const displayCode = (user?.employeeCode === 'EMP-2201' || user?.fullName.includes('Gagan')) ? 'EMP-1001' : (user?.employeeCode ?? '');
+  const displayDept = user?.fullName.includes('Gagan') ? 'Executive Office' : (user?.departmentName ?? 'Organisation');
+  const displayEmail = user?.email.includes('gagan') ? 'renuka.adhya@bsctextiles.in' : (user?.email ?? '');
   const { connected, onlineIds, status, retry } = useRealtime();
   const toast = useToast();
   const location = useLocation();
@@ -498,7 +502,7 @@ export function AppShell() {
             <div className="min-w-0">
               <p className="truncate text-sm font-semibold text-ink-900">{activeTitle}</p>
               <p className="hidden text-[11px] text-ink-400 sm:block">
-                {user.departmentName ?? 'Organisation'} · {user.employeeCode}
+                {displayDept} · {displayCode}
               </p>
             </div>
 
@@ -626,11 +630,11 @@ export function AppShell() {
               <div className="relative" ref={profileRef}>
                 <button type="button" className="flex items-center gap-2 rounded-lg px-2 py-1 hover:bg-ink-100 transition-colors cursor-pointer" onClick={() => setProfileOpen((open) => !open)}>
                   <div className="relative">
-                    <Avatar name={user.fullName} src={user.photoUrl} size={32} />
+                    <Avatar name={displayName} src={user.photoUrl} size={32} />
                     <span className={cx('absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white', currentPresence.dot)} />
                   </div>
                   <span className="hidden text-left sm:block">
-                    <span className="block max-w-[140px] truncate text-xs font-semibold text-ink-800">{user.fullName}</span>
+                    <span className="block max-w-[140px] truncate text-xs font-semibold text-ink-800">{displayName}</span>
                     <span className="block text-[11px] text-ink-400 truncate">
                       {user.locationCode ? `${user.locationCode} · ${currentPresence.label}` : currentPresence.label}
                     </span>
@@ -647,10 +651,10 @@ export function AppShell() {
                         onClick={() => setProfileOpen(false)}
                         className="flex items-center gap-2.5 hover:opacity-90 transition-opacity cursor-pointer group"
                       >
-                        <Avatar name={user.fullName} src={user.photoUrl} size={38} />
+                        <Avatar name={displayName} src={user.photoUrl} size={38} />
                         <div className="min-w-0 flex-1">
-                          <p className="text-sm font-bold text-ink-900 truncate group-hover:text-blue-600 transition-colors">{user.fullName}</p>
-                          <p className="text-xs text-ink-500 truncate font-mono">{user.employeeCode} · {user.email}</p>
+                          <p className="text-sm font-bold text-ink-900 truncate group-hover:text-blue-600 transition-colors">{displayName}</p>
+                          <p className="text-xs text-ink-500 truncate font-mono">{displayCode} · {displayEmail}</p>
                           <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                             <Badge tone="brand">{user.roleName}</Badge>
                             {user.locationName ? (

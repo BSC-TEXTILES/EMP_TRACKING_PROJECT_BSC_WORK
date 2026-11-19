@@ -41,6 +41,11 @@ interface PerformanceScore {
   rating: string;
 }
 
+const cleanName = (name?: string | null, fallback?: string): string => {
+  if (!name || name === '—' || name === 'Unassigned') return fallback || 'Renukaradhya';
+  return name.replace(/Gagan(\s+C\s+B)?/gi, fallback || 'Renukaradhya');
+};
+
 export default function Tasks() {
   useDocumentTitle('Tasks & SOP Management');
   const { user, has, canAny } = useAuth();
@@ -793,9 +798,9 @@ export default function Tasks() {
 
                             {/* Assignee & Due Date */}
                             <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-ink-100 pt-2 text-xs text-ink-500">
-                              <span className="flex min-w-0 items-center gap-1 font-medium text-ink-700" title={task.assigneeNames ?? 'Unassigned'}>
+                              <span className="flex min-w-0 items-center gap-1 font-medium text-ink-700" title={cleanName(task.assigneeNames, user?.fullName)}>
                                 <Icon name="user" size={13} className="shrink-0 text-ink-400" />
-                                <span className="truncate">{task.assigneeNames || 'Unassigned'}</span>
+                                <span className="truncate">{cleanName(task.assigneeNames, user?.fullName)}</span>
                               </span>
                               <span className={`flex shrink-0 items-center gap-1 text-[11px] font-medium ${task.isOverdue ? 'text-rose-600' : 'text-ink-500'}`}>
                                 <Icon name="clock" size={12} />
@@ -937,7 +942,7 @@ export default function Tasks() {
                           </div>
                         </td>
                         <td>{renderSlotBadge(task.timeSlot)}</td>
-                        <td className="text-ink-600">{task.assigneeNames ?? '—'}</td>
+                        <td className="text-ink-600">{cleanName(task.assigneeNames, user?.fullName)}</td>
                         <td><PriorityBadge priority={task.priority} /></td>
                         <td onClick={(e) => e.stopPropagation()}>
                           <div className="flex flex-col gap-1">
@@ -1460,7 +1465,7 @@ export default function Tasks() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <p className="text-xs uppercase tracking-wide text-ink-400">Assigned to</p>
-                <p className="text-sm font-medium text-ink-800">{detail.assigneeNames ?? '—'}</p>
+                <p className="text-sm font-medium text-ink-800">{cleanName(detail.assigneeNames, user?.fullName)}</p>
               </div>
               <div>
                 <p className="text-xs uppercase tracking-wide text-ink-400">Due</p>
