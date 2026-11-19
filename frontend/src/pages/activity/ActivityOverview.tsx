@@ -7,10 +7,10 @@ import { formatMinutes, type Device, type SelfDashboard } from './activityTypes'
 
 interface ActivityOverviewProps {
   self: SelfDashboard | null;
-  selectedEmployeeId: number | null;
-  employees: PickerEmployee[];
-  canSwitchEmployee: boolean;
-  onSelectEmployee: (id: number | null) => void;
+  selectedEmployeeId?: number | null;
+  employees?: PickerEmployee[];
+  canSwitchEmployee?: boolean;
+  onSelectEmployee?: (id: number | null) => void;
   date: string;
   onDateChange: (date: string) => void;
   loading: boolean;
@@ -34,8 +34,8 @@ interface ActivityOverviewProps {
 export function ActivityOverview({
   self,
   selectedEmployeeId,
-  employees,
-  canSwitchEmployee,
+  employees = [],
+  canSwitchEmployee = false,
   onSelectEmployee,
   date,
   onDateChange,
@@ -89,33 +89,14 @@ export function ActivityOverview({
             </p>
 
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:text-sm text-ink-600">
-              {/* Employee selector for managers/admins */}
-              {canSwitchEmployee && employees.length > 0 ? (
-                <label className="inline-flex items-center gap-1.5 font-medium text-ink-800">
-                  <Icon name="user" size={15} className="text-brand-600" />
-                  <select
-                    className="h-8 rounded-md border border-ink-200 bg-surface px-2.5 text-xs font-semibold text-ink-900 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
-                    value={selectedEmployeeId ?? ''}
-                    onChange={(e) => onSelectEmployee(e.target.value ? Number(e.target.value) : null)}
-                    aria-label="Filter by employee"
-                  >
-                    <option value="">Viewing: Myself ({activeEmployeeName})</option>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.full_name} ({emp.employee_code}) · {emp.designation_title ?? 'Staff'}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 font-semibold text-ink-900">
-                  <Icon name="user" size={15} className="text-brand-600" />
-                  {activeEmployeeName}
-                  <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-mono text-ink-600 dark:bg-ink-800 dark:text-ink-300">
-                    {activeEmployeeCode}
-                  </span>
+              {/* Employee display: strictly their own user name */}
+              <span className="inline-flex items-center gap-1.5 font-semibold text-ink-900">
+                <Icon name="user" size={15} className="text-brand-600" />
+                <span>{activeEmployeeName}</span>
+                <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-mono text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                  {activeEmployeeCode}
                 </span>
-              )}
+              </span>
 
               {/* Department & Designation */}
               <span className="hidden sm:inline-flex items-center gap-1 text-ink-500">

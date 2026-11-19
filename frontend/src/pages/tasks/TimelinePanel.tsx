@@ -35,24 +35,12 @@ export function EmployeeSwitcher({
   onChange: (id: number | null) => void;
 }) {
   const { user } = useAuth();
-  const others = employees.filter((employee) => employee.id !== user?.id);
-  if (others.length === 0) return null;
-
   return (
-    <select
-      className="input h-9 w-full py-0 text-sm sm:w-60 font-medium"
-      value={value ?? ''}
-      onChange={(event) => onChange(event.target.value ? Number(event.target.value) : null)}
-      aria-label="Filter by Employee"
-    >
-      <option value="">Viewing: Me ({displayName(user?.fullName)})</option>
-      {others.map((employee) => (
-        <option key={employee.id} value={employee.id}>
-          {displayName(employee.full_name)}
-          {employee.employee_code ? ` · ${employee.employee_code}` : ''}
-        </option>
-      ))}
-    </select>
+    <span className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 bg-surface px-3 py-1.5 text-xs font-semibold text-ink-800">
+      <Icon name="user" size={14} className="text-brand-600" />
+      <span>{displayName(user?.fullName)}</span>
+      {user?.employeeCode ? <span className="font-mono text-[11px] text-ink-500">({user.employeeCode})</span> : null}
+    </span>
   );
 }
 
