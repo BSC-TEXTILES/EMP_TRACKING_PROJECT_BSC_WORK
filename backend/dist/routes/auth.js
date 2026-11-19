@@ -29,18 +29,14 @@ const DEMO_LOGINS = [
 authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
-    const gagan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Gagan%' LIMIT 1");
-    const email = gagan?.email || 'gagan.cb@bsctextiles.in';
-    const name = gagan?.full_name || 'Gagan C B';
-    const code = gagan?.employee_code || 'EMP-1001';
+    const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1");
+    const email = renuka?.email || 'renuka.adhya@bsctextiles.in';
+    const name = renuka?.full_name || 'Renukaradhya';
+    const code = renuka?.employee_code || 'EMP-1001';
     const chetan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1");
     const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
     const hrName = chetan?.full_name || 'Chetan TK';
     const hrCode = chetan?.employee_code || 'EMP-1002';
-    const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' LIMIT 1");
-    const swEmail = renuka?.email || 'renuka.adhya@bsctextiles.in';
-    const swName = renuka?.full_name || 'Renuka Adhya';
-    const swCode = renuka?.employee_code || 'EMP-1003';
     res.json({
         enabled: true,
         environment: config.env,
@@ -53,24 +49,10 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
                 password,
             },
             {
-                role: 'Software Manager',
-                employeeId: swCode,
-                name: swName,
-                email: swEmail,
-                password,
-            },
-            {
                 role: 'HR Manager',
                 employeeId: hrCode,
                 name: hrName,
                 email: hrEmail,
-                password,
-            },
-            {
-                role: 'Store Manager',
-                employeeId: code,
-                name,
-                email: 'admin@bsctextiles.in',
                 password,
             },
         ],
@@ -252,7 +234,13 @@ authRouter.get('/registration-options', asyncHandler(async (_req, res) => {
         query(`SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
-         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Renuka%' OR e.full_name LIKE '%Chetan%')
+         WHERE e.status = 'active'
+           AND e.full_name NOT LIKE '%Gagan%'
+           AND (
+             e.full_name LIKE '%Renuka%'
+             OR e.full_name LIKE '%Chetan%'
+             OR e.role_id IN (SELECT id FROM roles WHERE slug IN ('super_admin', 'manager', 'hr_manager', 'store_manager', 'general_manager', 'location_manager', 'group_manager', 'team_leader'))
+           )
          ORDER BY e.full_name`),
     ]);
     res.json({ departments, designations, locations, managers });
@@ -267,7 +255,7 @@ authRouter.post('/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 10, keyP
         fullName: z.string().min(2).max(160),
         employeeCode: z.string().max(24).optional(),
         email: z.string().email(),
-        mobile: z.string().min(7).max(20),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits'),
         departmentId: z.number().int().positive(),
         designationId: z.number().int().positive().nullable().optional(),
         managerId: z.number().int().positive().nullable().optional(),

@@ -3,7 +3,18 @@ import { getSettings, recordAudit } from '../lib/audit.js';
 import { ApiError } from '../lib/http.js';
 import { addDays, daysBetween, endOfMonth, localDate, localTime, parseUtc, startOfMonth, today, toIso, toSqlTimestamp } from '../lib/dates.js';
 import { emitToEmployee } from '../realtime/io.js';
+import { isWeeklyOff, sundaysBetween } from '../lib/calendar.js';
+import { WeeklyOffService } from './WeeklyOffService.js';
 import { NotificationService } from './NotificationService.js';
+/** Re-evaluates the comp-off credit for a worked Sunday / holiday without failing the attendance action. */
+async function syncCompOff(employeeId, workDate) {
+    try {
+        await WeeklyOffService.syncCompOff(employeeId, workDate);
+    }
+    catch (error) {
+        console.error('[comp-off] sync failed', { employeeId, workDate }, error);
+    }
+}
 /** Keeps monitoring sessions aligned with attendance without failing the attendance action. */
 async function syncMonitoring(action) {
     try {
@@ -184,7 +195,7 @@ export class AttendanceService {
             date,
             checkInAt: toIso(row?.check_in_at ?? null),
             checkOutAt: toIso(row?.check_out_at ?? null),
-            status: row?.status ?? (holiday ? 'holiday' : 'absent'),
+            status: row?.status ?? (isWeeklyOff(date) ? 'weekly_off' : holiday ? 'holiday' : 'absent'),
             totalMinutes: row ? Number(row.total_minutes) : 0,
             breakMinutes: row ? Number(row.break_minutes) : 0,
             overtimeMinutes: row ? Number(row.overtime_minutes) : 0,
@@ -200,6 +211,7 @@ export class AttendanceService {
             workEnd: shift.workEnd,
             isHoliday: Boolean(holiday),
             holidayName: holiday?.name ?? null,
+            isWeeklyOff: isWeeklyOff(date),
             canCheckIn: !row?.check_in_at,
             canCheckOut: Boolean(row?.check_in_at) && !row?.check_out_at,
             canBreak: Boolean(row?.check_in_at) && !row?.check_out_at,
@@ -293,6 +305,7 @@ export class AttendanceService {
         });
         // Monitoring is only authorised during attendance: checking out ends it.
         await syncMonitoring((service) => service.endSessionsForEmployee(employeeId, 'attendance_checkout'));
+        await syncCompOff(employeeId, date);
         emitToEmployee(employeeId, 'attendance:update', state);
         return state;
     }
@@ -376,8 +389,11 @@ export class AttendanceService {
                 elapsedWorkingDays += 1;
         }
         const attendancePercent = elapsedWorkingDays > 0 ? Math.min(100, Math.round((presentDays / elapsedWorkingDays) * 100)) : 0;
+        const sundays = sundaysBetween(start, end);
         return {
             period,
+            weeklyOffCount: sundays.length,
+            weeklyOffDates: sundays,
             presentDays,
             lateDays: Number(lateDays),
             halfDays: Number(rows.find((r) => r.status === 'half_day')?.total ?? 0),
@@ -483,6 +499,8 @@ export class AttendanceService {
         else {
             await execute('UPDATE attendance_corrections SET status = ?, reviewed_by = ?, reviewed_at = NOW(3), review_note = ? WHERE id = ?', ['rejected', reviewer.id, note ?? null, correctionId]);
         }
+        if (approve)
+            await syncCompOff(Number(correction.employee_id), String(correction.work_date));
         await recordAudit({
             actorId: reviewer.id,
             action: approve ? 'attendance.correction_approved' : 'attendance.correction_rejected',
@@ -521,6 +539,7 @@ export class AttendanceService {
                 after: { reason: 'missing_checkout', graceHours },
             });
             await syncMonitoring((service) => service.endSessionsForEmployee(Number(row.employee_id), 'attendance_autoclosed'));
+            await syncCompOff(Number(row.employee_id), String(row.work_date));
             await NotificationService.notify({
                 employeeIds: [Number(row.employee_id)],
                 type: 'attendance',
@@ -535,9 +554,16 @@ export class AttendanceService {
     }
     /** Marks approved leave days so dashboards and KPI attendance stay accurate. */
     static async markLeaveRange(employeeId, startDate, endDate) {
-        const total = daysBetween(startDate, endDate);
+        const start = String(startDate).slice(0, 10);
+        const end = String(endDate).slice(0, 10);
+        // Sundays and public holidays inside a leave range stay weekly offs / holidays:
+        // they are not leave days and were not charged to the balance.
+        const holidays = await WeeklyOffService.employeeHolidays(employeeId, start, end);
+        const total = daysBetween(start, end);
         for (let i = 0; i <= total; i += 1) {
-            const date = addDays(startDate, i);
+            const date = addDays(start, i);
+            if (isWeeklyOff(date) || holidays.has(date))
+                continue;
             await execute(`INSERT INTO attendance (employee_id, work_date, status, notes)
          VALUES (?, ?, 'on_leave', 'Approved leave')
          ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, 'on_leave', status)`, [employeeId, date]);

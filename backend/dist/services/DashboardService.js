@@ -5,11 +5,12 @@ import { AttendanceService } from './AttendanceService.js';
 import { NotificationService } from './NotificationService.js';
 import { MeetingService } from './MeetingService.js';
 import { DailyReportService } from './DailyReportService.js';
+import { TaskService } from './TaskService.js';
 export class DashboardService {
     static async personal(user) {
         const date = today();
         const period = periodOf(date);
-        const [attendance, taskStats, ticketStats, kpi, upcoming, unreadNotifications, unreadChat, reportStatus, weekly, attendanceSummary] = await Promise.all([
+        const [attendance, taskStats, ticketStats, kpi, upcoming, unreadNotifications, unreadChat, reportStatus, weekly, attendanceSummary, myTasksList, teamTasksList] = await Promise.all([
             AttendanceService.stateFor(user.id, date),
             queryOne(`SELECT SUM(t.status IN ('assigned','accepted','in_progress','on_hold')) AS active,
                   SUM(t.status = 'completed') AS completed,
@@ -30,6 +31,10 @@ export class DashboardService {
             query(`SELECT work_date AS day, total_minutes AS minutes FROM attendance
            WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date`, [user.id, addDays(date, -6), date]),
             AttendanceService.summary(user.id, period),
+            TaskService.list(user, { view: 'mine', pageSize: 6 }),
+            (user.permissions.includes('tasks.view.team') || user.permissions.includes('tasks.view.all'))
+                ? TaskService.list(user, { view: 'allocated', pageSize: 6 })
+                : Promise.resolve({ items: [] }),
         ]);
         const holiday = await queryOne(`SELECT name, holiday_date FROM holidays WHERE holiday_date = ? AND location_id IS NULL LIMIT 1`, [date]);
         return {
@@ -83,6 +88,8 @@ export class DashboardService {
             unreadChat,
             weeklyHours: weekly.map((w) => ({ date: w.day, hours: Math.round((Number(w.minutes) / 60) * 10) / 10 })),
             attendanceSummary,
+            myTasks: myTasksList.items,
+            teamTasks: teamTasksList.items,
             date: localDate(),
         };
     }

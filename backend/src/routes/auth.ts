@@ -35,12 +35,12 @@ authRouter.get(
   asyncHandler(async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
-    const gagan = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
-      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Gagan%' LIMIT 1",
+    const renuka = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
+      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1",
     );
-    const email = gagan?.email || 'gagan.cb@bsctextiles.in';
-    const name = gagan?.full_name || 'Gagan C B';
-    const code = gagan?.employee_code || 'EMP-1001';
+    const email = renuka?.email || 'renuka.adhya@bsctextiles.in';
+    const name = renuka?.full_name || 'Renukaradhya';
+    const code = renuka?.employee_code || 'EMP-1001';
 
     const chetan = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
       "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1",
@@ -48,13 +48,6 @@ authRouter.get(
     const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
     const hrName = chetan?.full_name || 'Chetan TK';
     const hrCode = chetan?.employee_code || 'EMP-1002';
-
-    const renuka = await queryOne<{ id: number; full_name: string; employee_code: string; email: string; mobile: string }>(
-      "SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' LIMIT 1",
-    );
-    const swEmail = renuka?.email || 'renuka.adhya@bsctextiles.in';
-    const swName = renuka?.full_name || 'Renuka Adhya';
-    const swCode = renuka?.employee_code || 'EMP-1003';
 
     res.json({
       enabled: true,
@@ -68,24 +61,10 @@ authRouter.get(
           password,
         },
         {
-          role: 'Software Manager',
-          employeeId: swCode,
-          name: swName,
-          email: swEmail,
-          password,
-        },
-        {
           role: 'HR Manager',
           employeeId: hrCode,
           name: hrName,
           email: hrEmail,
-          password,
-        },
-        {
-          role: 'Store Manager',
-          employeeId: code,
-          name,
-          email: 'admin@bsctextiles.in',
           password,
         },
       ],
@@ -340,7 +319,13 @@ authRouter.get(
         `SELECT e.id, e.full_name, COALESCE(l.name, l.city, 'Main Office') AS location_name
          FROM employees e
          LEFT JOIN locations l ON l.id = e.location_id
-         WHERE e.status = 'active' AND (e.full_name LIKE '%Gagan%' OR e.full_name LIKE '%Renuka%' OR e.full_name LIKE '%Chetan%')
+         WHERE e.status = 'active'
+           AND e.full_name NOT LIKE '%Gagan%'
+           AND (
+             e.full_name LIKE '%Renuka%'
+             OR e.full_name LIKE '%Chetan%'
+             OR e.role_id IN (SELECT id FROM roles WHERE slug IN ('super_admin', 'manager', 'hr_manager', 'store_manager', 'general_manager', 'location_manager', 'group_manager', 'team_leader'))
+           )
          ORDER BY e.full_name`,
       ),
     ]);

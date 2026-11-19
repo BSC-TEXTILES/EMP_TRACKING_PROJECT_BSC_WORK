@@ -314,15 +314,9 @@ export class AuthService {
       );
     }
 
-    if (!employee && ['renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'emp-1003', 'renuka', 'software_manager'].includes(emailCandidate)) {
+    if (!employee && ['renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'emp-1001', 'emp-1003', 'renuka', 'software_manager', 'super_admin'].includes(emailCandidate)) {
       employee = await queryOne<EmployeeWithJoins>(
-        `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Renuka%' LIMIT 1`,
-      );
-    }
-
-    if (!employee && ['admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'gagan.cb@bsctextiles.in', 'emp-1001', 'emp-1020', 'emp-2201'].includes(emailCandidate)) {
-      employee = await queryOne<EmployeeWithJoins>(
-        `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Gagan%' LIMIT 1`,
+        `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Renuka%' OR e.employee_code = 'EMP-1001' LIMIT 1`,
       );
     }
 

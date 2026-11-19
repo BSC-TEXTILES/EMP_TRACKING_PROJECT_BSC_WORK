@@ -1,6 +1,7 @@
 import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { endOfMonth, periodRange, previousPeriod, toIso } from '../lib/dates.js';
+import { isWeeklyOff, sundaysBetween } from '../lib/calendar.js';
 import { ApiError } from '../lib/http.js';
 import { assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
@@ -64,11 +65,14 @@ export class KpiService {
     }
     static async workingDays(period, employeeId) {
         const { start, end } = periodRange(period);
-        const holidayRow = await queryOne(`SELECT COUNT(*) AS total FROM holidays h WHERE h.holiday_date BETWEEN ? AND ?
+        // Saturdays are working days; Sundays are the weekly off, counted from the real calendar
+        // (a month can have 4 or 5). A holiday that falls on a Sunday is not subtracted twice.
+        const holidayRows = await query(`SELECT DISTINCT h.holiday_date FROM holidays h WHERE h.holiday_date BETWEEN ? AND ?
          AND (h.location_id IS NULL OR h.location_id = (SELECT location_id FROM employees WHERE id = ?))`, [start, end, employeeId]);
         const days = new Date(`${end}T00:00:00Z`).getUTCDate();
-        const weekends = Math.floor(days / 7) * 1; // Saturdays are working days; only Sundays are off
-        return Math.max(1, days - weekends - Number(holidayRow?.total ?? 0));
+        const sundays = sundaysBetween(start, end).length;
+        const weekdayHolidays = holidayRows.filter((row) => !isWeeklyOff(String(row.holiday_date).slice(0, 10))).length;
+        return Math.max(1, days - sundays - weekdayHolidays);
     }
     /** Computes the raw, explainable metrics used for each parameter. */
     static async computeMetrics(employeeId, period) {

@@ -138,7 +138,7 @@ const EMPLOYEES: {
   location: string;
   status?: string;
 }[] = [
-  { code: 'EMP-1001', name: 'Gagan C B', email: 'gagan.cb@bsctextiles.in', mobile: '9876543210', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'BEL', status: 'active' },
+  { code: 'EMP-1001', name: 'Renukaradhya', email: 'renuka.adhya@bsctextiles.in', mobile: '9876543210', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'BEL', status: 'active' },
   { code: 'EMP-1002', name: 'Chetan TK', email: 'chetan.tk@bsctextiles.in', mobile: '9876543211', role: 'hr_manager', dept: 'HR', designation: 'HR Manager', manager: 'EMP-1001', location: 'BEL', status: 'active' },
 ];
 
@@ -997,7 +997,7 @@ async function main(): Promise<void> {
   console.log(`[seed] done in ${Date.now() - started}ms`, counts[0]);
   if (created) {
     console.log('\n  Primary account (password: Workforce@2026)\n');
-    console.log('  Super Admin      gagan.cb@bsctextiles.in     (EMP-1001 Gagan C B)\n');
+    console.log('  Super Admin      renuka.adhya@bsctextiles.in     (EMP-1001 Renukaradhya)\n');
   }
   await pool.end();
 }

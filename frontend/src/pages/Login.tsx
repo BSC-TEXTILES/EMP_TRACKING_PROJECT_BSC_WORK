@@ -19,8 +19,8 @@ const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
   {
     role: 'Super Admin',
     employeeId: 'EMP-1001',
-    name: 'Gagan C B',
-    email: 'gagan.cb@bsctextiles.in',
+    name: 'Renukaradhya',
+    email: 'renuka.adhya@bsctextiles.in',
     password: 'Workforce@2026',
   },
   {
@@ -28,20 +28,6 @@ const DEFAULT_TEST_ACCOUNTS: TestAccount[] = [
     employeeId: 'EMP-1002',
     name: 'Chetan TK',
     email: 'chetan.tk@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'Software Manager',
-    employeeId: 'EMP-1003',
-    name: 'Renuka Adhya',
-    email: 'renuka.adhya@bsctextiles.in',
-    password: 'Workforce@2026',
-  },
-  {
-    role: 'Store Manager',
-    employeeId: 'EMP-1001',
-    name: 'Gagan C B',
-    email: 'admin@bsctextiles.in',
     password: 'Workforce@2026',
   },
 ];

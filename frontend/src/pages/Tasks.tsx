@@ -501,7 +501,7 @@ export default function Tasks() {
 
           {/* Visual Store SOP Daily Operational Pipeline */}
           <div className="border-b border-ink-100 bg-gradient-to-r from-slate-50 via-brand-50/20 to-slate-50 p-4">
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-xs font-bold uppercase tracking-wider text-ink-700">Daily Store SOP Operational Pipeline</span>
@@ -512,7 +512,7 @@ export default function Tasks() {
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
               {[
                 { id: 'morning', label: 'Morning SOP', hours: '09:30 – 11:00 AM', emoji: '🌅', desc: 'Opening float, safe lock, sales check, staff briefing' },
                 { id: 'operations', label: 'Store Operations', hours: '11:00 AM – 05:00 PM', emoji: '🏬', desc: 'Floor walk, sales monitoring, CRM feedback' },
@@ -520,8 +520,11 @@ export default function Tasks() {
                 { id: 'closing', label: 'Night Closing', hours: '08:00 – 09:30 PM', emoji: '🔒', desc: 'Cash reconciliation, safe lockdown, checkout report' },
               ].map((slot) => {
                 const isSelected = timeSlot === slot.id;
+                // While another shift is filtered, this card's tasks are not loaded: don't show a misleading 0.
+                const countsKnown = !timeSlot || isSelected;
                 const slotTasks = data?.items.filter((t) => t.timeSlot === slot.id) ?? [];
                 const doneCount = slotTasks.filter((t) => ['completed', 'verified'].includes(t.status)).length;
+                const percent = slotTasks.length ? Math.round((doneCount / slotTasks.length) * 100) : 0;
                 return (
                   <button
                     key={slot.id}
@@ -533,39 +536,43 @@ export default function Tasks() {
                       setParams(next);
                       setPage(1);
                     }}
-                    className={`flex flex-col justify-between rounded-xl border p-3 text-left transition-all ${
+                    aria-pressed={isSelected}
+                    className={`flex h-full min-w-0 flex-col justify-between rounded-xl border p-3 text-left transition-all ${
                       isSelected
                         ? 'border-brand-600 bg-white ring-2 ring-brand-500/20 shadow-sm'
                         : 'border-ink-200/80 bg-white/70 hover:border-brand-300 hover:bg-white'
                     }`}
                   >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-bold text-ink-900 flex items-center gap-1.5">
-                          <span>{slot.emoji}</span>
-                          <span>{slot.label}</span>
+                    <div className="min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="flex min-w-0 items-center gap-1.5 text-sm font-bold text-ink-900">
+                          <span aria-hidden="true">{slot.emoji}</span>
+                          <span className="truncate">{slot.label}</span>
                         </span>
-                        {slotTasks.length > 0 && (
-                          <span className={`text-[11px] font-semibold px-1.5 py-0.2 rounded-full ${
-                            doneCount === slotTasks.length && slotTasks.length > 0
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-brand-50 text-brand-700'
-                          }`}>
-                            {doneCount}/{slotTasks.length} Done
-                          </span>
-                        )}
+                        <span
+                          className={`shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            !countsKnown
+                              ? 'bg-ink-100 text-ink-500'
+                              : slotTasks.length === 0
+                                ? 'bg-ink-100 text-ink-500'
+                                : doneCount === slotTasks.length
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-brand-50 text-brand-700'
+                          }`}
+                        >
+                          {!countsKnown ? 'View' : slotTasks.length === 0 ? 'No tasks' : `${doneCount}/${slotTasks.length} done`}
+                        </span>
                       </div>
                       <p className="mt-0.5 text-[11px] font-medium text-brand-600">{slot.hours}</p>
-                      <p className="mt-1 line-clamp-1 text-[11px] text-ink-400">{slot.desc}</p>
+                      <p className="mt-1 line-clamp-1 text-[11px] text-ink-400" title={slot.desc}>{slot.desc}</p>
                     </div>
-                    {slotTasks.length > 0 && (
-                      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
-                        <div
-                          className="h-full bg-brand-600 transition-all"
-                          style={{ width: `${(doneCount / slotTasks.length) * 100}%` }}
-                        />
-                      </div>
-                    )}
+                    {/* Always render the track so all four cards line up. */}
+                    <div className="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-ink-100" aria-hidden="true">
+                      <div
+                        className={`h-full transition-all ${percent === 100 ? 'bg-emerald-500' : 'bg-brand-600'}`}
+                        style={{ width: `${countsKnown ? percent : 0}%` }}
+                      />
+                    </div>
                   </button>
                 );
               })}
@@ -676,7 +683,7 @@ export default function Tasks() {
                VISUAL WORKFLOW FLOW PIPELINE (Interactive Kanban Flow with Status Updates)
                ========================================================================= */
             <div className="p-4">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-4">
                 {[
                   {
                     id: 'assigned',
@@ -684,7 +691,8 @@ export default function Tasks() {
                     subtitle: 'Tasks ready to accept & start',
                     badgeTone: 'bg-sky-100 text-sky-800 border-sky-300',
                     borderTone: 'border-t-4 border-t-sky-500',
-                    items: data.items.filter((t) => ['assigned', 'not_started'].includes(t.status)),
+                    // Overdue / rejected tasks still need action from the assignee, so they stay here.
+                    items: data.items.filter((t) => ['assigned', 'not_started', 'overdue', 'rejected'].includes(t.status)),
                   },
                   {
                     id: 'in_progress',
@@ -697,10 +705,10 @@ export default function Tasks() {
                   {
                     id: 'review',
                     title: 'Under Review',
-                    subtitle: 'Submitted for manager verification or on hold',
+                    subtitle: 'Awaiting verification, on hold or escalated',
                     badgeTone: 'bg-indigo-100 text-indigo-800 border-indigo-300',
                     borderTone: 'border-t-4 border-t-indigo-500',
-                    items: data.items.filter((t) => ['pending_approval', 'on_hold'].includes(t.status)),
+                    items: data.items.filter((t) => ['pending_approval', 'on_hold', 'escalated'].includes(t.status)),
                   },
                   {
                     id: 'completed',
@@ -708,10 +716,10 @@ export default function Tasks() {
                     subtitle: 'Finished & verified SOP checkpoints',
                     badgeTone: 'bg-emerald-100 text-emerald-800 border-emerald-300',
                     borderTone: 'border-t-4 border-t-emerald-500',
-                    items: data.items.filter((t) => ['completed', 'verified', 'rejected', 'escalated', 'cancelled'].includes(t.status)),
+                    items: data.items.filter((t) => ['completed', 'verified', 'cancelled'].includes(t.status)),
                   },
                 ].map((col) => (
-                  <div key={col.id} className={`flex flex-col rounded-xl border border-ink-200/80 bg-slate-50/60 p-3 shadow-xs ${col.borderTone}`}>
+                  <div key={col.id} className={`flex min-w-0 flex-col rounded-xl border border-ink-200/80 bg-slate-50/60 p-3 shadow-xs ${col.borderTone}`}>
                     {/* Column Header */}
                     <div className="mb-3 flex items-center justify-between border-b border-ink-100 pb-2">
                       <div>
@@ -726,9 +734,9 @@ export default function Tasks() {
                     </div>
 
                     {/* Column Cards */}
-                    <div className="flex-1 space-y-3 overflow-y-auto max-h-[640px] pr-1">
+                    <div className="space-y-3">
                       {col.items.length === 0 ? (
-                        <div className="flex h-32 flex-col items-center justify-center rounded-lg border border-dashed border-ink-200 bg-white/50 text-center p-3">
+                        <div className="flex h-20 flex-col items-center justify-center rounded-lg border border-dashed border-ink-200 bg-white/50 p-3 text-center">
                           <p className="text-xs text-ink-400">No tasks in this stage</p>
                         </div>
                       ) : (
@@ -784,12 +792,14 @@ export default function Tasks() {
                             </div>
 
                             {/* Assignee & Due Date */}
-                            <div className="mt-2.5 flex items-center justify-between text-xs text-ink-500 border-t border-ink-100 pt-2">
-                              <span className="truncate max-w-[130px] font-medium text-ink-700" title={task.assigneeNames ?? 'Unassigned'}>
-                                👤 {task.assigneeNames || 'Unassigned'}
+                            <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-ink-100 pt-2 text-xs text-ink-500">
+                              <span className="flex min-w-0 items-center gap-1 font-medium text-ink-700" title={task.assigneeNames ?? 'Unassigned'}>
+                                <Icon name="user" size={13} className="shrink-0 text-ink-400" />
+                                <span className="truncate">{task.assigneeNames || 'Unassigned'}</span>
                               </span>
-                              <span className="text-[11px] font-medium text-ink-500">
-                                ⏰ {task.dueTime ? task.dueTime.slice(0, 5) : formatDate(task.dueDate)}
+                              <span className={`flex shrink-0 items-center gap-1 text-[11px] font-medium ${task.isOverdue ? 'text-rose-600' : 'text-ink-500'}`}>
+                                <Icon name="clock" size={12} />
+                                {task.dueTime ? task.dueTime.slice(0, 5) : formatDate(task.dueDate)}
                               </span>
                             </div>
 
@@ -799,31 +809,33 @@ export default function Tasks() {
                             </div>
 
                             {/* Interactive Status Update Dropdown & Quick Actions */}
-                            <div className="mt-3 flex flex-col gap-2 rounded-lg bg-slate-50 p-2 border border-ink-100">
-                              <div className="flex items-center justify-between gap-1.5">
-                                <span className="text-[11px] font-bold text-ink-600 uppercase tracking-wider">Status:</span>
-                                <select
-                                  value={task.status}
-                                  disabled={busy}
-                                  onChange={(e) => void updateTaskStatus(task.id, e.target.value)}
-                                  className="text-xs font-semibold rounded-md border border-ink-300 bg-white py-1 px-2 text-ink-800 shadow-2xs hover:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                                >
-                                  <option value="assigned">Assigned</option>
-                                  <option value="accepted">Accepted</option>
-                                  <option value="in_progress">In Progress</option>
-                                  <option value="on_hold">On Hold</option>
-                                  <option value="pending_approval">Submit for Approval</option>
-                                  <option value="completed">Completed / Verified</option>
-                                </select>
-                              </div>
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                              <select
+                                value={task.status}
+                                disabled={busy}
+                                onChange={(e) => void updateTaskStatus(task.id, e.target.value)}
+                                aria-label={`Status of ${task.taskNo}`}
+                                className="h-7 min-w-0 max-w-[9.5rem] rounded-md border border-ink-200 bg-white px-1.5 text-[11px] font-semibold text-ink-700 hover:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-60"
+                              >
+                                {/* Keep the real status selectable/visible even if it is not a manual choice. */}
+                                {!['assigned', 'accepted', 'in_progress', 'on_hold', 'pending_approval', 'completed'].includes(task.status) && (
+                                  <option value={task.status} disabled>{titleize(task.status)}</option>
+                                )}
+                                <option value="assigned">Assigned</option>
+                                <option value="accepted">Accepted</option>
+                                <option value="in_progress">In progress</option>
+                                <option value="on_hold">On hold</option>
+                                <option value="pending_approval">Submit for approval</option>
+                                <option value="completed">Completed</option>
+                              </select>
 
-                              <div className="flex items-center justify-end gap-1.5">
+                              <div className="flex items-center gap-1.5">
                                 {['assigned', 'not_started', 'on_hold', 'rejected'].includes(task.status) && (
                                   <button
                                     type="button"
                                     disabled={busy}
                                     onClick={() => void actOnTask(task.id, 'accept')}
-                                    className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
+                                    className="rounded-md bg-emerald-600 h-7 px-2.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                                     title="Accept task"
                                   >
                                     Accept
@@ -834,7 +846,7 @@ export default function Tasks() {
                                     type="button"
                                     disabled={busy}
                                     onClick={() => void actOnTask(task.id, 'start')}
-                                    className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 disabled:opacity-50"
+                                    className="rounded-md bg-blue-600 h-7 px-2.5 text-xs font-semibold text-white shadow-xs hover:bg-blue-700 disabled:opacity-50"
                                     title="Start work"
                                   >
                                     Start
@@ -845,7 +857,7 @@ export default function Tasks() {
                                     type="button"
                                     disabled={busy}
                                     onClick={() => openSubmitModalForTask(task)}
-                                    className="rounded bg-indigo-600 px-2 py-1 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50"
+                                    className="rounded-md bg-indigo-600 h-7 px-2.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50"
                                     title="Submit completed work"
                                   >
                                     Submit
@@ -856,7 +868,7 @@ export default function Tasks() {
                                     type="button"
                                     disabled={busy}
                                     onClick={() => void actOnTask(task.id, 'verify')}
-                                    className="rounded bg-emerald-600 px-2 py-1 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
+                                    className="rounded-md bg-emerald-600 h-7 px-2.5 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                                     title="Verify & approve task"
                                   >
                                     Verify
@@ -865,7 +877,7 @@ export default function Tasks() {
                                 <button
                                   type="button"
                                   onClick={() => void openDetail(task.id)}
-                                  className="rounded border border-ink-200 bg-white px-2 py-1 text-xs font-medium text-ink-700 hover:bg-ink-100"
+                                  className="rounded-md border border-ink-200 bg-white h-7 px-2.5 text-xs font-medium text-ink-700 hover:bg-ink-100"
                                   title="View full task details"
                                 >
                                   Details
@@ -935,6 +947,7 @@ export default function Tasks() {
                               onChange={(e) => void updateTaskStatus(task.id, e.target.value)}
                               className="text-xs font-semibold rounded border border-ink-200 bg-white py-0.5 px-1.5 text-ink-800 shadow-2xs hover:border-brand-500"
                             >
+                              {!['assigned', 'accepted', 'in_progress', 'on_hold', 'pending_approval', 'completed'].includes(task.status) && <option value={task.status} disabled>{titleize(task.status)}</option>}
                               <option value="assigned">Assigned</option>
                               <option value="accepted">Accepted</option>
                               <option value="in_progress">In Progress</option>
@@ -1404,6 +1417,7 @@ export default function Tasks() {
                   onChange={(e) => void updateTaskStatus(detail.id, e.target.value)}
                   className="rounded-md border border-ink-300 bg-white px-2.5 py-1 text-xs font-semibold text-ink-800 shadow-2xs hover:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
                 >
+                  {!['assigned', 'accepted', 'in_progress', 'on_hold', 'pending_approval', 'completed'].includes(detail.status) && <option value={detail.status} disabled>{titleize(detail.status)}</option>}
                   <option value="assigned">Assigned</option>
                   <option value="accepted">Accepted</option>
                   <option value="in_progress">In Progress</option>

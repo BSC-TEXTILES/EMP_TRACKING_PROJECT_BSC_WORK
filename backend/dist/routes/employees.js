@@ -53,7 +53,7 @@ employeesRouter.post('/', requireAny('employees.manage'), asyncHandler(async (re
     const body = parseBody(z.object({
         fullName: z.string().min(2).max(160),
         email: z.string().email(),
-        mobile: z.string().min(7).max(20),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits'),
         employeeCode: z.string().max(24).optional(),
         roleId: z.number().int().positive(),
         departmentId: z.number().int().positive(),
@@ -79,7 +79,7 @@ employeesRouter.patch('/:id', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const body = parseBody(z.object({
         fullName: z.string().min(2).max(160).optional(),
-        mobile: z.string().min(7).max(20).optional(),
+        mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits').optional(),
         address: z.string().max(255).optional(),
         emergencyContact: z.string().max(64).optional(),
         dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -91,14 +91,15 @@ employeesRouter.patch('/:id', asyncHandler(async (req, res) => {
 employeesRouter.patch('/:id/org-assignment', requireAny('employees.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
+    const idSchema = z.preprocess((v) => (v === 0 || v === '0' || v === '' || v === null || v === undefined ? null : Number(v)), z.number().int().positive().nullable().optional());
     const body = parseBody(z.object({
-        roleId: z.number().int().positive().optional(),
-        departmentId: z.number().int().positive().nullable().optional(),
-        designationId: z.number().int().positive().nullable().optional(),
-        managerId: z.number().int().positive().nullable().optional(),
-        locationId: z.number().int().positive().nullable().optional(),
-        groupId: z.number().int().positive().nullable().optional(),
-        teamLeaderId: z.number().int().positive().nullable().optional(),
+        roleId: z.preprocess((v) => (v === 0 || v === '0' || v === '' || v === null || v === undefined ? undefined : Number(v)), z.number().int().positive().optional()),
+        departmentId: idSchema,
+        designationId: idSchema,
+        managerId: idSchema,
+        locationId: idSchema,
+        groupId: idSchema,
+        teamLeaderId: idSchema,
         employmentType: z.string().max(32).optional(),
     }), req.body);
     await EmployeeService.updateOrgAssignment(id, user, body);
