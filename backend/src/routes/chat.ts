@@ -184,7 +184,9 @@ chatRouter.delete(
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
-    await ChatService.deleteMessage(id, user);
+    // ?for=me hides the message for the requester only; default (sender / moderator) deletes for everyone.
+    if (req.query.for === 'me') await ChatService.hideMessage(id, user.id);
+    else await ChatService.deleteMessage(id, user);
     res.json({ ok: true });
   }),
 );

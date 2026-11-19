@@ -14,6 +14,12 @@ export interface NotifyInput {
   actorId?: number | null;
   announcementId?: number | null;
   dedupeKey?: string;
+  /** Calls push through PushService.sendCall (ring / cancel / missed) and skip the generic push. */
+  skipPush?: boolean;
+  /** Only these recipients get a phone / browser push (others still get the in-app notification). */
+  pushRecipients?: number[];
+  /** Chat: groups pushes per conversation and names the sender on signed-out devices. */
+  push?: { conversationId?: number; senderName?: string };
 }
 
 export interface NotificationRow {
@@ -85,15 +91,22 @@ export class NotificationService {
     };
     emitToEmployees(recipients, 'notification:new', payload);
 
-    // Phone push (Android / iOS app). Best effort, never blocks or fails the caller.
-    void PushService.deliver(recipients, {
-      notificationId,
-      type: input.type,
-      title: input.title,
-      body: input.body ?? null,
-      link: input.link ?? null,
-      priority: input.priority ?? 'normal',
-    });
+    // Phone / browser push. Best effort, never blocks or fails the caller.
+    if (!input.skipPush) {
+      const pushTo = input.pushRecipients ? recipients.filter((id) => input.pushRecipients!.includes(id)) : recipients;
+      if (pushTo.length > 0) {
+        void PushService.deliver(pushTo, {
+          notificationId,
+          type: input.type,
+          title: input.title,
+          body: input.body ?? null,
+          link: input.link ?? null,
+          priority: input.priority ?? 'normal',
+          conversationId: input.push?.conversationId,
+          senderName: input.push?.senderName,
+        });
+      }
+    }
 
     // Email is queued after the notification is durable. A mail failure never
     // affects the business transaction that produced this notification.

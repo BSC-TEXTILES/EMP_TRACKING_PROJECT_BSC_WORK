@@ -57,6 +57,7 @@ export function AppShell() {
 
   const [presenceStatus, setPresenceStatus] = useState('active');
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
+  const [keepNotificationsOnSignOut, setKeepNotificationsOnSignOut] = useState(true);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordBusy, setPasswordBusy] = useState(false);
@@ -745,7 +746,7 @@ export function AppShell() {
                 className="btn-primary btn-sm !bg-rose-600 hover:!bg-rose-700 !text-white !border-rose-600"
                 onClick={async () => {
                   setSignOutModalOpen(false);
-                  await logout();
+                  await logout({ keepNotifications: keepNotificationsOnSignOut });
                 }}
               >
                 Sign Out
@@ -760,6 +761,19 @@ export function AppShell() {
               • Any pending work logs will be synchronized with the server.<br />
               • To resume work later, you will need to sign in again.
             </p>
+            <label className="mt-3 flex items-start gap-2 rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={keepNotificationsOnSignOut}
+                onChange={(event) => setKeepNotificationsOnSignOut(event.target.checked)}
+              />
+              <span>
+                <span className="block font-semibold text-ink-900">Keep call and message notifications on this device</span>
+                Incoming calls will still ring here after you sign out. Message text is hidden until you sign in again.
+                Turn this off on a shared device.
+              </span>
+            </label>
           </div>
         </Modal>
 

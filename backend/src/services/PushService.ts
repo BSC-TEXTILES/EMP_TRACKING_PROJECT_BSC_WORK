@@ -1,18 +1,24 @@
+import crypto from 'node:crypto';
+import webpush from 'web-push';
 import { execute, query } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { fcmConfigured, sendFcm, type FcmMessage } from '../lib/fcm.js';
 import { config } from '../config.js';
-import webpush from 'web-push';
 import type { AuthUser } from './AuthService.js';
 
 /**
- * Push notifications to the Android / iOS app (Firebase Cloud Messaging).
+ * Push notifications to phones and browsers.
  *
- * Every in-app notification created by NotificationService.notify() is also
- * pushed to the recipients' phones, unless the recipient muted that category.
- * Delivery only uses device tokens whose login session is still valid, so
- * signing out, revoking a session or deactivating an employee stops pushes
- * without any extra clean-up step.
+ * Two transports, same rules:
+ *  - Web Push (VAPID) for the website / installed PWA (Android Chrome, desktop, iOS 16.4+ Home Screen apps).
+ *  - Firebase Cloud Messaging for the Capacitor Android / iOS app.
+ *
+ * A device keeps receiving pushes after its user signs out when the user chose
+ * "keep notifications on" at sign-out (`keep_after_logout`). Such devices get a
+ * reduced payload (no message text) because a signed-out phone may be shared.
+ *
+ * Every attempt is written to push_delivery_log (sent / delivered / failed / expired);
+ * "delivered" is reported back by the service worker through POST /api/push/ack.
  */
 
 /** Categories shown as toggles in the app's Settings screen. */
@@ -51,12 +57,45 @@ export interface PushPayload {
   body: string | null;
   link: string | null;
   priority: 'low' | 'normal' | 'high' | 'critical';
+  /** Chat: groups all pushes of one conversation into a single notification. */
+  conversationId?: number;
+  /** Chat: sender name, used as the title on signed-out devices. */
+  senderName?: string;
+}
+
+export type CallPushKind = 'call_ring' | 'call_cancel' | 'call_missed';
+
+export interface CallPushInfo {
+  callId: string;
+  type: 'audio' | 'video';
+  callerId: number;
+  callerName: string;
+  callerPhoto: string | null;
+  /** Ring: unix ms after which the notification must disappear. */
+  expiresAt?: number;
+  /** Ring: 1-based re-ring counter so the device alerts again. */
+  attempt?: number;
 }
 
 /** Only same-app relative paths are allowed as deep links. */
 export function safeDeepLink(link: string | null | undefined): string {
   if (!link || !link.startsWith('/') || link.startsWith('//') || link.includes('\\')) return '/notifications';
   return link.slice(0, 255);
+}
+
+/**
+ * HMAC that lets the service worker decline / mark-missed a call without a
+ * session cookie (the phone may be signed out or the cookie may not be sent
+ * from the worker). Bound to one call and one callee.
+ */
+export function callActionToken(callId: string, calleeId: number): string {
+  return crypto.createHmac('sha256', config.jwtSecret).update(`call-action:${callId}:${calleeId}`).digest('base64url').slice(0, 43);
+}
+
+export function verifyCallActionToken(callId: string, calleeId: number, token: string): boolean {
+  const expected = Buffer.from(callActionToken(callId, calleeId));
+  const given = Buffer.from(String(token));
+  return expected.length === given.length && crypto.timingSafeEqual(expected, given);
 }
 
 const MAX_FAILURES = 10;
@@ -66,6 +105,199 @@ async function inBatches<T>(items: T[], size: number, fn: (item: T) => Promise<v
   for (let i = 0; i < items.length; i += size) {
     await Promise.all(items.slice(i, i + size).map(fn));
   }
+}
+
+let vapidReady = false;
+function ensureVapid(): boolean {
+  if (vapidReady) return true;
+  if (!config.vapidPublicKey || !config.vapidPrivateKey) return false;
+  const email = config.smtp.from.replace(/.*<([^>]+)>.*/, '$1').trim();
+  webpush.setVapidDetails(`mailto:${email || 'admin@bsctextiles.in'}`, config.vapidPublicKey, config.vapidPrivateKey);
+  vapidReady = true;
+  return true;
+}
+
+async function unmuted(employeeIds: number[], category: PushCategory): Promise<number[]> {
+  if (employeeIds.length === 0 || category === 'security') return employeeIds;
+  const muted = await query<{ employee_id: number }>(
+    'SELECT employee_id FROM notification_preferences WHERE category = ? AND push_enabled = 0 AND employee_id IN (?)',
+    [category, employeeIds],
+  );
+  const mutedIds = new Set(muted.map((m) => Number(m.employee_id)));
+  return employeeIds.filter((id) => !mutedIds.has(id));
+}
+
+interface WebTarget {
+  id: number;
+  employee_id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  signed_in: number;
+}
+
+interface FcmTarget {
+  id: number;
+  employee_id: number;
+  token: string;
+  signed_in: number;
+}
+
+/**
+ * Devices that may receive pushes: the employee is active and the device either
+ * belongs to a live session, or its user chose to keep notifications after sign-out.
+ * Legacy web subscriptions without a session are treated as signed in.
+ */
+async function webTargets(employeeIds: number[]): Promise<WebTarget[]> {
+  if (employeeIds.length === 0) return [];
+  return query<WebTarget>(
+    `SELECT ps.id, ps.employee_id, ps.endpoint, ps.p256dh, ps.auth,
+            (ps.session_id IS NULL OR s.id IS NOT NULL) AS signed_in
+     FROM push_subscriptions ps
+     JOIN employees e ON e.id = ps.employee_id AND e.status = 'active'
+     LEFT JOIN employee_sessions s ON s.id = ps.session_id AND s.revoked_at IS NULL AND s.expires_at > NOW(3)
+     WHERE ps.employee_id IN (?)
+       AND (ps.session_id IS NULL OR s.id IS NOT NULL OR ps.keep_after_logout = 1)`,
+    [employeeIds],
+  );
+}
+
+async function fcmTargets(employeeIds: number[]): Promise<FcmTarget[]> {
+  if (employeeIds.length === 0 || !fcmConfigured()) return [];
+  return query<FcmTarget>(
+    `SELECT t.id, t.employee_id, t.token, (s.id IS NOT NULL) AS signed_in
+     FROM push_device_tokens t
+     JOIN employees e ON e.id = t.employee_id AND e.status = 'active'
+     LEFT JOIN employee_sessions s ON s.id = t.session_id AND s.revoked_at IS NULL AND s.expires_at > NOW(3)
+     WHERE t.employee_id IN (?) AND (s.id IS NOT NULL OR t.keep_after_logout = 1)`,
+    [employeeIds],
+  );
+}
+
+async function logAttempt(row: {
+  employeeId: number;
+  channel: 'webpush' | 'fcm';
+  targetId: number;
+  kind: string;
+  ref: string;
+  status: 'sent' | 'failed' | 'expired';
+  httpStatus?: number | null;
+  error?: string | null;
+  ackToken?: string | null;
+}): Promise<void> {
+  await execute(
+    `INSERT INTO push_delivery_log (employee_id, channel, target_id, kind, ref, status, http_status, error, ack_token)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [row.employeeId, row.channel, row.targetId, row.kind.slice(0, 32), row.ref.slice(0, 80), row.status,
+      row.httpStatus ?? null, row.error?.slice(0, 255) ?? null, row.ackToken ?? null],
+  ).catch((error) => console.error('[push] could not write delivery log', (error as Error).message));
+}
+
+/** Web Push message as read by public/sw.js (schema version 2). */
+interface WebMessage {
+  v: 2;
+  kind: 'notification' | 'chat' | CallPushKind;
+  title: string;
+  body: string;
+  tag: string;
+  link: string;
+  icon: string;
+  urgent: boolean;
+  data: Record<string, unknown>;
+  call?: Record<string, unknown>;
+}
+
+interface WebSendOptions {
+  ttl: number;
+  urgency: 'very-low' | 'low' | 'normal' | 'high';
+  /** Collapses a still-undelivered message on the push service (e.g. ring replaced by cancel). */
+  topic?: string;
+}
+
+type Stats = { sent: number; failed: number; removed: number };
+
+async function sendWeb(
+  targets: WebTarget[],
+  kind: string,
+  ref: string,
+  build: (target: WebTarget) => WebMessage,
+  options: WebSendOptions,
+): Promise<Stats> {
+  const stats: Stats = { sent: 0, failed: 0, removed: 0 };
+  if (targets.length === 0 || !ensureVapid()) return stats;
+  await inBatches(targets, CONCURRENCY, async (sub) => {
+    const ackToken = crypto.randomBytes(16).toString('hex');
+    const message = { ...build(sub), ack: ackToken };
+    try {
+      await webpush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        JSON.stringify(message),
+        { TTL: options.ttl, urgency: options.urgency, ...(options.topic ? { topic: options.topic } : {}) },
+      );
+      stats.sent += 1;
+      await logAttempt({ employeeId: sub.employee_id, channel: 'webpush', targetId: sub.id, kind, ref, status: 'sent', httpStatus: 201, ackToken });
+      await execute('UPDATE push_subscriptions SET failure_count = 0, last_error = NULL, last_sent_at = NOW(3) WHERE id = ?', [sub.id]);
+    } catch (error) {
+      const statusCode = Number((error as { statusCode?: number }).statusCode) || null;
+      const text = String((error as { body?: string }).body || (error as Error).message || 'error').slice(0, 200);
+      // 404/410: subscription gone (app uninstalled, permission revoked, browser rotated it).
+      // 403 with a VAPID mismatch: subscribed under an older key; the client re-subscribes on next open.
+      const expired = statusCode === 404 || statusCode === 410 || (statusCode === 403 && /vapid|credential|key/i.test(text));
+      if (expired) {
+        stats.removed += 1;
+        await execute('DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
+      } else {
+        stats.failed += 1;
+        await execute('UPDATE push_subscriptions SET failure_count = failure_count + 1, last_error = ? WHERE id = ?', [text.slice(0, 160), sub.id]);
+        await execute('DELETE FROM push_subscriptions WHERE id = ? AND failure_count >= ?', [sub.id, MAX_FAILURES]);
+      }
+      await logAttempt({ employeeId: sub.employee_id, channel: 'webpush', targetId: sub.id, kind, ref, status: expired ? 'expired' : 'failed', httpStatus: statusCode, error: text });
+    }
+  });
+  return stats;
+}
+
+async function sendFcmAll(
+  targets: FcmTarget[],
+  kind: string,
+  ref: string,
+  build: (target: FcmTarget) => FcmMessage,
+): Promise<Stats> {
+  const stats: Stats = { sent: 0, failed: 0, removed: 0 };
+  await inBatches(targets, CONCURRENCY, async (t) => {
+    const outcome = await sendFcm(t.token, build(t));
+    if (outcome.status === 'sent') {
+      stats.sent += 1;
+      await execute('UPDATE push_device_tokens SET failure_count = 0, last_error = NULL, last_sent_at = NOW(3) WHERE id = ?', [t.id]);
+      await logAttempt({ employeeId: t.employee_id, channel: 'fcm', targetId: t.id, kind, ref, status: 'sent', httpStatus: 200 });
+      return;
+    }
+    if (outcome.status === 'invalid_token') {
+      stats.removed += 1;
+      await execute('DELETE FROM push_device_tokens WHERE id = ?', [t.id]);
+    } else {
+      stats.failed += 1;
+      await execute('UPDATE push_device_tokens SET failure_count = failure_count + 1, last_error = ? WHERE id = ?', [outcome.error.slice(0, 160), t.id]);
+      if (outcome.status === 'failed') {
+        await execute('DELETE FROM push_device_tokens WHERE id = ? AND failure_count >= ?', [t.id, MAX_FAILURES]);
+      }
+    }
+    await logAttempt({
+      employeeId: t.employee_id, channel: 'fcm', targetId: t.id, kind, ref,
+      status: outcome.status === 'invalid_token' ? 'expired' : 'failed', error: outcome.error,
+    });
+  });
+  return stats;
+}
+
+async function unreadBadges(employeeIds: number[]): Promise<Map<number, number>> {
+  if (employeeIds.length === 0) return new Map();
+  const unread = await query<{ employee_id: number; total: number }>(
+    `SELECT employee_id, COUNT(*) AS total FROM notification_recipients
+     WHERE read_at IS NULL AND employee_id IN (?) GROUP BY employee_id`,
+    [employeeIds],
+  );
+  return new Map(unread.map((u) => [Number(u.employee_id), Number(u.total)]));
 }
 
 export class PushService {
@@ -88,6 +320,7 @@ export class PushService {
        ON DUPLICATE KEY UPDATE
          employee_id = VALUES(employee_id), session_id = VALUES(session_id), platform = VALUES(platform),
          device_name = VALUES(device_name), app_version = VALUES(app_version),
+         keep_after_logout = 0, signed_out_at = NULL,
          failure_count = 0, last_error = NULL, updated_at = NOW(3)`,
       [
         user.id,
@@ -100,16 +333,74 @@ export class PushService {
     );
   }
 
+  /**
+   * Registers a browser / PWA Web Push subscription. One row per endpoint; the
+   * endpoint moves to whoever signs in on that browser. `clientDeviceId` is a
+   * stable random id kept in the browser so a user can see and remove devices.
+   */
+  static async registerWebSubscription(
+    user: AuthUser,
+    input: { endpoint: string; p256dh: string; auth: string; clientDeviceId?: string; platform?: string; userAgent?: string },
+  ): Promise<void> {
+    // A browser that re-subscribed (new endpoint) must not leave its old endpoint behind.
+    if (input.clientDeviceId) {
+      await execute('DELETE FROM push_subscriptions WHERE client_device_id = ? AND endpoint <> ?', [input.clientDeviceId, input.endpoint]);
+    }
+    await execute(
+      `INSERT INTO push_subscriptions
+         (employee_id, device_id, client_device_id, session_id, endpoint, p256dh, auth, platform, user_agent, keep_after_logout)
+       VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, 1)
+       ON DUPLICATE KEY UPDATE
+         employee_id = VALUES(employee_id), client_device_id = VALUES(client_device_id), session_id = VALUES(session_id),
+         p256dh = VALUES(p256dh), auth = VALUES(auth), platform = VALUES(platform), user_agent = VALUES(user_agent),
+         keep_after_logout = 1, signed_out_at = NULL, failure_count = 0, last_error = NULL, updated_at = NOW(3)`,
+      [
+        user.id,
+        input.clientDeviceId?.slice(0, 64) ?? null,
+        user.sessionId || null,
+        input.endpoint,
+        input.p256dh,
+        input.auth,
+        input.platform?.slice(0, 24) ?? null,
+        input.userAgent?.slice(0, 255) ?? null,
+      ],
+    );
+  }
+
   /** Removes a token (logout, permission withdrawn). Only the owner can remove it. */
   static async unregisterDevice(employeeId: number, token: string): Promise<number> {
     const result = await execute('DELETE FROM push_device_tokens WHERE employee_id = ? AND token = ?', [employeeId, token]);
     return result.affectedRows;
   }
 
-  /** Removes every token registered by a login session (called on logout). */
-  static async unregisterSession(sessionId: number): Promise<void> {
+  /**
+   * Sign-out of a login session. With keep=true (the default the user sees at
+   * sign-out) the session's devices stay registered and keep ringing for calls
+   * and messages; with keep=false they are removed.
+   */
+  static async signOutSession(sessionId: number, keep: boolean): Promise<void> {
     if (!sessionId) return;
-    await execute('DELETE FROM push_device_tokens WHERE session_id = ?', [sessionId]);
+    if (keep) {
+      await execute('UPDATE push_device_tokens SET keep_after_logout = 1, signed_out_at = NOW(3) WHERE session_id = ?', [sessionId]);
+      await execute('UPDATE push_subscriptions SET keep_after_logout = 1, signed_out_at = NOW(3) WHERE session_id = ?', [sessionId]);
+    } else {
+      await execute('DELETE FROM push_device_tokens WHERE session_id = ?', [sessionId]);
+      await execute('DELETE FROM push_subscriptions WHERE session_id = ?', [sessionId]);
+    }
+  }
+
+  /** Website sign-out: the browser names its own endpoint, which may predate the session link. */
+  static async signOutWebEndpoint(employeeId: number, endpoint: string, keep: boolean): Promise<void> {
+    if (keep) {
+      await execute('UPDATE push_subscriptions SET keep_after_logout = 1, signed_out_at = NOW(3) WHERE employee_id = ? AND endpoint = ?', [employeeId, endpoint]);
+    } else {
+      await execute('DELETE FROM push_subscriptions WHERE employee_id = ? AND endpoint = ?', [employeeId, endpoint]);
+    }
+  }
+
+  /** Kept for callers of the previous API: removes every token of a session. */
+  static async unregisterSession(sessionId: number): Promise<void> {
+    await PushService.signOutSession(sessionId, false);
   }
 
   static async devices(employeeId: number) {
@@ -154,184 +445,177 @@ export class PushService {
     return PushService.preferences(employeeId);
   }
 
+  /** The service worker confirms it displayed a push. Unauthenticated: the random token is the credential. */
+  static async acknowledge(ackToken: string): Promise<boolean> {
+    if (!/^[a-f0-9]{32}$/.test(ackToken)) return false;
+    const result = await execute(
+      "UPDATE push_delivery_log SET status = 'delivered', delivered_at = NOW(3) WHERE ack_token = ? AND status = 'sent'",
+      [ackToken],
+    );
+    return result.affectedRows > 0;
+  }
+
+  /** Recent delivery attempts for one employee (debugging screen / support). */
+  static async deliveryLog(employeeId: number, limit = 50) {
+    const rows = await query<{ id: number; channel: string; target_id: number; kind: string; ref: string | null; status: string; http_status: number | null; error: string | null; created_at: string; delivered_at: string | null }>(
+      `SELECT id, channel, target_id, kind, ref, status, http_status, error, created_at, delivered_at
+       FROM push_delivery_log WHERE employee_id = ? ORDER BY id DESC LIMIT ${Math.min(200, Math.max(1, Math.floor(limit)))}`,
+      [employeeId],
+    );
+    return rows.map((r) => ({
+      id: Number(r.id), channel: r.channel, targetId: Number(r.target_id), kind: r.kind, ref: r.ref,
+      status: r.status, httpStatus: r.http_status, error: r.error, createdAt: r.created_at, deliveredAt: r.delivered_at,
+    }));
+  }
+
+  /** Keeps the delivery log bounded. */
+  static async pruneLog(days = 30): Promise<number> {
+    const result = await execute('DELETE FROM push_delivery_log WHERE created_at < DATE_SUB(NOW(3), INTERVAL ? DAY)', [days]);
+    return result.affectedRows;
+  }
+
   /**
-   * Pushes one notification to the recipients' phones and desktop browsers. Never throws: the
+   * Pushes one notification to the recipients' phones and browsers. Never throws: the
    * notification is already stored and visible in the app, push is best effort.
    */
-  static async deliver(employeeIds: number[], payload: PushPayload): Promise<{ sent: number; failed: number; removed: number }> {
-    // Deliver to web push subscribers (Windows desktop / browsers) in parallel
-    void PushService.deliverWebPush(employeeIds, payload);
-
-    const stats = { sent: 0, failed: 0, removed: 0 };
+  static async deliver(employeeIds: number[], payload: PushPayload): Promise<Stats> {
+    const total: Stats = { sent: 0, failed: 0, removed: 0 };
     try {
-      if (!fcmConfigured() || employeeIds.length === 0) return stats;
       const category = categoryOf(payload.type);
+      const recipients = await unmuted([...new Set(employeeIds)], category);
+      if (recipients.length === 0) return total;
 
-      let recipients = employeeIds;
-      if (category !== 'security') {
-        const muted = await query<{ employee_id: number }>(
-          'SELECT employee_id FROM notification_preferences WHERE category = ? AND push_enabled = 0 AND employee_id IN (?)',
-          [category, recipients],
-        );
-        const mutedIds = new Set(muted.map((m) => Number(m.employee_id)));
-        recipients = recipients.filter((id) => !mutedIds.has(id));
-      }
-      if (recipients.length === 0) return stats;
-
-      const tokens = await query<{ id: number; employee_id: number; token: string }>(
-        `SELECT t.id, t.employee_id, t.token
-         FROM push_device_tokens t
-         JOIN employee_sessions s ON s.id = t.session_id AND s.revoked_at IS NULL AND s.expires_at > NOW(3)
-         JOIN employees e ON e.id = t.employee_id AND e.status = 'active'
-         WHERE t.employee_id IN (?)`,
-        [recipients],
-      );
-      if (tokens.length === 0) return stats;
-
-      const unread = await query<{ employee_id: number; total: number }>(
-        `SELECT employee_id, COUNT(*) AS total FROM notification_recipients
-         WHERE read_at IS NULL AND employee_id IN (?) GROUP BY employee_id`,
-        [[...new Set(tokens.map((t) => Number(t.employee_id)))]],
-      );
-      const badge = new Map(unread.map((u) => [Number(u.employee_id), Number(u.total)]));
-
+      const isChat = category === 'chat';
       const urgent = payload.priority === 'high' || payload.priority === 'critical';
-      const channel: FcmMessage['channel'] =
-        category === 'chat' ? 'chat' : payload.type.endsWith('_call') ? 'calls' : urgent || category === 'security' ? 'urgent' : 'general';
-      const base: Omit<FcmMessage, 'badge'> = {
-        title: payload.title,
-        body: payload.body,
+      const link = safeDeepLink(payload.link);
+      const tag = isChat && payload.conversationId ? `chat-${payload.conversationId}` : `notif-${payload.notificationId}`;
+      const ref = isChat && payload.conversationId ? `chat:${payload.conversationId}` : `notif:${payload.notificationId}`;
+      const privateTitle = isChat ? (payload.senderName ?? 'New message') : payload.title;
+      const privateBody = isChat ? 'New message · sign in to read it' : 'Sign in to view this update';
+
+      const [web, fcm, badges] = await Promise.all([
+        webTargets(recipients),
+        fcmTargets(recipients),
+        unreadBadges(recipients),
+      ]);
+
+      const webStats = await sendWeb(
+        web,
+        isChat ? 'chat' : 'notification',
+        ref,
+        (t) => ({
+          v: 2,
+          kind: isChat ? 'chat' : 'notification',
+          title: t.signed_in ? payload.title : privateTitle,
+          body: t.signed_in ? (payload.body ?? '') : privateBody,
+          tag,
+          link,
+          icon: '/icons/icon-192.png',
+          urgent: urgent || isChat,
+          data: {
+            notificationId: payload.notificationId,
+            type: payload.type,
+            category,
+            conversationId: payload.conversationId ?? null,
+            badge: badges.get(Number(t.employee_id)) ?? null,
+          },
+        }),
+        // Chat is time-sensitive (urgency high wakes Android from Doze); stale chat pushes expire after a day.
+        { ttl: 86400, urgency: urgent || isChat ? 'high' : 'normal' },
+      );
+
+      const channel: FcmMessage['channel'] = isChat ? 'chat' : urgent || category === 'security' ? 'urgent' : 'general';
+      const fcmStats = await sendFcmAll(fcm, isChat ? 'chat' : 'notification', ref, (t) => ({
+        title: t.signed_in ? payload.title : privateTitle,
+        body: t.signed_in ? payload.body : privateBody,
         channel,
         priority: urgent || channel !== 'general' ? 'high' : 'normal',
-        tag: category === 'chat' ? `chat:${safeDeepLink(payload.link)}` : undefined,
-        data: {
-          notificationId: String(payload.notificationId),
-          type: payload.type,
-          category,
-          link: safeDeepLink(payload.link),
-        },
-      };
+        tag: isChat ? tag : undefined,
+        badge: badges.get(Number(t.employee_id)) ?? undefined,
+        data: { notificationId: String(payload.notificationId), type: payload.type, category, link },
+      }));
 
-      await inBatches(tokens, CONCURRENCY, async (t) => {
-        const outcome = await sendFcm(t.token, { ...base, badge: badge.get(Number(t.employee_id)) ?? undefined });
-        if (outcome.status === 'sent') {
-          stats.sent += 1;
-          await execute('UPDATE push_device_tokens SET failure_count = 0, last_error = NULL, last_sent_at = NOW(3) WHERE id = ?', [t.id]);
-        } else if (outcome.status === 'invalid_token') {
-          stats.removed += 1;
-          await execute('DELETE FROM push_device_tokens WHERE id = ?', [t.id]);
-        } else {
-          stats.failed += 1;
-          await execute(
-            'UPDATE push_device_tokens SET failure_count = failure_count + 1, last_error = ? WHERE id = ?',
-            [outcome.error.slice(0, 160), t.id],
-          );
-          if (outcome.status === 'failed') {
-            await execute('DELETE FROM push_device_tokens WHERE id = ? AND failure_count >= ?', [t.id, MAX_FAILURES]);
-          }
-        }
-      });
-      if (stats.failed > 0 || stats.removed > 0) {
-        console.warn(`[push] notification ${payload.notificationId}: ${stats.sent} sent, ${stats.failed} failed, ${stats.removed} stale tokens removed`);
+      for (const s of [webStats, fcmStats]) {
+        total.sent += s.sent; total.failed += s.failed; total.removed += s.removed;
+      }
+      if (total.failed > 0 || total.removed > 0) {
+        console.warn(`[push] ${ref}: ${total.sent} sent, ${total.failed} failed, ${total.removed} expired subscriptions removed`);
       }
     } catch (error) {
       console.error('[push] delivery error', (error as Error).message);
     }
-    return stats;
+    return total;
   }
 
   /**
-   * Pushes notification via Web Push (VAPID) to desktop browsers and web users.
+   * Call pushes go to EVERY device of the callee, whether or not the callee has a
+   * socket open: a socket can be alive in a frozen background tab that will never
+   * play a ringtone. The service worker shows the ring, and closes / replaces it
+   * on cancel or missed (same tag).
    */
-  static async deliverWebPush(employeeIds: number[], payload: PushPayload): Promise<{ sent: number; failed: number; removed: number }> {
-    const stats = { sent: 0, failed: 0, removed: 0 };
+  static async sendCall(calleeId: number, kind: CallPushKind, info: CallPushInfo): Promise<Stats> {
+    const total: Stats = { sent: 0, failed: 0, removed: 0 };
     try {
-      if (!config.vapidPublicKey || !config.vapidPrivateKey || employeeIds.length === 0) return stats;
-      const category = categoryOf(payload.type);
+      const recipients = await unmuted([calleeId], 'meetings');
+      if (recipients.length === 0) return total;
+      const [web, fcm] = await Promise.all([webTargets(recipients), kind === 'call_cancel' ? Promise.resolve([]) : fcmTargets(recipients)]);
+      const tag = `call-${info.callId}`;
+      const label = info.type === 'video' ? 'video' : 'voice';
+      const title = kind === 'call_ring' ? `${info.callerName}` : kind === 'call_missed' ? `Missed ${label} call` : 'Call ended';
+      const body = kind === 'call_ring'
+        ? `Incoming ${label} call · tap to answer`
+        : kind === 'call_missed' ? `Missed call from ${info.callerName}` : '';
+      const ringTtl = info.expiresAt ? Math.max(5, Math.ceil((info.expiresAt - Date.now()) / 1000)) : 45;
+      const link = kind === 'call_ring' ? `/calls?incoming=${encodeURIComponent(info.callId)}` : '/calls';
 
-      let recipients = employeeIds;
-      if (category !== 'security') {
-        const muted = await query<{ employee_id: number }>(
-          'SELECT employee_id FROM notification_preferences WHERE category = ? AND push_enabled = 0 AND employee_id IN (?)',
-          [category, recipients],
-        );
-        const mutedIds = new Set(muted.map((m) => Number(m.employee_id)));
-        recipients = recipients.filter((id) => !mutedIds.has(id));
-      }
-      if (recipients.length === 0) return stats;
-
-      const subscriptions = await query<{
-        id: number;
-        employee_id: number;
-        endpoint: string;
-        p256dh: string;
-        auth: string;
-      }>(
-        `SELECT s.id, s.employee_id, s.endpoint, s.p256dh, s.auth
-         FROM push_subscriptions s
-         JOIN employees e ON e.id = s.employee_id AND e.status = 'active'
-         WHERE s.employee_id IN (?)`,
-        [recipients],
+      const webStats = await sendWeb(
+        web,
+        kind,
+        `call:${info.callId}`,
+        () => ({
+          v: 2,
+          kind,
+          title,
+          body,
+          tag,
+          link,
+          icon: info.callerPhoto && info.callerPhoto.startsWith('/') ? info.callerPhoto : '/icons/icon-192.png',
+          urgent: kind !== 'call_cancel',
+          data: { type: kind, callId: info.callId },
+          call: {
+            callId: info.callId,
+            type: info.type,
+            callerId: info.callerId,
+            callerName: info.callerName,
+            expiresAt: info.expiresAt ?? null,
+            attempt: info.attempt ?? 1,
+            actionToken: callActionToken(info.callId, calleeId),
+          },
+        }),
+        // A ring that is not delivered before the call times out must never show up later.
+        kind === 'call_ring'
+          ? { ttl: ringTtl, urgency: 'high', topic: info.callId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) }
+          : { ttl: kind === 'call_missed' ? 86400 : 60, urgency: 'high', topic: info.callId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) },
       );
-      if (subscriptions.length === 0) return stats;
 
-      try {
-        webpush.setVapidDetails(
-          `mailto:${config.smtp.from.replace(/.*<([^>]+)>.*/, '$1') || 'admin@bsctextiles.in'}`,
-          config.vapidPublicKey,
-          config.vapidPrivateKey,
-        );
-      } catch {
-        /* vapid already set or valid */
+      const fcmStats = await sendFcmAll(fcm, kind, `call:${info.callId}`, () => ({
+        title: kind === 'call_ring' ? `Incoming ${label} call` : title,
+        body: kind === 'call_ring' ? `${info.callerName} is calling you` : body,
+        channel: 'calls',
+        priority: 'high',
+        tag,
+        ttlSeconds: kind === 'call_ring' ? ringTtl : 86400,
+        data: { type: kind === 'call_ring' ? 'incoming_call' : 'missed_call', callId: info.callId, callType: info.type, link },
+      }));
+      for (const s of [webStats, fcmStats]) {
+        total.sent += s.sent; total.failed += s.failed; total.removed += s.removed;
       }
-
-      const urgent = payload.priority === 'high' || payload.priority === 'critical' || payload.type.endsWith('_call') || payload.type.startsWith('call');
-      const bodyJson = JSON.stringify({
-        title: payload.title,
-        body: payload.body ?? '',
-        icon: '/icons/icon-192.png',
-        badge: '/icons/badge-72.png',
-        tag: `notif_${payload.notificationId}`,
-        data: {
-          notificationId: payload.notificationId,
-          type: payload.type,
-          link: safeDeepLink(payload.link),
-          category,
-        },
-        requireInteraction: urgent,
-        vibrate: urgent ? [300, 150, 300, 150, 300] : [200, 100, 200],
-        actions: [
-          { action: 'open', title: 'Open' },
-          { action: 'dismiss', title: 'Dismiss' },
-        ],
-      });
-
-      await inBatches(subscriptions, CONCURRENCY, async (sub) => {
-        try {
-          await webpush.sendNotification(
-            {
-              endpoint: sub.endpoint,
-              keys: { p256dh: sub.p256dh, auth: sub.auth },
-            },
-            bodyJson,
-            { TTL: 86400, urgency: urgent ? 'high' : 'normal' }
-          );
-          stats.sent += 1;
-        } catch (error: any) {
-          if (error.statusCode === 410 || error.statusCode === 404) {
-            stats.removed += 1;
-            await execute('DELETE FROM push_subscriptions WHERE id = ?', [sub.id]);
-          } else {
-            stats.failed += 1;
-          }
-        }
-      });
-      if (stats.sent > 0) {
-        console.log(`[push:web] notification ${payload.notificationId}: ${stats.sent} web push sent`);
+      if (kind === 'call_ring' && (info.attempt ?? 1) === 1 && total.sent === 0) {
+        console.warn(`[push] call ${info.callId}: callee ${calleeId} has no push-capable device (subscribe the phone in the app)`);
       }
     } catch (error) {
-      console.error('[push:web] delivery error', (error as Error).message);
+      console.error('[push] call push error', (error as Error).message);
     }
-    return stats;
+    return total;
   }
 }

@@ -33,6 +33,8 @@ export interface FcmMessage {
   tag?: string;
   /** iOS app-icon badge (unread count). */
   badge?: number;
+  /** Seconds FCM keeps an undelivered message. Calls use ~40 s so a phone that comes online late never rings for a dead call. */
+  ttlSeconds?: number;
 }
 
 export type FcmOutcome =
@@ -129,12 +131,16 @@ function buildBody(token: string, message: FcmMessage) {
       data: message.data,
       android: {
         priority: message.priority === 'high' ? 'HIGH' : 'NORMAL',
-        // Undelivered notifications are dropped after a day rather than arriving stale.
-        ttl: '86400s',
+        // Undelivered notifications are dropped (default: after a day) rather than arriving stale.
+        ttl: `${Math.max(0, Math.floor(message.ttlSeconds ?? 86400))}s`,
         notification: { channel_id: message.channel, tag: message.tag, default_sound: true },
       },
       apns: {
-        headers: { 'apns-priority': message.priority === 'high' ? '10' : '5', ...(message.tag ? { 'apns-collapse-id': message.tag.slice(0, 64) } : {}) },
+        headers: {
+          'apns-priority': message.priority === 'high' ? '10' : '5',
+          ...(message.ttlSeconds !== undefined ? { 'apns-expiration': String(Math.floor(Date.now() / 1000) + Math.floor(message.ttlSeconds)) } : {}),
+          ...(message.tag ? { 'apns-collapse-id': message.tag.slice(0, 64) } : {}),
+        },
         payload: { aps: { sound: 'default', ...(message.badge !== undefined ? { badge: message.badge } : {}), ...(message.tag ? { 'thread-id': message.tag } : {}) } },
       },
     },

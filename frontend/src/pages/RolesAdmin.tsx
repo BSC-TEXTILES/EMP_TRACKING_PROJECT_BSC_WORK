@@ -134,7 +134,13 @@ export default function RolesAdmin() {
   const [migrationRoleId, setMigrationRoleId] = useState<string>('');
   const [roleForm, setRoleForm] = useState({ name: '', slug: '', level: 40, description: '' });
 
-  const canManage = has('roles.manage') || has('org.manage') || user?.roleSlug === 'super_admin' || (user?.roleLevel ?? 0) >= 90;
+  const canManage =
+    has('roles.manage') ||
+    has('roles.edit') ||
+    has('roles.create') ||
+    has('org.manage') ||
+    user?.roleSlug === 'super_admin' ||
+    (user?.roleLevel ?? 0) >= 60;
 
   const loadData = async () => {
     try {
@@ -146,7 +152,11 @@ export default function RolesAdmin() {
       setPermissions(roleData.permissions);
       if (locData.locations?.length) setLocations(locData.locations);
 
-      if (selectedRoleId === null && roleData.roles.length > 0) {
+      const roleParam = new URLSearchParams(window.location.search).get('role');
+      const targetRole = roleParam ? roleData.roles.find((r) => String(r.id) === roleParam || r.slug === roleParam) : null;
+      if (targetRole) {
+        setSelectedRoleId(targetRole.id);
+      } else if (selectedRoleId === null && roleData.roles.length > 0) {
         setSelectedRoleId(roleData.roles[0].id);
       }
     } catch (caught) {

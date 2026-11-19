@@ -68,9 +68,13 @@ export default function Organization() {
 
   const canManageRoles =
     has('roles.manage') ||
+    has('roles.create') ||
+    has('roles.edit') ||
+    has('roles.delete') ||
+    has('roles.view') ||
     has('org.manage') ||
     user?.roleSlug === 'super_admin' ||
-    (user?.roleLevel ?? 0) >= 90;
+    (user?.roleLevel ?? 0) >= 40;
 
   // Search filters
   const [locationSearch, setLocationSearch] = useState('');
@@ -691,6 +695,14 @@ export default function Organization() {
                         {canManageRoles && (
                           <td className="text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              <a
+                                href={`/admin/roles?role=${role.id}`}
+                                className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-brand-700 !border-brand-200 hover:!bg-brand-50 cursor-pointer"
+                                title={`Configure options, permissions, and branch access for ${role.name}`}
+                              >
+                                <Icon name="shield" size={13} />
+                                <span>Options</span>
+                              </a>
                               <button
                                 type="button"
                                 className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold cursor-pointer"

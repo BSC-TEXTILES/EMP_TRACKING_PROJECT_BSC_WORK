@@ -53,15 +53,22 @@ export class NotificationService {
             read: false,
         };
         emitToEmployees(recipients, 'notification:new', payload);
-        // Phone push (Android / iOS app). Best effort, never blocks or fails the caller.
-        void PushService.deliver(recipients, {
-            notificationId,
-            type: input.type,
-            title: input.title,
-            body: input.body ?? null,
-            link: input.link ?? null,
-            priority: input.priority ?? 'normal',
-        });
+        // Phone / browser push. Best effort, never blocks or fails the caller.
+        if (!input.skipPush) {
+            const pushTo = input.pushRecipients ? recipients.filter((id) => input.pushRecipients.includes(id)) : recipients;
+            if (pushTo.length > 0) {
+                void PushService.deliver(pushTo, {
+                    notificationId,
+                    type: input.type,
+                    title: input.title,
+                    body: input.body ?? null,
+                    link: input.link ?? null,
+                    priority: input.priority ?? 'normal',
+                    conversationId: input.push?.conversationId,
+                    senderName: input.push?.senderName,
+                });
+            }
+        }
         // Email is queued after the notification is durable. A mail failure never
         // affects the business transaction that produced this notification.
         void EmailService.notifyRecipients(recipients, {

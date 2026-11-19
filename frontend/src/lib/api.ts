@@ -157,7 +157,13 @@ async function request<T>(path: string, options: RequestInit = {}, retried = fal
     else if (path === '/auth/login/otp/verify') url = '/auth/mobile/login/otp/verify';
     else if (path === '/auth/logout') {
       url = '/auth/mobile/logout';
-      options = { ...options, body: JSON.stringify({ refreshToken: nativeTokens()?.refreshToken }) };
+      let extra: Record<string, unknown> = {};
+      try {
+        extra = typeof options.body === 'string' ? JSON.parse(options.body) : {};
+      } catch {
+        extra = {};
+      }
+      options = { ...options, body: JSON.stringify({ keepNotifications: extra.keepNotifications !== false, refreshToken: nativeTokens()?.refreshToken }) };
     } else if (!publicAuth || path === '/auth/mobile/media-token') {
       await ensureFreshAccess().catch(() => undefined);
     }

@@ -16,6 +16,8 @@ interface CallRecord {
   type: 'audio' | 'video';
   direction: 'incoming' | 'outgoing';
   status: 'completed' | 'missed' | 'declined' | 'busy' | 'failed' | 'ringing' | 'active';
+  /** no_answer | cancelled | declined | busy | completed | disconnected | failed */
+  endReason?: string | null;
   duration: number;
   participant: {
     id: number;
@@ -52,6 +54,17 @@ const STATUS_LABEL: Record<string, string> = {
   ringing: 'Ringing',
   active: 'In progress',
 };
+
+/** What happened, from this user's side of the call. */
+function statusLabel(record: CallRecord): string {
+  const outgoing = record.direction === 'outgoing';
+  if (record.status === 'missed') {
+    if (!outgoing) return 'Missed';
+    return record.endReason === 'cancelled' ? 'Cancelled' : 'No answer';
+  }
+  if (record.status === 'completed' && record.endReason === 'disconnected') return 'Dropped';
+  return STATUS_LABEL[record.status] ?? record.status;
+}
 
 function statusTone(status: string): 'success' | 'danger' | 'warning' | 'neutral' {
   if (status === 'completed' || status === 'active') return 'success';
@@ -108,6 +121,17 @@ export default function CallsPage() {
       setLoading(false);
     }
   }, []);
+
+  /** Soft delete for this user only; the other participant's history is untouched. */
+  const deleteRecord = useCallback(async (record: CallRecord) => {
+    if (!window.confirm(`Delete this call with ${record.participant.name} from your history?`)) return;
+    try {
+      await api.del(`/calls/history/${encodeURIComponent(record.callId)}`);
+      setRecords((previous) => previous.filter((item) => item.callId !== record.callId));
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  }, [toast]);
 
   const loadContacts = useCallback(async () => {
     try {
@@ -249,7 +273,7 @@ export default function CallsPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="truncate font-medium text-ink-900">{record.participant.name}</p>
                         <Badge tone={statusTone(record.status)} className="px-2 py-0.5 text-xs">
-                          {STATUS_LABEL[record.status] ?? record.status}
+                          {statusLabel(record)}
                         </Badge>
                         <span className="text-[11px] text-ink-400">
                           {record.direction === 'incoming' ? 'Incoming' : 'Outgoing'}
@@ -289,6 +313,16 @@ export default function CallsPage() {
                         aria-label={`Video call ${record.participant.name}`}
                       >
                         <Icon name="video" size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm h-8 w-8 p-0 text-ink-500 hover:text-red-600"
+                        onClick={() => void deleteRecord(record)}
+                        disabled={record.status === 'ringing' || record.status === 'active'}
+                        aria-label={`Delete call with ${record.participant.name} from your history`}
+                        title="Delete from my history (the other person keeps theirs)"
+                      >
+                        <Icon name="trash" size={14} />
                       </button>
                     </div>
                   </div>

@@ -3,7 +3,7 @@ import { recordAudit } from '../lib/audit.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
 import { idsFilterSql, locationEmployeeIds } from '../lib/scope.js';
-import { emitToConversation, emitToEmployee, emitToEmployees, isOnline, joinConversationRoom } from '../realtime/io.js';
+import { emitToConversation, emitToEmployee, emitToEmployees, hasVisibleClient, isOnline, joinConversationRoom } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 function mapMessage(r, attachments = [], reactions = [], receipts = { recipientCount: 0, readCount: 0 }) {
     return {
@@ -236,8 +236,9 @@ export class ChatService {
     static async messages(conversationId, employeeId, options = {}) {
         await ChatService.assertMember(conversationId, employeeId);
         const limit = Math.min(100, Math.max(5, options.limit ?? 40));
-        const clauses = ['m.conversation_id = ?'];
-        const params = [conversationId];
+        // Messages this employee deleted "for me" stay in the database and for everyone else.
+        const clauses = ['m.conversation_id = ?', 'NOT EXISTS (SELECT 1 FROM message_hidden mh WHERE mh.message_id = m.id AND mh.employee_id = ?)'];
+        const params = [conversationId, employeeId];
         const state = await ChatService.userState(conversationId, employeeId);
         if (state?.cleared_at) {
             clauses.push('m.created_at > ?');
@@ -381,17 +382,24 @@ export class ChatService {
         if (created.inserted) {
             emitToConversation(conversationId, 'message:new', payload);
             const others = await query('SELECT cm.employee_id, cm.is_muted FROM conversation_members cm WHERE cm.conversation_id = ? AND cm.employee_id <> ?', [conversationId, sender.id]);
-            const offline = others
-                .filter((m) => !isOnline(Number(m.employee_id)) && !m.is_muted)
+            // Push to every member who is not looking at the app right now. Previously only members
+            // with NO socket got a push, so a phone with the PWA in the background (socket still
+            // open) or a second browser tab left open on a desktop silenced the phone completely.
+            const away = others
+                .filter((m) => !m.is_muted && !hasVisibleClient(Number(m.employee_id)))
                 .map((m) => Number(m.employee_id));
-            if (offline.length > 0) {
+            if (away.length > 0) {
+                const preview = body
+                    ? body.slice(0, 160)
+                    : type === 'image' ? '📷 Photo' : type === 'voice' ? '🎤 Voice message' : '📎 Attachment';
                 await NotificationService.notify({
-                    employeeIds: offline,
+                    employeeIds: away,
                     type: 'chat_message',
                     title: conversation.name ? `${sender.fullName} · ${conversation.name}` : sender.fullName,
-                    body: body.slice(0, 160) || `[${type}]`,
+                    body: preview,
                     link: `/chat?c=${conversationId}`,
                     actorId: sender.id,
+                    push: { conversationId, senderName: sender.fullName },
                 });
             }
         }
@@ -456,6 +464,18 @@ export class ChatService {
             entityId: messageId,
             before: { senderId: Number(message.sender_id) },
         });
+    }
+    /**
+     * "Delete for me": hides one message for this employee only. The message, its
+     * attachments and the other participants' view are untouched.
+     */
+    static async hideMessage(messageId, employeeId) {
+        const message = await queryOne('SELECT conversation_id FROM messages WHERE id = ?', [messageId]);
+        if (!message)
+            throw ApiError.notFound('Message not found');
+        await ChatService.assertMember(Number(message.conversation_id), employeeId);
+        await execute('INSERT IGNORE INTO message_hidden (message_id, employee_id) VALUES (?, ?)', [messageId, employeeId]);
+        emitToEmployee(employeeId, 'message:hidden', { messageId, conversationId: Number(message.conversation_id) });
     }
     static async react(messageId, employeeId, emoji) {
         const message = await queryOne('SELECT conversation_id FROM messages WHERE id = ?', [messageId]);

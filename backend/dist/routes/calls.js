@@ -8,6 +8,30 @@ import { emitToEmployees } from '../realtime/io.js';
 import { toIso } from '../lib/dates.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { EmployeeService } from '../services/EmployeeService.js';
+import { verifyCallActionToken } from '../services/PushService.js';
+import { RING_TIMEOUT_SECONDS, endActiveCall, endRingingCall, loadCall, onAccepted, startRinging, } from '../services/CallService.js';
+/**
+ * Endpoints the service worker calls from a notification action. They work
+ * without a session (the phone may be signed out, and a worker request may not
+ * carry the cookie): the HMAC action token in the push payload is bound to one
+ * call and one callee, and only allows ending a call that is still ringing.
+ */
+export const callsPublicRouter = Router();
+callsPublicRouter.post('/push-action', asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({
+        callId: z.string().min(3).max(80),
+        token: z.string().min(20).max(64),
+        action: z.enum(['decline', 'missed']),
+    }), req.body);
+    const call = await loadCall(body.callId);
+    if (!call || !verifyCallActionToken(call.call_id, Number(call.callee_id), body.token)) {
+        throw ApiError.forbidden('Invalid call action.');
+    }
+    if (call.status === 'ringing') {
+        await endRingingCall(call, body.action === 'decline' ? 'declined' : 'missed', body.action === 'decline' ? 'declined' : 'no_answer');
+    }
+    res.json({ ok: true });
+}));
 export const callsRouter = Router();
 callsRouter.use(authenticate);
 export function rtcIceServers() {
@@ -25,30 +49,11 @@ export function rtcIceServers() {
     }
     return servers;
 }
-async function markCallNotificationRead(employeeId, callId) {
-    await execute(`UPDATE notification_recipients nr
-     JOIN notifications n ON n.id = nr.notification_id
-     SET nr.read_at = NOW(3)
-     WHERE nr.employee_id = ? AND n.dedupe_key IN (?, ?) AND nr.read_at IS NULL`, [employeeId, `call_${callId}`, `missed_${callId}`]);
-}
 async function activeCallForEmployee(employeeId) {
     return queryOne(`SELECT call_id, status, caller_id, callee_id FROM calls
      WHERE (caller_id = ? OR callee_id = ?)
        AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL 60 SECOND)))
      ORDER BY id DESC LIMIT 1`, [employeeId, employeeId]);
-}
-async function notifyMissedCall(call, actorId) {
-    const caller = await queryOne('SELECT full_name FROM employees WHERE id = ?', [call.caller_id]);
-    await NotificationService.notify({
-        employeeIds: [call.callee_id],
-        type: 'missed_call',
-        title: `Missed ${call.type} call`,
-        body: caller ? `Missed call from ${caller.full_name}` : 'You missed an incoming call',
-        link: '/calls',
-        priority: 'high',
-        actorId,
-        dedupeKey: `missed_${call.call_id}`,
-    });
 }
 /**
  * Get list of employees available for calling
@@ -88,7 +93,7 @@ callsRouter.get('/contacts', asyncHandler(async (req, res) => {
 callsRouter.get('/config', asyncHandler(async (_req, res) => {
     res.json({
         iceServers: rtcIceServers(),
-        ringTimeoutSeconds: 45,
+        ringTimeoutSeconds: RING_TIMEOUT_SECONDS,
         maxCallSeconds: 3600,
     });
 }));
@@ -146,8 +151,8 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
     const targetActive = await activeCallForEmployee(target.id);
     if (targetActive) {
         // Record the attempt so both histories show a busy call.
-        await execute(`INSERT INTO calls (call_id, caller_id, callee_id, type, status, direction, meeting_code, started_at, ended_at)
-         VALUES (?, ?, ?, ?, 'busy', 'outgoing', NULL, NOW(3), NOW(3))`, [`busy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, user.id, target.id, body.type]);
+        await execute(`INSERT INTO calls (call_id, caller_id, callee_id, type, status, end_reason, direction, meeting_code, started_at, ended_at)
+         VALUES (?, ?, ?, ?, 'busy', 'busy', 'outgoing', NULL, NOW(3), NOW(3))`, [`busy_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, user.id, target.id, body.type]);
         throw new ApiError(409, `${target.fullName} is on another call.`, 'busy');
     }
     const callId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
@@ -158,7 +163,7 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
          AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL 60 SECOND)))
        LIMIT 1`, [result.insertId, user.id, target.id, user.id, target.id]);
     if (contested) {
-        await execute("UPDATE calls SET status = 'busy', ended_at = NOW(3) WHERE id = ?", [result.insertId]);
+        await execute("UPDATE calls SET status = 'busy', end_reason = 'busy', ended_at = NOW(3) WHERE id = ?", [result.insertId]);
         throw new ApiError(409, `${target.fullName} is on another call.`, 'busy');
     }
     emitToEmployees([target.id], 'call:incoming', {
@@ -174,6 +179,7 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
         },
         type: body.type,
     });
+    // In-app record only; the phone / browser ring is the dedicated call push below.
     await NotificationService.notify({
         employeeIds: [target.id],
         type: 'incoming_call',
@@ -183,6 +189,17 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
         priority: 'high',
         actorId: user.id,
         dedupeKey: `call_${callId}`,
+        skipPush: true,
+    });
+    // High-priority push to ALL of the callee's devices, re-rung until answer / decline / timeout.
+    // Sent even when the callee is "online": a socket in a frozen background tab cannot ring.
+    await startRinging({
+        id: Number(result.insertId),
+        call_id: callId,
+        caller_id: user.id,
+        callee_id: target.id,
+        type: body.type,
+        status: 'ringing',
     });
     res.status(201).json({
         callId,
@@ -194,6 +211,45 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
             photoUrl: target.photoUrl,
             department: target.departmentName,
             designation: target.designationTitle,
+        },
+        iceServers: rtcIceServers(),
+        ringTimeoutSeconds: RING_TIMEOUT_SECONDS,
+    });
+}));
+/**
+ * The callee's ringing call, if any. The app asks on every (re)connect and when it
+ * comes back to the foreground, so a `call:incoming` socket event lost during a
+ * reconnect never means a silent phone.
+ */
+callsRouter.get('/pending', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const row = await queryOne(`SELECT c.call_id, c.type, c.started_at, c.caller_id, e.employee_code, e.full_name, e.photo_url,
+              d.name AS dept, dg.title AS desig, l.name AS loc
+       FROM calls c
+       JOIN employees e ON e.id = c.caller_id
+       LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
+       LEFT JOIN locations l ON l.id = e.location_id
+       WHERE c.callee_id = ? AND c.status = 'ringing' AND c.started_at > DATE_SUB(NOW(3), INTERVAL ? SECOND)
+       ORDER BY c.id DESC LIMIT 1`, [user.id, RING_TIMEOUT_SECONDS]);
+    if (!row) {
+        res.json({ call: null });
+        return;
+    }
+    res.json({
+        call: {
+            callId: row.call_id,
+            type: row.type,
+            startedAt: toIso(row.started_at),
+            caller: {
+                employeeId: Number(row.caller_id),
+                employeeCode: row.employee_code,
+                name: row.full_name,
+                photoUrl: row.photo_url,
+                department: row.dept,
+                designation: row.desig,
+                location: row.loc,
+            },
         },
         iceServers: rtcIceServers(),
     });
@@ -221,139 +277,79 @@ callsRouter.post('/:callId/accept', asyncHandler(async (req, res) => {
     if (accepted.affectedRows !== 1)
         throw new ApiError(409, 'Call is no longer ringing.', 'call_ended');
     emitToEmployees([call.caller_id], 'call:accepted', { callId });
-    await markCallNotificationRead(user.id, callId);
+    // Other devices of the callee stop ringing.
+    await onAccepted({ id: Number(call.id), call_id: callId, caller_id: Number(call.caller_id), callee_id: Number(call.callee_id), type: 'audio', status: 'active' });
     res.json({ ok: true });
 }));
-/**
- * Reject an incoming call
- */
+async function participantCall(callId, userId, role) {
+    const call = await loadCall(callId);
+    if (!call)
+        throw ApiError.notFound('Call not found');
+    const isCaller = Number(call.caller_id) === userId;
+    const isCallee = Number(call.callee_id) === userId;
+    if ((role === 'callee' && !isCallee) || (role === 'caller' && !isCaller) || (role === 'either' && !isCaller && !isCallee)) {
+        throw ApiError.forbidden('Not authorized for this call');
+    }
+    return call;
+}
+/** Callee declines (in-app button). */
 callsRouter.post('/:callId/reject', asyncHandler(async (req, res) => {
-    const user = currentUser(req);
-    const callId = req.params.callId;
-    const call = await queryOne('SELECT id, caller_id, callee_id, status FROM calls WHERE call_id = ?', [callId]);
-    if (!call)
-        throw ApiError.notFound('Call not found');
-    if (Number(call.callee_id) !== user.id)
-        throw ApiError.forbidden('Not authorized for this call');
-    if (call.status !== 'ringing') {
-        res.json({ ok: true });
-        return;
-    }
-    const changed = await execute("UPDATE calls SET status = 'declined', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
-    if (changed.affectedRows !== 1) {
-        res.json({ ok: true });
-        return;
-    }
-    emitToEmployees([call.caller_id], 'call:rejected', { callId });
-    await markCallNotificationRead(user.id, callId);
+    const call = await participantCall(String(req.params.callId), currentUser(req).id, 'callee');
+    if (call.status === 'ringing')
+        await endRingingCall(call, 'declined', 'declined');
     res.json({ ok: true });
 }));
-/**
- * Mark call as missed (from push notification close)
- */
+/** Callee's device gave up ringing without an answer (notification dismissed / timed out). */
 callsRouter.post('/missed', asyncHandler(async (req, res) => {
-    const user = currentUser(req);
     const body = parseBody(z.object({ callId: z.string().min(3).max(80) }), req.body);
-    const call = await queryOne('SELECT id, call_id, caller_id, callee_id, type, status FROM calls WHERE call_id = ?', [body.callId]);
-    if (!call)
-        throw ApiError.notFound('Call not found');
-    if (Number(call.callee_id) !== user.id)
-        throw ApiError.forbidden('Not authorized for this call');
-    if (call.status !== 'ringing') {
-        res.json({ ok: true });
-        return;
-    }
-    const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
-    if (changed.affectedRows !== 1) {
-        res.json({ ok: true });
-        return;
-    }
-    emitToEmployees([call.caller_id], 'call:missed', { callId: call.call_id });
-    await notifyMissedCall({ ...call, call_id: call.call_id }, user.id);
-    await markCallNotificationRead(user.id, call.call_id);
+    const call = await participantCall(body.callId, currentUser(req).id, 'callee');
+    if (call.status === 'ringing')
+        await endRingingCall(call, 'missed', 'no_answer');
     res.json({ ok: true });
 }));
-/**
- * Decline call from push notification (when app is in background)
- */
+/** Decline from a push notification action while signed in (the worker also has /push-action). */
 callsRouter.post('/decline', asyncHandler(async (req, res) => {
-    const user = currentUser(req);
     const body = parseBody(z.object({ callId: z.string().min(3).max(80) }), req.body);
-    const call = await queryOne('SELECT id, call_id, caller_id, callee_id, type, status FROM calls WHERE call_id = ?', [body.callId]);
-    if (!call || call.status !== 'ringing' || Number(call.callee_id) !== user.id) {
-        res.json({ ok: true });
-        return;
+    const call = await loadCall(body.callId);
+    if (call && call.status === 'ringing' && Number(call.callee_id) === currentUser(req).id) {
+        await endRingingCall(call, 'declined', 'declined');
     }
-    const changed = await execute("UPDATE calls SET status = 'declined', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
-    if (changed.affectedRows !== 1) {
-        res.json({ ok: true });
-        return;
-    }
-    emitToEmployees([call.caller_id], 'call:rejected', { callId: call.call_id });
-    await markCallNotificationRead(user.id, call.call_id);
     res.json({ ok: true });
 }));
-/**
- * Caller cancels an unanswered call (ring timeout).
- */
+/** Caller hangs up before an answer. The callee sees "Missed call from X". */
 callsRouter.post('/:callId/cancel', asyncHandler(async (req, res) => {
-    const user = currentUser(req);
-    const callId = req.params.callId;
-    const call = await queryOne('SELECT id, call_id, caller_id, callee_id, type, status FROM calls WHERE call_id = ?', [callId]);
-    if (!call)
-        throw ApiError.notFound('Call not found');
-    if (Number(call.caller_id) !== user.id)
-        throw ApiError.forbidden('Not authorized for this call');
-    if (call.status !== 'ringing') {
-        res.json({ ok: true });
-        return;
-    }
-    const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
-    if (changed.affectedRows !== 1) {
-        res.json({ ok: true });
-        return;
-    }
-    emitToEmployees([call.caller_id, call.callee_id], 'call:ended', { callId, reason: 'no_answer' });
-    await notifyMissedCall(call, user.id);
-    await markCallNotificationRead(user.id, callId);
+    const call = await participantCall(String(req.params.callId), currentUser(req).id, 'caller');
+    if (call.status === 'ringing')
+        await endRingingCall(call, 'missed', 'cancelled');
     res.json({ ok: true });
 }));
-/**
- * End an active call
- */
+/** Either side hangs up. Ringing calls become missed / declined, connected calls completed. */
 callsRouter.post('/:callId/end', asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    const callId = req.params.callId;
-    const call = await queryOne('SELECT id, call_id, caller_id, callee_id, type, status, accepted_at FROM calls WHERE call_id = ?', [callId]);
-    if (!call)
-        throw ApiError.notFound('Call not found');
-    if (Number(call.caller_id) !== user.id && Number(call.callee_id) !== user.id) {
-        throw ApiError.forbidden('Not authorized for this call');
-    }
-    if (['completed', 'declined', 'missed', 'busy', 'failed'].includes(call.status)) {
-        res.json({ ok: true, duration: 0 });
+    const call = await participantCall(String(req.params.callId), user.id, 'either');
+    if (call.status === 'ringing') {
+        const byCaller = Number(call.caller_id) === user.id;
+        await endRingingCall(call, byCaller ? 'missed' : 'declined', byCaller ? 'cancelled' : 'declined');
+        res.json({ ok: true, duration: 0, status: byCaller ? 'missed' : 'declined' });
         return;
     }
-    const status = call.status === 'ringing'
-        ? (Number(call.caller_id) === user.id ? 'missed' : 'declined')
-        : 'completed';
-    // Duration comes from database server timestamps, never a client or host-local clock.
-    const ended = await execute(`UPDATE calls SET status = ?, ended_at = NOW(3),
-              duration_seconds = IF(accepted_at IS NULL, 0, GREATEST(0, TIMESTAMPDIFF(SECOND, accepted_at, NOW(3))))
-       WHERE id = ? AND status IN ('ringing', 'active')`, [status, call.id]);
-    if (ended.affectedRows !== 1) {
-        res.json({ ok: true, duration: 0 });
+    if (call.status === 'active') {
+        // Duration comes from database server timestamps, never a client clock.
+        const duration = await endActiveCall(call, 'completed');
+        res.json({ ok: true, duration: duration ?? 0, status: 'completed' });
         return;
     }
-    const duration = Number((await queryOne('SELECT duration_seconds AS d FROM calls WHERE id = ?', [call.id]))?.d ?? 0);
-    emitToEmployees([call.caller_id, call.callee_id], 'call:ended', {
-        callId,
-        reason: status === 'missed' ? 'no_answer' : status === 'declined' ? 'rejected' : 'ended',
-        duration,
-    });
-    if (status === 'missed')
-        await notifyMissedCall(call, user.id);
-    res.json({ ok: true, duration, status });
+    res.json({ ok: true, duration: 0, status: call.status });
+}));
+/** Removes a call from the requester's history only; the other participant keeps it. */
+callsRouter.delete('/history/:callId', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const call = await participantCall(String(req.params.callId), user.id, 'either');
+    if (['ringing', 'active'].includes(call.status))
+        throw ApiError.badRequest('End the call before deleting it.');
+    const column = Number(call.caller_id) === user.id ? 'caller_deleted_at' : 'callee_deleted_at';
+    await execute(`UPDATE calls SET ${column} = COALESCE(${column}, NOW(3)) WHERE id = ?`, [call.id]);
+    res.json({ ok: true });
 }));
 /**
  * Get one call (used to restore an incoming call from a push notification).
@@ -417,7 +413,7 @@ callsRouter.get('/history', asyncHandler(async (req, res) => {
     const offset = Math.max(0, Math.floor(Number(req.query.offset ?? 0)) || 0);
     const rows = await query(`
       SELECT
-        c.id, c.call_id, c.type, c.direction, c.status, c.duration_seconds,
+        c.id, c.call_id, c.type, c.direction, c.status, c.end_reason, c.duration_seconds,
         c.started_at, c.ended_at,
         c.caller_id, c.callee_id,
         caller.employee_code AS caller_code,
@@ -437,7 +433,7 @@ callsRouter.get('/history', asyncHandler(async (req, res) => {
       LEFT JOIN designations caller_desig ON caller_desig.id = caller.designation_id
       LEFT JOIN departments callee_dept ON callee_dept.id = callee.department_id
       LEFT JOIN designations callee_desig ON callee_desig.id = callee.designation_id
-      WHERE c.caller_id = ? OR c.callee_id = ?
+      WHERE (c.caller_id = ? AND c.caller_deleted_at IS NULL) OR (c.callee_id = ? AND c.callee_deleted_at IS NULL)
       ORDER BY c.started_at DESC
       LIMIT ${limit} OFFSET ${offset}
     `, [user.id, user.id]);
@@ -470,6 +466,7 @@ callsRouter.get('/history', asyncHandler(async (req, res) => {
             type: r.type,
             direction: isOutgoing ? 'outgoing' : 'incoming',
             status: r.status,
+            endReason: r.end_reason ?? null,
             duration: Number(r.duration_seconds || 0),
             participant,
             startedAt: toIso(r.started_at),
@@ -490,19 +487,16 @@ callsRouter.post('/sync', asyncHandler(async (_req, res) => {
  * missed (with a missed-call notification); active calls abandoned by both
  * clients are closed at the maximum call length. Safe to run repeatedly.
  */
-export async function sweepStaleCalls(ringTimeoutSeconds = 60, maxCallSeconds = 4 * 3600) {
-    const ringing = await query(`SELECT id, call_id, caller_id, callee_id, type FROM calls
+export async function sweepStaleCalls(ringTimeoutSeconds = RING_TIMEOUT_SECONDS + 15, maxCallSeconds = 4 * 3600) {
+    // Backstop only: CallService expires rings on time. This catches calls whose timer was lost (server restart).
+    const ringing = await query(`SELECT id, call_id, caller_id, callee_id, type, status FROM calls
      WHERE status = 'ringing' AND started_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)`, [ringTimeoutSeconds]);
     let missed = 0;
     for (const call of ringing) {
-        const changed = await execute("UPDATE calls SET status = 'missed', ended_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
-        if (changed.affectedRows !== 1)
-            continue;
-        missed += 1;
-        emitToEmployees([call.caller_id, call.callee_id], 'call:ended', { callId: call.call_id, reason: 'no_answer' });
-        await notifyMissedCall(call, call.caller_id);
+        if (await endRingingCall(call, 'missed', 'no_answer'))
+            missed += 1;
     }
-    const closed = await execute(`UPDATE calls SET status = 'completed', ended_at = DATE_ADD(accepted_at, INTERVAL ? SECOND), duration_seconds = ?
+    const closed = await execute(`UPDATE calls SET status = 'completed', end_reason = 'disconnected', ended_at = DATE_ADD(accepted_at, INTERVAL ? SECOND), duration_seconds = ?
      WHERE status = 'active' AND accepted_at < DATE_SUB(NOW(3), INTERVAL ? SECOND)`, [maxCallSeconds, maxCallSeconds, maxCallSeconds]);
     return { missed, closed: closed.affectedRows };
 }

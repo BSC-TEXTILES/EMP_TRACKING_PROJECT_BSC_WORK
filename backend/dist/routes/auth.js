@@ -135,10 +135,20 @@ authRouter.post('/login/otp/verify', rateLimit({ windowMs: 10 * 60 * 1000, max: 
     res.json({ user: result.user });
 }));
 authRouter.post('/logout', asyncHandler(async (req, res) => {
+    // The sign-out dialog asks "Keep call and message notifications on this device?" (default yes).
+    const prefs = z.object({
+        keepNotifications: z.boolean().optional(),
+        pushEndpoint: z.string().url().max(500).optional(),
+    }).safeParse(req.body ?? {});
+    const keep = prefs.success ? prefs.data.keepNotifications !== false : true;
     try {
         const session = await AuthService.authenticateToken(req.cookies?.[config.cookieName]);
         if (session) {
             await ActivityService.stopTracking(session.id);
+            if (session.sessionId)
+                await PushService.signOutSession(session.sessionId, keep);
+            if (prefs.success && prefs.data.pushEndpoint)
+                await PushService.signOutWebEndpoint(session.id, prefs.data.pushEndpoint, keep);
         }
     }
     catch {
@@ -205,7 +215,7 @@ authRouter.post('/mobile/refresh', rateLimit({ windowMs: 60000, max: 30, keyPref
  * out even when the access token has already expired.
  */
 authRouter.post('/mobile/logout', asyncHandler(async (req, res) => {
-    const body = parseBody(z.object({ refreshToken: refreshTokenSchema.optional() }), req.body ?? {});
+    const body = parseBody(z.object({ refreshToken: refreshTokenSchema.optional(), keepNotifications: z.boolean().optional() }), req.body ?? {});
     const header = req.get('authorization');
     const bearer = header?.startsWith('Bearer ') ? header.slice(7) : undefined;
     const sessionIds = new Set();
@@ -220,7 +230,7 @@ authRouter.post('/mobile/logout', asyncHandler(async (req, res) => {
             sessionIds.add(Number(ref.session_id));
     }
     for (const id of sessionIds)
-        await PushService.unregisterSession(id);
+        await PushService.signOutSession(id, body.keepNotifications !== false);
     await AuthService.logoutRefresh(body.refreshToken);
     await AuthService.logout(bearer);
     for (const id of sessionIds)

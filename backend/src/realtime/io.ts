@@ -4,9 +4,12 @@ import { config } from '../config.js';
 import { query, queryOne } from '../db/index.js';
 import { AuthService, type AuthUser } from '../services/AuthService.js';
 import { PresenceService } from '../services/PresenceService.js';
+import { cancelDisconnectEnd, scheduleDisconnectEnd } from '../services/CallService.js';
 
 interface SocketData {
   user: AuthUser;
+  /** The page reports document.visibilityState; a hidden (background / locked phone) page cannot alert the user. */
+  visible?: boolean;
 }
 
 let io: Server | null = null;
@@ -30,6 +33,21 @@ export function getIO(): Server | null {
 
 export function isOnline(employeeId: number): boolean {
   return (online.get(employeeId)?.size ?? 0) > 0;
+}
+
+/**
+ * True when the employee has at least one socket whose page is in the foreground.
+ * A socket alone is not enough to skip a push: a PWA in the background, or a phone
+ * with the screen off, keeps its socket open for minutes but cannot show or sound
+ * anything. Pages that never reported visibility count as hidden.
+ */
+export function hasVisibleClient(employeeId: number): boolean {
+  if (!io) return false;
+  for (const socketId of online.get(employeeId) ?? []) {
+    const socket = io.of('/').sockets.get(socketId);
+    if (socket && (socket.data as SocketData).visible === true) return true;
+  }
+  return false;
 }
 
 /** Employees with at least one socket inside a meeting room or a 1:1 call. */
@@ -177,6 +195,10 @@ export function initRealtime(server: HttpServer): Server {
     socket.emit('presence:list', onlineEmployeeIds());
     refreshPresence(user.id);
 
+    socket.on('client:visibility', (payload: { visible?: unknown }) => {
+      (socket.data as SocketData).visible = payload?.visible === true;
+    });
+
     socket.on('client:heartbeat', (_payload: unknown, ack?: (res: unknown) => void) => {
       // Confirms the authenticated socket is alive and refreshes last-activity.
       void PresenceService.ping(user.id).catch(() => undefined);
@@ -255,6 +277,8 @@ export function initRealtime(server: HttpServer): Server {
         }
         if (!['ringing', 'active'].includes(call.status)) throw new Error('call ended');
         await socket.join(`call:${callId}`);
+        // Rejoined after a network drop: the call continues (the caller re-offers on call:peer_joined).
+        cancelDisconnectEnd(callId, user.id);
         const sockets = await io!.in(`call:${callId}`).fetchSockets();
         const participants = sockets.map((s) => {
           const u = (s.data as SocketData).user;
@@ -380,12 +404,16 @@ export function initRealtime(server: HttpServer): Server {
           const callId = code.slice('call:'.length);
           try {
             const remaining = await io!.in(code).fetchSockets();
-            const peers = remaining.filter((s) => (s.data as SocketData).user.id !== user.id);
+            // A second tab / device of the same employee keeps the call alive.
             const ownSockets = remaining.filter((s) => (s.data as SocketData).user.id === user.id);
-            // A second tab of the same employee must not end the call.
-            if (peers.length > 0 && ownSockets.length === 0) {
-              io!.to(code).emit('call:peer_left', { callId, employeeId: user.id, reason: 'disconnected' });
-              io!.to(code).emit('call:ended', { callId, reason: 'disconnected', byEmployeeId: user.id });
+            if (ownSockets.length === 0) {
+              // Do not end the call on a network blip: tell the peer we are reconnecting and
+              // end it in the database only if we have not rejoined within the grace period.
+              io!.to(code).emit('call:peer_left', { callId, employeeId: user.id, reason: 'reconnecting' });
+              scheduleDisconnectEnd(callId, user.id, async () => {
+                const sockets = await io!.in(code).fetchSockets();
+                return sockets.some((s) => (s.data as SocketData).user.id === user.id);
+              });
             }
           } catch (error) {
             console.error('[realtime] call cleanup failed', error);

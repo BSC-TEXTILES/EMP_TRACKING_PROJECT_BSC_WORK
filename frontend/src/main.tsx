@@ -10,18 +10,22 @@ import { NativeShell } from './components/mobile/NativeShell';
 import { initNativeSession, isNative } from './lib/native';
 import { initTheme } from './lib/theme';
 import { registerWebPushSubscription } from './lib/notifications';
+import { initOutbox } from './lib/outbox';
 // Captures the browser's one-time install event before any screen renders.
 import './lib/installPrompt';
 
 initTheme();
 if (isNative) document.documentElement.dataset.native = '1';
+// Chat messages written offline are re-sent automatically when the connection returns.
+initOutbox();
 
 // Register Service Worker for PWA (website only; the app ships its files itself)
 if (!isNative && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js')
+    // updateViaCache: 'none' so a fixed sw.js reaches phones on the next start, not after 24 h.
+    navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
       .then((registration) => {
-        console.log('[SW] Service Worker registered:', registration.scope);
+        void registration.update().catch(() => undefined);
         if ('Notification' in window && Notification.permission === 'granted') {
           void registerWebPushSubscription();
         }
@@ -58,6 +62,14 @@ if (!isNative && 'serviceWorker' in navigator) {
     }
     if (event.data?.type === 'NAVIGATE') {
       window.dispatchEvent(new CustomEvent('sw:navigate', { detail: event.data.url }));
+    }
+    // Notification "Answer" / tap on a ringing call while the app is already running.
+    if (event.data?.type === 'CALL_ACTION') {
+      window.dispatchEvent(new CustomEvent('sw:call-action', { detail: event.data }));
+    }
+    // A ring push arrived while the app is in the foreground: make sure the in-app ring is showing.
+    if (event.data?.type === 'CALL_RING') {
+      window.dispatchEvent(new CustomEvent('sw:call-ring', { detail: event.data }));
     }
   });
 }

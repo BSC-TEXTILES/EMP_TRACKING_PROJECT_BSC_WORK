@@ -6,7 +6,7 @@ import { useToast } from '../contexts/ToastContext';
 import { Avatar } from './ui';
 import { Icon } from './icons';
 import { cx } from '../lib/format';
-import { showDesktopNotification, PhoneRingtone } from '../lib/notifications';
+import { showDesktopNotification, PhoneRingtone, closeCallNotification } from '../lib/notifications';
 
 export type CallType = 'audio' | 'video';
 
@@ -55,7 +55,31 @@ interface CallContextValue {
 const CallContext = createContext<CallContextValue | null>(null);
 
 const DEFAULT_ICE: IceServerConfig[] = [{ urls: 'stun:stun.l.google.com:19302' }];
-const RING_TIMEOUT_MS = 45_000;
+/** The server ends unanswered calls at 45 s; this client timer is only a backstop. */
+const RING_TIMEOUT_MS = 50_000;
+
+interface PendingCallResponse {
+  call: { callId: string; type: CallType; caller: CallPeer } | null;
+  iceServers?: IceServerConfig[];
+}
+
+type SocketLike = { connected: boolean; once: (event: string, cb: () => void) => unknown };
+
+/** Waits (bounded) for the realtime socket: a phone that just woke up is often still reconnecting. */
+function waitForSocket(get: () => SocketLike | null, timeoutMs: number): Promise<boolean> {
+  const socket = get();
+  if (!socket) return Promise.resolve(false);
+  if (socket.connected) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(Boolean(get()?.connected)), timeoutMs);
+    socket.once('connect', () => {
+      window.clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+type WakeLockSentinelLike = { release: () => Promise<void>; released?: boolean };
 
 // Phone ringing and ringback audio synthesized via PhoneRingtone in sound.ts
 
@@ -118,6 +142,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const screenTrackRef = useRef<MediaStreamTrack | null>(null);
   const cameraTrackRef = useRef<MediaStreamTrack | null>(null);
   const restartAttemptedRef = useRef(false);
+  const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
+  const acceptRef = useRef<() => Promise<void>>(async () => undefined);
+  const reconnectNoticeRef = useRef(false);
 
   const updateSession = useCallback((next: CallSession | null) => {
     sessionRef.current = next;
@@ -156,9 +183,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const teardown = useCallback((options: { leaveRoom?: boolean } = {}) => {
     const current = sessionRef.current;
+    const ringingId = current?.callId ?? incomingRef.current?.callId;
+    if (ringingId) void closeCallNotification(ringingId);
     if (current && options.leaveRoom !== false) {
       socketRef.current?.emit('call:leave', { callId: current.callId });
     }
+    reconnectNoticeRef.current = false;
+    void wakeLockRef.current?.release().catch(() => undefined);
+    wakeLockRef.current = null;
     clearRingTimeout();
     ringtoneRef.current.stop();
     pendingIceRef.current = [];
@@ -311,13 +343,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
     return pc;
   }, [emitSignal, teardown]);
 
-  const makeOffer = useCallback(async () => {
+  /**
+   * The caller creates the offer, but only once the callee is in the call room
+   * (call:peer_joined or the join ack). Sending it on call:accepted lost it whenever
+   * the callee had not joined the room yet: "connected" UI with no audio.
+   * restart=true renegotiates with an ICE restart after either side reconnected.
+   */
+  const makeOffer = useCallback(async (restart = false) => {
     const pc = pcRef.current;
     const current = sessionRef.current;
-    if (!pc || !current || offerSentRef.current) return;
+    if (!pc || !current || (offerSentRef.current && !restart)) return;
     offerSentRef.current = true;
     try {
-      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: current.type === 'video' });
+      const offer = await pc.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: current.type === 'video', iceRestart: restart });
       await pc.setLocalDescription(offer);
       emitSignal({ sdp: pc.localDescription });
     } catch (error) {
@@ -329,30 +367,39 @@ export function CallProvider({ children }: { children: ReactNode }) {
     }
   }, [emitSignal, teardown]);
 
-  const joinRoom = useCallback((callId: string) => {
+  const joinRoom = useCallback((callId: string, rejoin = false) => {
     const socket = socketRef.current;
     if (!socket) return;
     let acknowledged = false;
     const timer = window.setTimeout(() => {
       if (acknowledged) return;
       acknowledged = true;
+      // A rejoin after a network drop retries on the next reconnect; the server ends the call after its grace period.
+      if (rejoin) return;
       toastRef.current.error('Call signalling timed out. Please try again.');
       void api.post(`/calls/${callId}/end`).catch(() => undefined);
       teardown();
       setHistoryVersion((value) => value + 1);
     }, 12_000);
-    socket.emit('call:join', { callId }, (response: { ok?: boolean; error?: string }) => {
+    socket.emit('call:join', { callId }, (response: { ok?: boolean; error?: string; participants?: { employeeId: number }[] }) => {
       if (acknowledged) return;
       acknowledged = true;
       window.clearTimeout(timer);
       if (!response?.ok) {
+        if (rejoin && response?.error !== 'call ended' && response?.error !== 'not a participant') return;
         toastRef.current.error(response?.error === 'call ended' ? 'The call has already ended.' : 'Could not join the call.');
         void api.post(`/calls/${callId}/end`).catch(() => undefined);
         teardown();
         setHistoryVersion((value) => value + 1);
+        return;
       }
+      const current = sessionRef.current;
+      if (!current || current.callId !== callId) return;
+      const peerPresent = (response.participants ?? []).some((p) => p.employeeId === current.peer.employeeId);
+      // The caller (re)negotiates as soon as both ends are in the room.
+      if (current.isCaller && peerPresent && current.phase === 'active') void makeOffer(rejoin || offerSentRef.current);
     });
-  }, [teardown]);
+  }, [makeOffer, teardown]);
 
   const startCall = useCallback(async (employeeId: number, type: CallType, peerHint?: CallPeer) => {
     if (!user) return;
@@ -416,9 +463,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const current = incomingRef.current;
     if (!current) return;
     ringtoneRef.current.stop();
-    const socket = socketRef.current;
-    if (!socket?.connected) {
-      toastRef.current.error('The live connection is offline. Ask the caller to try again.');
+    void closeCallNotification(current.callId);
+    const connectedNow = await waitForSocket(() => socketRef.current, 10_000);
+    if (!connectedNow) {
+      toastRef.current.error('The live connection is offline. Check your network and ask the caller to try again.');
       return;
     }
     try {
@@ -453,6 +501,54 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setHistoryVersion((value) => value + 1);
     }
   }, [acquireMedia, createPeer, iceServers, joinRoom, stopLocalMedia, teardown, updateIncoming, updateSession]);
+  acceptRef.current = accept;
+
+  /** Shows a ringing call fetched from the server (push tap, reconnect, app resumed). */
+  const presentIncoming = useCallback((call: { callId: string; type: CallType; caller: CallPeer }, servers?: IceServerConfig[]) => {
+    if (servers?.length) setIceServers(servers);
+    if (incomingRef.current?.callId === call.callId || sessionRef.current?.callId === call.callId) return;
+    if (sessionRef.current || incomingRef.current) return;
+    updateIncoming({ callId: call.callId, peer: call.caller, type: call.type });
+    ringtoneRef.current.start('incoming');
+  }, [updateIncoming]);
+
+  /**
+   * Asks the server for a call that is ringing for us right now. A `call:incoming`
+   * socket event is lost when it is emitted while the phone's socket is reconnecting
+   * (very common after the screen was off); this makes the ring show up anyway.
+   */
+  const checkPendingCall = useCallback(async (): Promise<void> => {
+    if (sessionRef.current) return;
+    try {
+      const result = await api.get<PendingCallResponse>('/calls/pending');
+      if (result.call) {
+        presentIncoming(result.call, result.iceServers);
+      } else if (incomingRef.current) {
+        // Our ring is stale (answered elsewhere / ended while we were offline).
+        ringtoneRef.current.stop();
+        updateIncoming(null);
+      }
+    } catch {
+      /* offline: the next reconnect checks again */
+    }
+  }, [presentIncoming, updateIncoming]);
+
+  /** Opens / answers the call the user tapped in a notification. */
+  const restoreFromNotification = useCallback(async (callId: string, answer: boolean, isCancelled: () => boolean = () => false) => {
+    if (sessionRef.current?.callId === callId) return;
+    try {
+      const detail = await api.get<{ callId: string; type: CallType; status: string; direction: string; peer: CallPeer; iceServers: IceServerConfig[] }>(`/calls/detail/${callId}`);
+      if (isCancelled()) return;
+      if (detail.direction === 'incoming' && detail.status === 'ringing') {
+        presentIncoming({ callId: detail.callId, type: detail.type, caller: detail.peer }, detail.iceServers);
+        if (answer) await acceptRef.current();
+      } else if (detail.direction === 'incoming' && detail.status !== 'active') {
+        toastRef.current.info(`The call from ${detail.peer.name} has already ended.`);
+      }
+    } catch {
+      /* the Calls page still shows history */
+    }
+  }, [presentIncoming]);
 
   const reject = useCallback(async () => {
     const current = incomingRef.current;
@@ -475,8 +571,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const path = currentSession.phase === 'ringing' && currentSession.isCaller
       ? `/calls/${currentSession.callId}/cancel`
       : `/calls/${currentSession.callId}/end`;
-    await api.post(path).catch(() => undefined);
+    // Tear down first so the server's own call:missed / call:ended echo is ignored (no stray toast).
     teardown();
+    await api.post(path).catch(() => undefined);
     setHistoryVersion((value) => value + 1);
   }, [reject, teardown]);
 
@@ -491,25 +588,69 @@ export function CallProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined);
 
-    const callId = new URLSearchParams(window.location.search).get('incoming');
-    if (callId && !sessionRef.current && !incomingRef.current) {
-      void api.get<{ callId: string; type: CallType; status: string; direction: string; peer: CallPeer; iceServers: IceServerConfig[] }>(`/calls/detail/${callId}`)
-        .then((detail) => {
-          if (cancelled) return;
-          if (detail.iceServers?.length) setIceServers(detail.iceServers);
-          if (detail.direction === 'incoming' && detail.status === 'ringing') {
-            updateIncoming({ callId: detail.callId, peer: detail.peer, type: detail.type });
-            ringtoneRef.current.start('incoming');
-          } else if (detail.status === 'missed' || detail.status === 'declined') {
-            void api.post('/calls/missed', { callId }).catch(() => undefined);
-          }
-        })
-        .catch(() => undefined);
-    }
+    // Opened from a call notification (/calls?incoming=<id>[&answer=1]) or a normal start.
+    const params = new URLSearchParams(window.location.search);
+    const callId = params.get('incoming');
+    if (callId) void restoreFromNotification(callId, params.get('answer') === '1', () => cancelled);
+    else void checkPendingCall();
     return () => {
       cancelled = true;
     };
-  }, [updateIncoming, user?.id]);
+  }, [checkPendingCall, restoreFromNotification, user?.id]);
+
+  // Notification tapped / "Answer" while the app is already running (no reload).
+  useEffect(() => {
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ action?: string; callId?: string }>).detail;
+      if (detail?.callId) void restoreFromNotification(detail.callId, detail.action === 'answer');
+    };
+    const onRing = () => void checkPendingCall();
+    window.addEventListener('sw:call-action', onAction);
+    window.addEventListener('sw:call-ring', onRing);
+    return () => {
+      window.removeEventListener('sw:call-action', onAction);
+      window.removeEventListener('sw:call-ring', onRing);
+    };
+  }, [checkPendingCall, restoreFromNotification]);
+
+  // Reconnect handling: rejoin an ongoing call (the caller renegotiates), and look for
+  // a call that started ringing while we were offline or in the background.
+  useEffect(() => {
+    if (!socket) return;
+    const onConnect = () => {
+      const current = sessionRef.current;
+      if (current) joinRoom(current.callId, true);
+      else void checkPendingCall();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !sessionRef.current) void checkPendingCall();
+    };
+    socket.on('connect', onConnect);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      socket.off('connect', onConnect);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [checkPendingCall, joinRoom, socket]);
+
+  // Keep the screen on while ringing or in a call (Screen Wake Lock API: Android Chrome, iOS 16.4+).
+  useEffect(() => {
+    const wanted = Boolean(session || incoming);
+    const nav = navigator as Navigator & { wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> } };
+    if (!wanted || !nav.wakeLock) return;
+    const acquire = async () => {
+      if (document.visibilityState !== 'visible' || (wakeLockRef.current && !wakeLockRef.current.released)) return;
+      try {
+        wakeLockRef.current = await nav.wakeLock!.request('screen');
+      } catch {
+        /* battery saver or unsupported */
+      }
+    };
+    void acquire();
+    // The browser drops the lock when the page is hidden; take it again on return.
+    document.addEventListener('visibilitychange', acquire);
+    return () => document.removeEventListener('visibilitychange', acquire);
+  }, [incoming, session]);
 
   // Signalling and call lifecycle events.
   useEffect(() => {
@@ -520,6 +661,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
     const onIncoming = (payload: { callId: string; caller: CallPeer; type: CallType }) => {
       if (!payload?.callId || !payload.caller) return;
+      if (incomingRef.current?.callId === payload.callId || sessionRef.current?.callId === payload.callId) return;
       if (sessionRef.current || incomingRef.current) {
         // Busy: reject the second call immediately so the caller is not left ringing.
         void api.post(`/calls/${payload.callId}/reject`).catch(() => undefined);
@@ -528,25 +670,31 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
       updateIncoming({ callId: payload.callId, peer: payload.caller, type: payload.type });
       ringtoneRef.current.start('incoming');
-      void showDesktopNotification(`Incoming ${payload.type === 'video' ? 'Video' : 'Audio'} Call`, {
-        body: `${payload.caller.name} (${payload.caller.designation || 'Colleague'} · ${payload.caller.location || 'BSC Textiles'}) is calling you`,
-        icon: payload.caller.photoUrl || '/icons/icon-192.png',
-        tag: `call_${payload.callId}`,
-        link: `/calls?incoming=${payload.callId}`,
-        urgent: true,
-      });
+      // Background tab without a push subscription: socket fallback, same tag as the push so they merge.
+      if (document.visibilityState !== 'visible') {
+        void showDesktopNotification(payload.caller.name, {
+          body: `Incoming ${payload.type === 'video' ? 'video' : 'voice'} call`,
+          icon: payload.caller.photoUrl || '/icons/icon-192.png',
+          tag: `call-${payload.callId}`,
+          link: `/calls?incoming=${payload.callId}`,
+          urgent: true,
+        });
+      }
     };
 
     const onPeerJoined = (payload: { callId: string; employeeId: number }) => {
       const current = sessionRef.current;
       if (!current || current.callId !== payload.callId) return;
+      if (payload.employeeId === user?.id) return; // our own second tab
       if (current.phase === 'ringing') {
         clearRingTimeout();
         ringtoneRef.current.stop();
         const next: CallSession = { ...current, phase: 'active', startedAt: Date.now() };
         updateSession(next);
       }
-      if (current.isCaller) void makeOffer();
+      reconnectNoticeRef.current = false;
+      // First join: initial offer. Re-join after a network drop: renegotiate with an ICE restart.
+      if (current.isCaller) void makeOffer(offerSentRef.current);
     };
 
     const onAccepted = (payload: { callId: string }) => {
@@ -558,7 +706,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         const next: CallSession = { ...current, phase: 'active', startedAt: Date.now() };
         updateSession(next);
       }
-      if (current.isCaller) void makeOffer();
+      // No offer here: the callee may not be in the call room yet. call:peer_joined triggers it.
     };
 
     const onSignal = async (payload: { callId: string; signal: { sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit } }) => {
@@ -593,7 +741,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
     const onMissed = (payload: { callId: string }) => {
       if (!matches(payload)) return;
-      toastRef.current.warning('Missed call.');
+      toastRef.current.warning(sessionRef.current?.isCaller ? 'No answer.' : 'Missed call.');
       teardown();
       setHistoryVersion((value) => value + 1);
     };
@@ -614,9 +762,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setHistoryVersion((value) => value + 1);
     };
 
-    const onPeerLeft = (payload: { callId: string; employeeId: number }) => {
+    const onPeerLeft = (payload: { callId: string; employeeId: number; reason?: string }) => {
       if (!matches(payload)) return;
       if (payload.employeeId === user?.id) return;
+      if (payload.reason === 'reconnecting') {
+        // Peer's network dropped; the server ends the call if they do not return in ~20 s.
+        setConnectionQuality('reconnecting');
+        if (!reconnectNoticeRef.current) {
+          reconnectNoticeRef.current = true;
+          toastRef.current.info(`${sessionRef.current?.peer.name ?? 'The other participant'} is reconnecting…`);
+        }
+        return;
+      }
       if (sessionRef.current) {
         toastRef.current.info('The other participant left the call.');
         teardown();
@@ -842,9 +999,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
       {children}
 
       {incoming && !session && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="bg-gradient-to-b from-brand-600 to-brand-700 px-6 pb-6 pt-8 text-center text-white">
+        <div className="fixed inset-0 z-[120] flex items-stretch justify-center bg-slate-950/80 backdrop-blur-sm sm:items-center sm:p-4" role="alertdialog" aria-label={`Incoming call from ${incoming.peer.name}`}>
+          <div className="flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-w-sm sm:rounded-2xl">
+            <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-brand-600 to-brand-700 px-6 pb-6 pt-8 text-center text-white sm:flex-none">
               <div className="relative mx-auto mb-4 h-28 w-28">
                 <span className="absolute inset-0 animate-ping rounded-full bg-white/20" />
                 <Avatar name={incoming.peer.name} src={incoming.peer.photoUrl} size={112} className="relative ring-4 ring-white/30" />
@@ -855,7 +1012,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
               <h2 className="mt-1 truncate text-2xl font-semibold">{incoming.peer.name}</h2>
               <p className="mt-1 truncate text-sm text-white/80">{peerSubtitle(incoming.peer) || 'Employee'}</p>
             </div>
-            <div className="flex items-center justify-center gap-10 px-6 py-6">
+            <div className="flex items-center justify-center gap-16 px-6 py-10 sm:gap-10 sm:py-6" style={{ paddingBottom: 'max(2.5rem, env(safe-area-inset-bottom))' }}>
               <button
                 type="button"
                 onClick={() => void reject()}

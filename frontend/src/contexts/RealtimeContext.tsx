@@ -4,7 +4,10 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { ensureFreshAccess } from '../lib/api';
 import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
-import { showDesktopNotification, playMessageSound } from '../lib/notifications';
+import { showDesktopNotification, playMessageSound, registerWebPushSubscription } from '../lib/notifications';
+
+/** Notification types that have their own alert path (service-worker push / call UI). */
+const SELF_ALERTING_TYPES = new Set(['chat_message', 'incoming_call', 'missed_call']);
 
 type Handler = (payload: unknown) => void;
 type ConnectionStatus = 'connecting' | 'online' | 'offline';
@@ -28,6 +31,7 @@ const CONNECTION_EVENTS = [
   'message:read',
   'message:edited',
   'message:deleted',
+  'message:hidden',
   'message:reaction',
   'chat:typing',
   'presence:update',
@@ -134,8 +138,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       window.dispatchEvent(new CustomEvent('realtime:resync', { detail: { reason } }));
     };
 
+    // The server only skips a push when the employee has a page in the FOREGROUND.
+    const reportVisibility = () => {
+      if (socket.connected) socket.emit('client:visibility', { visible: document.visibilityState === 'visible' });
+    };
+
     socket.on('connect', () => {
       setStatus('online');
+      reportVisibility();
       sync('connected');
     });
     socket.on('disconnect', (reason) => {
@@ -158,8 +168,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         return prev.filter((id) => id !== payload.employeeId);
       });
     });
-    socket.on('notification:new', (payload: { title?: string; body?: string | null; link?: string | null; priority?: string }) => {
-      if (payload?.title) {
+    socket.on('notification:new', (payload: { type?: string; title?: string; body?: string | null; link?: string | null; priority?: string }) => {
+      if (payload?.title && !SELF_ALERTING_TYPES.has(payload.type ?? '')) {
         toastRef.current.toast(payload.title, 'info');
         void showDesktopNotification(payload.title, {
           body: payload.body,
@@ -172,20 +182,23 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
 
     socket.on('message:new', (payload: { senderId?: number; senderName?: string; body?: string | null; conversationId?: number; id?: number }) => {
       if (payload && payload.senderId !== user?.id) {
-        // Play the signature crisp messaging tone
-        playMessageSound();
-
-        // If the window is hidden or user is not viewing this specific chat, display desktop notification
+        const visible = document.visibilityState === 'visible';
         const isCurrentChatOpen =
           window.location.pathname.startsWith('/chat') &&
           new URLSearchParams(window.location.search).get('c') === String(payload.conversationId);
 
-        if (document.visibilityState !== 'visible' || !isCurrentChatOpen) {
-          void showDesktopNotification(payload.senderName || 'New Chat Message', {
-            body: payload.body || 'You received a new message.',
-            link: `/chat?c=${payload.conversationId}`,
-            tag: `chat_msg_${payload.conversationId}`,
-          });
+        // In the foreground: in-app tone (and a banner when another chat is open).
+        // In the background the server sends a Web Push (the page reported hidden), which the
+        // service worker shows with sound; showing one here too would double-alert.
+        if (visible) {
+          playMessageSound();
+          if (!isCurrentChatOpen) {
+            void showDesktopNotification(payload.senderName || 'New Chat Message', {
+              body: payload.body || 'You received a new message.',
+              link: `/chat?c=${payload.conversationId}`,
+              tag: `chat-${payload.conversationId}`,
+            });
+          }
         }
       }
     });
@@ -234,6 +247,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       }
     };
     const onVisible = () => {
+      reportVisibility();
       if (document.visibilityState !== 'visible') return;
       if (!socket.connected) {
         setStatus('connecting');
@@ -244,11 +258,18 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener('online', onOnline);
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pagehide', reportVisibility);
+
+    // Signed in: (re)link this device's push subscription to the user and session.
+    if (!isNative && 'Notification' in window && Notification.permission === 'granted') {
+      void registerWebPushSubscription();
+    }
 
     return () => {
       window.clearInterval(heartbeat);
       window.removeEventListener('online', onOnline);
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pagehide', reportVisibility);
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;

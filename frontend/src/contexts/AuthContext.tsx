@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { currentPushEndpoint, unsubscribeWebPush } from '../lib/notifications';
 import { ApiError, api, refreshMediaToken } from '../lib/api';
 import { isNative } from '../lib/native';
 import type { CurrentUser } from '../lib/types';
@@ -9,7 +10,8 @@ interface AuthContextValue {
   unreadNotifications: number;
   login: (user: CurrentUser) => void;
   refresh: () => Promise<void>;
-  logout: () => Promise<void>;
+  /** keepNotifications (default true): this device keeps ringing for calls and messages after sign-out. */
+  logout: (options?: { keepNotifications?: boolean }) => Promise<void>;
   has: (...permissions: string[]) => boolean;
   canAny: (...permissions: string[]) => boolean;
   setUnreadNotifications: (value: number | ((prev: number) => number)) => void;
@@ -106,13 +108,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh().catch(() => undefined);
   }, [refresh]);
 
-  const logout = useCallback(async () => {
+  const logout = useCallback(async (options?: { keepNotifications?: boolean }) => {
+    const keepNotifications = options?.keepNotifications !== false;
+    const pushEndpoint = await currentPushEndpoint();
     try {
       await api.post('/activity/auto-stop').catch(() => undefined);
-      await api.post('/auth/logout');
+      await api.post('/auth/logout', { keepNotifications, ...(pushEndpoint ? { pushEndpoint } : {}) });
     } catch {
       /* clearing client state is enough */
     }
+    if (!keepNotifications) await unsubscribeWebPush();
     localStorage.removeItem(SESSION_KEY);
     setUser(null);
     window.location.href = '/login';

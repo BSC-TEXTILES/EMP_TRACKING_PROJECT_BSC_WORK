@@ -10,6 +10,7 @@ import { Icon } from '../components/icons';
 import { cx, formatDayLabel, formatTime } from '../lib/format';
 import { useCall } from '../components/CallInterface';
 import type { ChatMessage, ConversationSummary, PickerEmployee } from '../lib/types';
+import { enqueueMessage, isRetryable, queuedMessages, removeQueued } from '../lib/outbox';
 
 interface ConversationDetail {
   id: number;
@@ -234,7 +235,11 @@ export default function Chat() {
         api.get<ConversationDetail>(`/chat/conversations/${conversationId}`),
       ]);
       if (token !== loadToken.current) return;
-      setMessages(sortMessages(page.messages));
+      const stored = new Set(page.messages.map((m) => m.clientId).filter(Boolean));
+      const queued = queuedMessages(conversationId)
+        .filter((item) => !stored.has(item.clientId))
+        .map((item) => ({ ...item.optimistic, pending: true, failed: false }));
+      setMessages(sortMessages([...page.messages, ...queued]));
       setHasMore(Boolean(page.hasMore));
       setNextBefore(page.nextBefore ?? null);
       setDetail(conversation);
@@ -396,6 +401,13 @@ export default function Chat() {
     }));
   });
 
+  // Hidden from another device of this user ("delete for me").
+  useSocketEvent('message:hidden', (payload) => {
+    const data = payload as { messageId?: number };
+    if (!data?.messageId) return;
+    setMessages((previous) => previous.filter((message) => message.id !== Number(data.messageId)));
+  });
+
   useSocketEvent('message:deleted', (payload) => {
     const data = payload as { id: number };
     if (!data?.id) return;
@@ -532,6 +544,17 @@ export default function Chat() {
         void api.post(`/chat/conversations/${optimistic.conversationId}/read`).catch(() => undefined);
         void loadConversations(true);
       } catch (caught) {
+        if (payload.clientId && isRetryable(caught)) {
+          // Offline or server unavailable: keep it (survives reloads) and send automatically on reconnect.
+          enqueueMessage({
+            clientId: payload.clientId,
+            conversationId: optimistic.conversationId,
+            payload: { ...payload, clientId: payload.clientId },
+            optimistic: { ...optimistic, pending: true, failed: false },
+          });
+          toastRef.current.info('You are offline. The message will be sent automatically when the connection is back.');
+          return;
+        }
         setMessages((previous) =>
           previous.map((message) =>
             message.id === optimistic.id ? { ...message, pending: false, failed: true } : message,
@@ -542,6 +565,30 @@ export default function Chat() {
     },
     [loadConversations],
   );
+
+  // Messages delivered from the offline outbox (possibly after a reload or from another page).
+  useEffect(() => {
+    const onSent = (event: Event) => {
+      const detail = (event as CustomEvent<{ conversationId: number; tempId: number; saved: ChatMessage }>).detail;
+      if (detail?.conversationId !== activeIdRef.current) return;
+      setMessages((previous) => replaceOptimistic(previous, detail.tempId, detail.saved));
+      void loadConversations(true);
+    };
+    const onFailed = (event: Event) => {
+      const detail = (event as CustomEvent<{ conversationId: number; tempId: number; error: string }>).detail;
+      if (detail?.conversationId !== activeIdRef.current) return;
+      setMessages((previous) =>
+        previous.map((message) => (message.id === detail.tempId ? { ...message, pending: false, failed: true } : message)),
+      );
+      toastRef.current.error(`Message not sent: ${detail.error}`);
+    };
+    window.addEventListener('outbox:sent', onSent);
+    window.addEventListener('outbox:failed', onFailed);
+    return () => {
+      window.removeEventListener('outbox:sent', onSent);
+      window.removeEventListener('outbox:failed', onFailed);
+    };
+  }, [loadConversations]);
 
   const send = async (event?: React.FormEvent) => {
     event?.preventDefault();
@@ -618,6 +665,7 @@ export default function Chat() {
 
   const retryMessage = async (message: ChatMessage) => {
     if (!user) return;
+    if (message.clientId) removeQueued(message.clientId);
     setMessages((previous) =>
       previous.map((item) => (item.id === message.id ? { ...item, pending: true, failed: false } : item)),
     );
@@ -889,8 +937,25 @@ export default function Chat() {
     }
   };
 
+  /** "Delete for me" hides the message only for this user; the other side keeps it. */
+  const handleHideMessage = async (message: ChatMessage) => {
+    if (message.id < 0) {
+      if (message.clientId) removeQueued(message.clientId);
+      setMessages((previous) => previous.filter((item) => item.id !== message.id));
+      return;
+    }
+    if (!window.confirm('Delete this message for you? Other participants will still see it.')) return;
+    try {
+      await api.del(`/chat/messages/${message.id}?for=me`);
+      setMessages((previous) => previous.filter((item) => item.id !== message.id));
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
+
+  /** "Delete for everyone": only the sender (or a moderator); recorded in the audit log. */
   const handleDeleteMessage = async (message: ChatMessage) => {
-    if (!window.confirm('Delete this message? The deletion is recorded in the audit log.')) return;
+    if (!window.confirm('Delete this message for everyone? The deletion is recorded in the audit log.')) return;
     try {
       await api.del(`/chat/messages/${message.id}`);
       patchMessage(message.id, (item) => ({ ...item, body: null, deleted: true, attachments: [], reactions: [] }));
@@ -1407,6 +1472,7 @@ export default function Chat() {
                         onReact={(emoji) => void handleReact(message, emoji)}
                         onEdit={() => void handleEdit(message)}
                         onDelete={() => void handleDeleteMessage(message)}
+                        onDeleteForMe={() => void handleHideMessage(message)}
                         onRetry={() => void retryMessage(message)}
                         onPreview={(attachment) =>
                           setPreview({
@@ -1676,6 +1742,7 @@ function MessageBubble({
   onReact,
   onEdit,
   onDelete,
+  onDeleteForMe,
   onRetry,
   onPreview,
   onMediaLoad,
@@ -1687,6 +1754,7 @@ function MessageBubble({
   onReact: (emoji: string) => void;
   onEdit: () => void;
   onDelete: () => void;
+  onDeleteForMe: () => void;
   onRetry: () => void;
   onPreview: (attachment: ChatMessage['attachments'][number]) => void;
   onMediaLoad: () => void;
@@ -1898,10 +1966,17 @@ function MessageBubble({
                   className={cx('rounded px-1 text-red-200 hover:bg-black/10', mine ? 'hover:bg-white/15' : 'hover:bg-red-50')}
                   onClick={onDelete}
                 >
-                  Delete
+                  Delete for everyone
                 </button>
               </>
             )}
+            <button
+              type="button"
+              className={cx('rounded px-1 hover:bg-black/10', mine ? 'text-red-200 hover:bg-white/15' : 'text-red-600 hover:bg-red-50')}
+              onClick={onDeleteForMe}
+            >
+              Delete for me
+            </button>
           </div>
         )}
       </div>

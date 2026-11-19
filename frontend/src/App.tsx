@@ -1,5 +1,5 @@
-import { Suspense, lazy, type ReactNode } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Suspense, lazy, useEffect, type ReactNode } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from './contexts/AuthContext';
 import { AppShell } from './components/AppShell';
 import { PWAInstallPrompt } from './components/PWAInstallPrompt';
@@ -64,9 +64,24 @@ function GuestOnly({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/** Notification taps while the app is open navigate in place instead of reloading the page. */
+function ServiceWorkerBridge() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const onNavigate = (event: Event) => {
+      const url = (event as CustomEvent<string>).detail;
+      if (typeof url === 'string' && url.startsWith('/') && !url.startsWith('//')) navigate(url);
+    };
+    window.addEventListener('sw:navigate', onNavigate);
+    return () => window.removeEventListener('sw:navigate', onNavigate);
+  }, [navigate]);
+  return null;
+}
+
 export function App() {
   return (
     <Suspense fallback={<FullPageLoader />}>
+      <ServiceWorkerBridge />
       <Routes>
         <Route path="/setup" element={<Setup />} />
         <Route

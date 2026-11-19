@@ -55,6 +55,13 @@ export function startJobs() {
             return `${result.missed} unanswered call(s) marked missed, ${result.closed} abandoned call(s) closed`;
         });
     });
+    cron.schedule('35 3 * * *', () => {
+        void runJob('push_log_retention', async () => {
+            const { PushService } = await import('../services/PushService.js');
+            const removed = await PushService.pruneLog(30);
+            return `${removed} push delivery log row(s) older than 30 days removed`;
+        });
+    }, { timezone: config.timezone });
     cron.schedule('*/5 * * * *', () => {
         void runJob('activity_stale_sessions', async () => {
             const closed = await ActivityService.closeStaleSessions();

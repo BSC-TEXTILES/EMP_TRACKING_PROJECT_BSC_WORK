@@ -77,7 +77,18 @@ export class ConfigStore {
     return fs.readFileSync(file, 'utf8').trim();
   }
   removeSetupCode() { fs.rmSync(path.join(this.directory, 'setup-code'), { force: true }); }
+  /**
+   * Memoised: the public key handed to browsers must always match the private key used to
+   * sign pushes. Without the cache, a failed write (read-only disk) produced a new pair on
+   * every call and every push was silently rejected by the push service (403).
+   */
+  private cachedVapid: { publicKey: string; privateKey: string } | null = null;
   vapidKeys(): { publicKey: string; privateKey: string } {
+    if (this.cachedVapid) return this.cachedVapid;
+    this.cachedVapid = this.loadOrCreateVapidKeys();
+    return this.cachedVapid;
+  }
+  private loadOrCreateVapidKeys(): { publicKey: string; privateKey: string } {
     this.ensureDirectory();
     const file = path.join(this.directory, 'vapid.json');
     if (fs.existsSync(file)) {

@@ -8,6 +8,16 @@ import { config } from '../config.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 import webpush from 'web-push';
 
+/** Delivery receipts from the service worker. No session needed: the random ack token is the credential. */
+export const pushPublicRouter = Router();
+pushPublicRouter.post(
+  '/ack',
+  asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({ ack: z.string().length(32) }), req.body);
+    res.json({ ok: await PushService.acknowledge(body.ack) });
+  }),
+);
+
 export const pushRouter = Router();
 pushRouter.use(authenticate);
 
@@ -51,27 +61,28 @@ pushRouter.post(
     const user = currentUser(req);
     const body = parseBody(
       z.object({
-        endpoint: z.string().url(),
+        endpoint: z.string().url().max(500).refine((v) => v.startsWith('https://'), 'Push endpoint must be HTTPS'),
         keys: z.object({
-          p256dh: z.string(),
-          auth: z.string(),
+          p256dh: z.string().min(20).max(200),
+          auth: z.string().min(8).max(100),
         }),
+        deviceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
+        platform: z.string().max(24).optional(),
       }),
       req.body,
     );
 
-    // Store subscription
-    await execute(
-      `INSERT INTO push_subscriptions (employee_id, device_id, endpoint, p256dh, auth, created_at, updated_at)
-       VALUES (?, NULL, ?, ?, ?, NOW(3), NOW(3))
-       ON DUPLICATE KEY UPDATE
-         p256dh = VALUES(p256dh),
-         auth = VALUES(auth),
-         updated_at = NOW(3)`,
-      [user.id, body.endpoint, body.keys.p256dh, body.keys.auth],
-    );
+    // One row per browser endpoint, linked to user, device and login session; multiple devices per user.
+    await PushService.registerWebSubscription(user, {
+      endpoint: body.endpoint,
+      p256dh: body.keys.p256dh,
+      auth: body.keys.auth,
+      clientDeviceId: body.deviceId,
+      platform: body.platform,
+      userAgent: req.get('user-agent') ?? undefined,
+    });
 
-    res.json({ ok: true });
+    res.json({ ok: true, publicKey: config.vapidPublicKey });
   })
 );
 
@@ -189,6 +200,23 @@ pushRouter.post(
 
     res.json({ sent, failed, total: subscriptions.length });
   })
+);
+
+/** Recent push attempts for the signed-in user (sent / delivered / failed / expired), for debugging. */
+pushRouter.get(
+  '/log',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ entries: await PushService.deliveryLog(currentUser(req).id, Number(req.query.limit ?? 50) || 50) });
+  }),
+);
+
+/** Admin view of another employee's push attempts. */
+pushRouter.get(
+  '/log/:employeeId',
+  requireAny('notifications.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    res.json({ entries: await PushService.deliveryLog(Number(req.params.employeeId), Number(req.query.limit ?? 100) || 100) });
+  }),
 );
 
 /**

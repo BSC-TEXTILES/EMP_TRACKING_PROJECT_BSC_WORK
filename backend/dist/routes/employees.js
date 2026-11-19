@@ -153,61 +153,61 @@ employeesRouter.delete('/:id', requireAny('employees.delete', 'employees.manage'
     const result = await EmployeeService.remove(id, user, body.reason);
     res.json({ ok: true, ...result });
 }));
-employeesRouter.put('/roles/:id/permissions', requireAny('roles.manage'), asyncHandler(async (req, res) => {
+employeesRouter.put('/roles/:id/permissions', requireAny('roles.manage', 'roles.edit'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(z.object({ permissionIds: z.array(z.number().int().positive()) }), req.body);
     await EmployeeService.updateRolePermissions(id, user, body.permissionIds);
     res.json({ ok: true });
 }));
-employeesRouter.post('/roles', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.post('/roles', requireAny('roles.manage', 'roles.create', 'org.manage'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const body = parseBody(z.object({ name: z.string().min(2).max(120), slug: z.string().min(2).max(80), category: z.string().max(64).optional(), level: z.number().int().min(1).max(100).optional(), description: z.string().max(255).optional() }), req.body);
     res.status(201).json({ id: await EmployeeService.createRole(user, body) });
 }));
-employeesRouter.patch('/roles/:id', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.patch('/roles/:id', requireAny('roles.manage', 'roles.edit', 'org.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(z.object({ name: z.string().min(2).max(120).optional(), slug: z.string().min(2).max(80).optional(), description: z.string().max(255).optional(), level: z.number().int().min(1).max(100).optional() }), req.body);
     await EmployeeService.updateRoleDetails(user, id, body);
     res.json({ ok: true });
 }));
-employeesRouter.delete('/roles/:id', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.delete('/roles/:id', requireAny('roles.manage', 'roles.delete', 'org.manage'), asyncHandler(async (req, res) => {
     const raw = req.query.moveTo ?? req.body?.moveToRoleId;
     const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
     if (moveTo !== undefined && (!Number.isInteger(moveTo) || moveTo <= 0))
         throw ApiError.badRequest('Invalid target replacement role.');
     res.json(await EmployeeService.deleteRole(currentUser(req), intParam(req.params.id), moveTo, clientIp(req)));
 }));
-employeesRouter.post('/roles/:id/duplicate', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.post('/roles/:id/duplicate', requireAny('roles.manage', 'roles.create', 'org.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     res.status(201).json(await EmployeeService.duplicateRole(user, id, clientIp(req)));
 }));
-employeesRouter.get('/roles/audit-logs', requireAny('roles.manage', 'audit.view', 'admin.dashboard'), asyncHandler(async (_req, res) => {
+employeesRouter.get('/roles/audit-logs', requireAny('roles.manage', 'roles.view', 'audit.view', 'admin.dashboard'), asyncHandler(async (_req, res) => {
     res.json({ logs: await EmployeeService.getPermissionAuditLogs() });
 }));
-employeesRouter.get('/roles/:id/employees', requireAny('roles.manage', 'org.manage', 'employees.manage', 'employees.view.all'), asyncHandler(async (req, res) => {
+employeesRouter.get('/roles/:id/employees', requireAny('roles.manage', 'roles.view', 'org.manage', 'employees.manage', 'employees.view.all'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     res.json({ employees: await EmployeeService.getRoleEmployees(id) });
 }));
-employeesRouter.post('/roles/:id/employees', requireAny('roles.manage', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+employeesRouter.post('/roles/:id/employees', requireAny('roles.manage', 'roles.edit', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(z.object({ employeeId: z.number().int().positive() }), req.body);
     res.json(await EmployeeService.assignEmployeeToRole(user, id, body.employeeId, clientIp(req)));
 }));
-employeesRouter.delete('/roles/:id/employees/:employeeId', requireAny('roles.manage', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
+employeesRouter.delete('/roles/:id/employees/:employeeId', requireAny('roles.manage', 'roles.edit', 'org.manage', 'employees.manage'), asyncHandler(async (req, res) => {
     const roleId = intParam(req.params.id);
     const employeeId = intParam(req.params.employeeId);
     const user = currentUser(req);
     res.json(await EmployeeService.unassignEmployeeFromRole(user, roleId, employeeId, undefined, clientIp(req)));
 }));
-employeesRouter.get('/roles/:id/locations', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.get('/roles/:id/locations', requireAny('roles.manage', 'roles.view', 'org.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     res.json({ locationIds: await EmployeeService.getRoleLocations(id) });
 }));
-employeesRouter.put('/roles/:id/locations', requireAny('roles.manage', 'org.manage'), asyncHandler(async (req, res) => {
+employeesRouter.put('/roles/:id/locations', requireAny('roles.manage', 'roles.edit', 'org.manage'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
     const body = parseBody(z.object({ locationIds: z.array(z.number().int().positive()) }), req.body);

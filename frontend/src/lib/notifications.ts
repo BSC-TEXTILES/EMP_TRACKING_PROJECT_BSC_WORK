@@ -57,8 +57,63 @@ export async function requestNotificationPermission(): Promise<NotificationPermi
   }
 }
 
+const DEVICE_ID_KEY = 'wfm_push_device_id';
+const VAPID_KEY_KEY = 'wfm_push_vapid_key';
+
+function safeGet(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function safeSet(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* private mode */ }
+}
+
+/** Stable random id for this browser / installed app, so a user can have several devices. */
+export function pushDeviceId(): string {
+  let id = safeGet(DEVICE_ID_KEY);
+  if (!id || !/^[A-Za-z0-9_-]{8,64}$/.test(id)) {
+    id = (crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, '');
+    safeSet(DEVICE_ID_KEY, id);
+  }
+  return id;
+}
+
+export function isIos(): boolean {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+/** Running as an installed app (Home Screen / standalone window). */
+export function isStandalone(): boolean {
+  return window.matchMedia?.('(display-mode: standalone)').matches || (navigator as unknown as { standalone?: boolean }).standalone === true;
+}
+
+/** iOS only delivers Web Push to apps added to the Home Screen (iOS 16.4+). */
+export function iosNeedsHomeScreen(): boolean {
+  return isIos() && !isStandalone();
+}
+
+function platformLabel(): string {
+  if (isIos()) return isStandalone() ? 'ios-pwa' : 'ios-safari';
+  if (/android/i.test(navigator.userAgent)) return isStandalone() ? 'android-pwa' : 'android';
+  return isStandalone() ? 'desktop-pwa' : 'desktop';
+}
+
+/** The endpoint of this browser's current push subscription, if any. */
+export async function currentPushEndpoint(): Promise<string | null> {
+  if (!isWebPushSupported()) return null;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const sub = await registration?.pushManager.getSubscription();
+    return sub?.endpoint ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Subscribes current browser session to Web Push (VAPID)
+ * Subscribes this browser / installed PWA to Web Push (VAPID) and registers it for the
+ * signed-in user. Safe to call on every start: it re-subscribes when the server's key
+ * changed (an old subscription would be rejected by the push service forever) and
+ * refreshes the server-side link to the current login session.
  */
 export async function registerWebPushSubscription(): Promise<boolean> {
   if (!isWebPushSupported() || Notification.permission !== 'granted') {
@@ -71,6 +126,12 @@ export async function registerWebPushSubscription(): Promise<boolean> {
 
     const registration = await navigator.serviceWorker.ready;
     let subscription = await registration.pushManager.getSubscription();
+
+    if (subscription && safeGet(VAPID_KEY_KEY) && safeGet(VAPID_KEY_KEY) !== vapidRes.publicKey) {
+      // Server key rotated: the old subscription can never receive pushes again.
+      await subscription.unsubscribe().catch(() => undefined);
+      subscription = null;
+    }
 
     if (!subscription) {
       const applicationServerKey = urlBase64ToUint8Array(vapidRes.publicKey);
@@ -88,14 +149,38 @@ export async function registerWebPushSubscription(): Promise<boolean> {
           p256dh: subJson.keys.p256dh,
           auth: subJson.keys.auth,
         },
+        deviceId: pushDeviceId(),
+        platform: platformLabel(),
       });
-      console.log('[Push] Successfully subscribed to Web Push');
+      safeSet(VAPID_KEY_KEY, vapidRes.publicKey);
       return true;
     }
     return false;
   } catch (error) {
     console.warn('[Push] Web push subscription failed:', error);
     return false;
+  }
+}
+
+/** Removes this browser's subscription locally (used when the user turns notifications off at sign-out). */
+export async function unsubscribeWebPush(): Promise<void> {
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const sub = await registration?.pushManager.getSubscription();
+    await sub?.unsubscribe();
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Closes a ringing call notification shown by the service worker (answered / ended in the app). */
+export async function closeCallNotification(callId: string): Promise<void> {
+  try {
+    const registration = await navigator.serviceWorker?.getRegistration();
+    const open = await registration?.getNotifications({ tag: `call-${callId}` });
+    open?.forEach((n) => n.close());
+  } catch {
+    /* ignore */
   }
 }
 

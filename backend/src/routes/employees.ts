@@ -246,7 +246,7 @@ employeesRouter.delete(
 
 employeesRouter.put(
   '/roles/:id/permissions',
-  requireAny('roles.manage'),
+  requireAny('roles.manage', 'roles.edit'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
@@ -258,7 +258,7 @@ employeesRouter.put(
 
 employeesRouter.post(
   '/roles',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.create', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     const body = parseBody(
@@ -271,7 +271,7 @@ employeesRouter.post(
 
 employeesRouter.patch(
   '/roles/:id',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.edit', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
@@ -286,7 +286,7 @@ employeesRouter.patch(
 
 employeesRouter.delete(
   '/roles/:id',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.delete', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const raw = req.query.moveTo ?? (req.body as { moveToRoleId?: unknown } | undefined)?.moveToRoleId;
     const moveTo = raw === undefined || raw === '' ? undefined : Number(raw);
@@ -297,7 +297,7 @@ employeesRouter.delete(
 
 employeesRouter.post(
   '/roles/:id/duplicate',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.create', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
@@ -307,7 +307,7 @@ employeesRouter.post(
 
 employeesRouter.get(
   '/roles/audit-logs',
-  requireAny('roles.manage', 'audit.view', 'admin.dashboard'),
+  requireAny('roles.manage', 'roles.view', 'audit.view', 'admin.dashboard'),
   asyncHandler(async (_req: AuthedRequest, res) => {
     res.json({ logs: await EmployeeService.getPermissionAuditLogs() });
   }),
@@ -315,7 +315,7 @@ employeesRouter.get(
 
 employeesRouter.get(
   '/roles/:id/employees',
-  requireAny('roles.manage', 'org.manage', 'employees.manage', 'employees.view.all'),
+  requireAny('roles.manage', 'roles.view', 'org.manage', 'employees.manage', 'employees.view.all'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     res.json({ employees: await EmployeeService.getRoleEmployees(id) });
@@ -324,7 +324,7 @@ employeesRouter.get(
 
 employeesRouter.post(
   '/roles/:id/employees',
-  requireAny('roles.manage', 'org.manage', 'employees.manage'),
+  requireAny('roles.manage', 'roles.edit', 'org.manage', 'employees.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
@@ -335,7 +335,7 @@ employeesRouter.post(
 
 employeesRouter.delete(
   '/roles/:id/employees/:employeeId',
-  requireAny('roles.manage', 'org.manage', 'employees.manage'),
+  requireAny('roles.manage', 'roles.edit', 'org.manage', 'employees.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const roleId = intParam(req.params.id);
     const employeeId = intParam(req.params.employeeId);
@@ -346,7 +346,7 @@ employeesRouter.delete(
 
 employeesRouter.get(
   '/roles/:id/locations',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.view', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     res.json({ locationIds: await EmployeeService.getRoleLocations(id) });
@@ -355,7 +355,7 @@ employeesRouter.get(
 
 employeesRouter.put(
   '/roles/:id/locations',
-  requireAny('roles.manage', 'org.manage'),
+  requireAny('roles.manage', 'roles.edit', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { query, queryOne } from '../db/index.js';
 import { AuthService } from '../services/AuthService.js';
 import { PresenceService } from '../services/PresenceService.js';
+import { cancelDisconnectEnd, scheduleDisconnectEnd } from '../services/CallService.js';
 let io = null;
 const online = new Map();
 const socketUsers = new Map();
@@ -22,6 +23,22 @@ export function getIO() {
 }
 export function isOnline(employeeId) {
     return (online.get(employeeId)?.size ?? 0) > 0;
+}
+/**
+ * True when the employee has at least one socket whose page is in the foreground.
+ * A socket alone is not enough to skip a push: a PWA in the background, or a phone
+ * with the screen off, keeps its socket open for minutes but cannot show or sound
+ * anything. Pages that never reported visibility count as hidden.
+ */
+export function hasVisibleClient(employeeId) {
+    if (!io)
+        return false;
+    for (const socketId of online.get(employeeId) ?? []) {
+        const socket = io.of('/').sockets.get(socketId);
+        if (socket && socket.data.visible === true)
+            return true;
+    }
+    return false;
 }
 /** Employees with at least one socket inside a meeting room or a 1:1 call. */
 export function employeesInCallsOrMeetings() {
@@ -158,6 +175,9 @@ export function initRealtime(server) {
         io?.emit('presence:update', { employeeId: user.id, online: true });
         socket.emit('presence:list', onlineEmployeeIds());
         refreshPresence(user.id);
+        socket.on('client:visibility', (payload) => {
+            socket.data.visible = payload?.visible === true;
+        });
         socket.on('client:heartbeat', (_payload, ack) => {
             // Confirms the authenticated socket is alive and refreshes last-activity.
             void PresenceService.ping(user.id).catch(() => undefined);
@@ -230,6 +250,8 @@ export function initRealtime(server) {
                 if (!['ringing', 'active'].includes(call.status))
                     throw new Error('call ended');
                 await socket.join(`call:${callId}`);
+                // Rejoined after a network drop: the call continues (the caller re-offers on call:peer_joined).
+                cancelDisconnectEnd(callId, user.id);
                 const sockets = await io.in(`call:${callId}`).fetchSockets();
                 const participants = sockets.map((s) => {
                     const u = s.data.user;
@@ -349,12 +371,16 @@ export function initRealtime(server) {
                     const callId = code.slice('call:'.length);
                     try {
                         const remaining = await io.in(code).fetchSockets();
-                        const peers = remaining.filter((s) => s.data.user.id !== user.id);
+                        // A second tab / device of the same employee keeps the call alive.
                         const ownSockets = remaining.filter((s) => s.data.user.id === user.id);
-                        // A second tab of the same employee must not end the call.
-                        if (peers.length > 0 && ownSockets.length === 0) {
-                            io.to(code).emit('call:peer_left', { callId, employeeId: user.id, reason: 'disconnected' });
-                            io.to(code).emit('call:ended', { callId, reason: 'disconnected', byEmployeeId: user.id });
+                        if (ownSockets.length === 0) {
+                            // Do not end the call on a network blip: tell the peer we are reconnecting and
+                            // end it in the database only if we have not rejoined within the grace period.
+                            io.to(code).emit('call:peer_left', { callId, employeeId: user.id, reason: 'reconnecting' });
+                            scheduleDisconnectEnd(callId, user.id, async () => {
+                                const sockets = await io.in(code).fetchSockets();
+                                return sockets.some((s) => s.data.user.id === user.id);
+                            });
                         }
                     }
                     catch (error) {
