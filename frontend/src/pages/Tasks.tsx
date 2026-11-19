@@ -1312,10 +1312,10 @@ function CreateTaskModal({
   };
 
   const timeSlots = [
-    { id: 'morning', label: 'Morning Slot', hours: '09:30 - 11:00 AM', icon: '🌅', desc: 'Opening, counter setup & cash float' },
-    { id: 'operations', label: 'Store Operations', hours: '11:00 AM - 05:00 PM', icon: '🏬', desc: 'Active floor, customer service & sales' },
-    { id: 'evening', label: 'Evening Slot', hours: '05:00 - 08:00 PM', icon: '🌇', desc: 'Peak footfall, restock & register' },
-    { id: 'closing', label: 'Night Closing', hours: '08:00 - 09:30 PM', icon: '🔒', desc: 'Day-end tally, security & closing' },
+    { id: 'morning', label: 'Morning Slot', hours: '09:30 - 11:00 AM', icon: 'clock', desc: 'Opening, counter setup & cash float' },
+    { id: 'operations', label: 'Store Operations', hours: '11:00 AM - 05:00 PM', icon: 'building', desc: 'Active floor, customer service & sales' },
+    { id: 'evening', label: 'Evening Slot', hours: '05:00 - 08:00 PM', icon: 'activity', desc: 'Peak footfall, restock & register' },
+    { id: 'closing', label: 'Night Closing', hours: '08:00 - 09:30 PM', icon: 'lock', desc: 'Day-end tally, security & closing' },
   ];
 
   const priorities = [
@@ -1419,7 +1419,12 @@ function CreateTaskModal({
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span className="text-lg">{slot.icon}</span>
+                      <span className={cx(
+                        'flex h-7 w-7 items-center justify-center rounded-lg transition-colors',
+                        isSelected ? 'bg-brand-600 text-white' : 'bg-brand-50 text-brand-700 dark:bg-brand-950/40 dark:text-brand-300'
+                      )}>
+                        <Icon name={slot.icon} size={15} />
+                      </span>
                       {isSelected && (
                         <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand-600 text-white">
                           <Icon name="check" size={10} />
