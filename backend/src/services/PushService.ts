@@ -71,6 +71,11 @@ export interface CallPushInfo {
   callerId: number;
   callerName: string;
   callerPhoto: string | null;
+  /** Shown on the native incoming-call screen. */
+  callerCode?: string | null;
+  callerDesignation?: string | null;
+  callerLocationCode?: string | null;
+  callerLocationName?: string | null;
   /** Ring: unix ms after which the notification must disappear. */
   expiresAt?: number;
   /** Ring: 1-based re-ring counter so the device alerts again. */
@@ -141,7 +146,18 @@ interface FcmTarget {
   employee_id: number;
   token: string;
   signed_in: number;
+  platform?: string;
+  /** The app has the native call service (data-only call pushes, full-screen ring, delivery receipts). */
+  native_calls?: number;
 }
+
+/** Outcome of one call push round, used to tell "ringing" from "unreachable". */
+export type CallPushStats = Stats & {
+  /** Pushes to devices that confirm delivery (Web Push service worker, native Android call service). */
+  ackCapable: number;
+  /** Pushes to older app builds that cannot confirm delivery. */
+  legacy: number;
+};
 
 /**
  * Devices that may receive pushes: the employee is active and the device either
@@ -165,7 +181,7 @@ async function webTargets(employeeIds: number[]): Promise<WebTarget[]> {
 async function fcmTargets(employeeIds: number[]): Promise<FcmTarget[]> {
   if (employeeIds.length === 0 || !fcmConfigured()) return [];
   return query<FcmTarget>(
-    `SELECT t.id, t.employee_id, t.token, (s.id IS NOT NULL) AS signed_in
+    `SELECT t.id, t.employee_id, t.token, (s.id IS NOT NULL) AS signed_in, t.platform, t.native_calls
      FROM push_device_tokens t
      JOIN employees e ON e.id = t.employee_id AND e.status = 'active'
      LEFT JOIN employee_sessions s ON s.id = t.session_id AND s.revoked_at IS NULL AND s.expires_at > NOW(3)
@@ -312,14 +328,15 @@ export class PushService {
    */
   static async registerDevice(
     user: AuthUser,
-    input: { token: string; platform: 'android' | 'ios'; deviceName?: string; appVersion?: string },
+    input: { token: string; platform: 'android' | 'ios'; deviceName?: string; appVersion?: string; nativeCalls?: boolean; clientDeviceId?: string },
   ): Promise<void> {
     await execute(
-      `INSERT INTO push_device_tokens (employee_id, session_id, token, platform, device_name, app_version)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO push_device_tokens (employee_id, session_id, token, platform, device_name, app_version, native_calls, client_device_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          employee_id = VALUES(employee_id), session_id = VALUES(session_id), platform = VALUES(platform),
          device_name = VALUES(device_name), app_version = VALUES(app_version),
+         native_calls = VALUES(native_calls), client_device_id = COALESCE(VALUES(client_device_id), client_device_id),
          keep_after_logout = 0, signed_out_at = NULL,
          failure_count = 0, last_error = NULL, updated_at = NOW(3)`,
       [
@@ -329,6 +346,8 @@ export class PushService {
         input.platform,
         input.deviceName?.slice(0, 120) ?? null,
         input.appVersion?.slice(0, 40) ?? null,
+        input.nativeCalls && input.platform === 'android' ? 1 : 0,
+        input.clientDeviceId?.slice(0, 64) ?? null,
       ],
     );
   }
@@ -447,12 +466,39 @@ export class PushService {
 
   /** The service worker confirms it displayed a push. Unauthenticated: the random token is the credential. */
   static async acknowledge(ackToken: string): Promise<boolean> {
-    if (!/^[a-f0-9]{32}$/.test(ackToken)) return false;
+    return (await PushService.acknowledgeDetailed(ackToken)) !== null;
+  }
+
+  /** Same as acknowledge(), returning which push was confirmed (a call ring makes the caller's screen say "Ringing"). */
+  static async acknowledgeDetailed(ackToken: string): Promise<{ employeeId: number; kind: string; ref: string | null } | null> {
+    if (!/^[a-f0-9]{32}$/.test(ackToken)) return null;
     const result = await execute(
       "UPDATE push_delivery_log SET status = 'delivered', delivered_at = NOW(3) WHERE ack_token = ? AND status = 'sent'",
       [ackToken],
     );
-    return result.affectedRows > 0;
+    if (result.affectedRows === 0) return null;
+    const rows = await query<{ employee_id: number; kind: string; ref: string | null; channel: string; target_id: number }>(
+      'SELECT employee_id, kind, ref, channel, target_id FROM push_delivery_log WHERE ack_token = ? LIMIT 1',
+      [ackToken],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    if (row.channel === 'webpush') {
+      await execute('UPDATE push_subscriptions SET last_ack_at = NOW(3) WHERE id = ?', [row.target_id]).catch(() => undefined);
+    }
+    return { employeeId: Number(row.employee_id), kind: row.kind, ref: row.ref };
+  }
+
+  /** The native Android call service confirmed a call push (it is ringing on that phone). */
+  static async acknowledgeNative(employeeId: number, callRef: string, fcmToken?: string): Promise<void> {
+    if (fcmToken) {
+      await execute('UPDATE push_device_tokens SET last_ack_at = NOW(3) WHERE employee_id = ? AND token = ?', [employeeId, fcmToken]).catch(() => undefined);
+    }
+    await execute(
+      `UPDATE push_delivery_log SET status = 'delivered', delivered_at = NOW(3)
+       WHERE employee_id = ? AND channel = 'fcm' AND ref = ? AND status = 'sent' ORDER BY id DESC LIMIT 1`,
+      [employeeId, callRef.slice(0, 80)],
+    ).catch(() => undefined);
   }
 
   /** Recent delivery attempts for one employee (debugging screen / support). */
@@ -553,12 +599,17 @@ export class PushService {
    * play a ringtone. The service worker shows the ring, and closes / replaces it
    * on cancel or missed (same tag).
    */
-  static async sendCall(calleeId: number, kind: CallPushKind, info: CallPushInfo): Promise<Stats> {
-    const total: Stats = { sent: 0, failed: 0, removed: 0 };
+  static async sendCall(calleeId: number, kind: CallPushKind, info: CallPushInfo): Promise<CallPushStats> {
+    const total: CallPushStats = { sent: 0, failed: 0, removed: 0, ackCapable: 0, legacy: 0 };
     try {
       const recipients = await unmuted([calleeId], 'meetings');
       if (recipients.length === 0) return total;
-      const [web, fcm] = await Promise.all([webTargets(recipients), kind === 'call_cancel' ? Promise.resolve([]) : fcmTargets(recipients)]);
+      const [web, allFcm] = await Promise.all([webTargets(recipients), fcmTargets(recipients)]);
+      const isNative = (t: FcmTarget) => Number(t.native_calls) === 1 && t.platform === 'android';
+      // Native phones ring continuously by themselves: they need the first ring (plus one backup) and every cancel / missed.
+      const nativeTargets = kind === 'call_ring' && (info.attempt ?? 1) > 2 ? [] : allFcm.filter(isNative);
+      // Older app builds only understand notification pushes; they get no cancel (it would show an empty notification).
+      const fcm = kind === 'call_cancel' ? [] : allFcm.filter((t) => !isNative(t));
       const tag = `call-${info.callId}`;
       const label = info.type === 'video' ? 'video' : 'voice';
       const title = kind === 'call_ring' ? `${info.callerName}` : kind === 'call_missed' ? `Missed ${label} call` : 'Call ended';
@@ -598,6 +649,31 @@ export class PushService {
           : { ttl: kind === 'call_missed' ? 86400 : 60, urgency: 'high', topic: info.callId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32) },
       );
 
+      const nativeStats = await sendFcmAll(nativeTargets, kind, `call:${info.callId}`, () => ({
+        title: kind === 'call_ring' ? `Incoming ${label} call` : title,
+        body: kind === 'call_ring' ? `${info.callerName} is calling you` : body,
+        channel: 'calls',
+        priority: 'high',
+        tag,
+        dataOnly: true,
+        ttlSeconds: kind === 'call_ring' ? ringTtl : kind === 'call_missed' ? 86400 : 60,
+        data: {
+          type: kind,
+          callId: info.callId,
+          callType: info.type,
+          callerId: String(info.callerId),
+          callerName: info.callerName,
+          callerCode: info.callerCode ?? '',
+          callerDesignation: info.callerDesignation ?? '',
+          callerLocationCode: info.callerLocationCode ?? '',
+          callerLocationName: info.callerLocationName ?? '',
+          callerPhoto: info.callerPhoto ?? '',
+          expiresAt: String(info.expiresAt ?? Date.now() + ringTtl * 1000),
+          actionToken: callActionToken(info.callId, calleeId),
+          link,
+        },
+      }));
+
       const fcmStats = await sendFcmAll(fcm, kind, `call:${info.callId}`, () => ({
         title: kind === 'call_ring' ? `Incoming ${label} call` : title,
         body: kind === 'call_ring' ? `${info.callerName} is calling you` : body,
@@ -607,9 +683,11 @@ export class PushService {
         ttlSeconds: kind === 'call_ring' ? ringTtl : 86400,
         data: { type: kind === 'call_ring' ? 'incoming_call' : 'missed_call', callId: info.callId, callType: info.type, link },
       }));
-      for (const s of [webStats, fcmStats]) {
+      for (const s of [webStats, fcmStats, nativeStats]) {
         total.sent += s.sent; total.failed += s.failed; total.removed += s.removed;
       }
+      total.ackCapable = webStats.sent + nativeStats.sent;
+      total.legacy = fcmStats.sent;
       if (kind === 'call_ring' && (info.attempt ?? 1) === 1 && total.sent === 0) {
         console.warn(`[push] call ${info.callId}: callee ${calleeId} has no push-capable device (subscribe the phone in the app)`);
       }

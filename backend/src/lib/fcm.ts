@@ -35,6 +35,13 @@ export interface FcmMessage {
   badge?: number;
   /** Seconds FCM keeps an undelivered message. Calls use ~40 s so a phone that comes online late never rings for a dead call. */
   ttlSeconds?: number;
+  /**
+   * Android only: send a data-only message (no `notification` block). The app's own
+   * FirebaseMessagingService then runs even in the background / locked, and draws the
+   * full-screen incoming-call UI itself. With a `notification` block Android shows a
+   * plain system notification and the app code never runs while it is in the background.
+   */
+  dataOnly?: boolean;
 }
 
 export type FcmOutcome =
@@ -124,6 +131,19 @@ async function fetchAccessToken(): Promise<string> {
 }
 
 function buildBody(token: string, message: FcmMessage) {
+  if (message.dataOnly) {
+    return {
+      message: {
+        token,
+        data: { ...message.data, title: message.title.slice(0, 200), body: message.body?.slice(0, 500) ?? '' },
+        android: {
+          priority: 'HIGH',
+          ttl: `${Math.max(0, Math.floor(message.ttlSeconds ?? 86400))}s`,
+          ...(message.tag ? { collapse_key: message.tag.slice(0, 64) } : {}),
+        },
+      },
+    };
+  }
   return {
     message: {
       token,

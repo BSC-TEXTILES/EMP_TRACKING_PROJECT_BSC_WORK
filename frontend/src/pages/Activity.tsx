@@ -303,7 +303,10 @@ export default function Activity() {
     }
     setBusy(true);
     try {
-      await api.post('/activity/sessions/start', { deviceId: Number(deviceId) });
+      await api.post('/activity/sessions/start', {
+        deviceId: Number(deviceId),
+        employeeId: selectedEmployeeId || undefined,
+      });
       toast.success('Work session monitoring started.');
       await load();
     } catch (caught) {
@@ -316,7 +319,10 @@ export default function Activity() {
   const stopSession = async () => {
     setBusy(true);
     try {
-      await api.post('/activity/sessions/stop');
+      await api.post('/activity/sessions/stop', {
+        employeeId: selectedEmployeeId || undefined,
+        sessionId: self?.session?.id || undefined,
+      });
       toast.success('Work session monitoring stopped.');
       await load();
     } catch (caught) {

@@ -76,6 +76,19 @@ async function fetchAccessToken() {
     return cachedToken.value;
 }
 function buildBody(token, message) {
+    if (message.dataOnly) {
+        return {
+            message: {
+                token,
+                data: { ...message.data, title: message.title.slice(0, 200), body: message.body?.slice(0, 500) ?? '' },
+                android: {
+                    priority: 'HIGH',
+                    ttl: `${Math.max(0, Math.floor(message.ttlSeconds ?? 86400))}s`,
+                    ...(message.tag ? { collapse_key: message.tag.slice(0, 64) } : {}),
+                },
+            },
+        };
+    }
     return {
         message: {
             token,

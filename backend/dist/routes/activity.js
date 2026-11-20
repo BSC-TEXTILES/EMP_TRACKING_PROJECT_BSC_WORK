@@ -192,13 +192,23 @@ activityRouter.post('/auto-stop', asyncHandler(async (req, res) => {
     res.json(result);
 }));
 activityRouter.post('/sessions/start', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
     const deviceId = Number(req.body?.deviceId);
     if (!deviceId)
         throw ApiError.badRequest('Select a registered device.');
-    res.status(201).json(await ActivityService.startSession(currentUser(req), deviceId, { ip: req.ip, userAgent: req.get('user-agent') }));
+    const targetEmployeeId = req.body?.employeeId ? Number(req.body.employeeId) : undefined;
+    const targetUser = targetEmployeeId && (user.roleLevel >= 50 || user.permissions.includes('activity.admin'))
+        ? { ...user, id: targetEmployeeId }
+        : user;
+    res.status(201).json(await ActivityService.startSession(targetUser, deviceId, { ip: req.ip, userAgent: req.get('user-agent') }));
 }));
 activityRouter.post('/sessions/stop', asyncHandler(async (req, res) => {
-    res.json(await ActivityService.stopSession(currentUser(req)));
+    const user = currentUser(req);
+    const body = req.body ?? {};
+    res.json(await ActivityService.stopSession(user, {
+        employeeId: body.employeeId ? Number(body.employeeId) : undefined,
+        sessionId: body.sessionId ? Number(body.sessionId) : undefined,
+    }));
 }));
 activityRouter.get('/sessions/current', asyncHandler(async (req, res) => {
     res.json({ session: await ActivityService.currentSession(currentUser(req)) });

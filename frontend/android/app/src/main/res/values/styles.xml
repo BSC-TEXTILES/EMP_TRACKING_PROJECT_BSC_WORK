@@ -19,4 +19,13 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
     </style>
+
+    <!-- Full-screen incoming call (shown over the lock screen). -->
+    <style name="AppTheme.IncomingCall" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:statusBarColor">#FF0B2A6F</item>
+        <item name="android:navigationBarColor">#FF0A1630</item>
+        <item name="android:windowShowWallpaper">false</item>
+    </style>
 </resources>

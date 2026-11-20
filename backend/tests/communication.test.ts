@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Socket } from 'socket.io-client';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApp } from '../src/index.js';
@@ -20,7 +23,30 @@ async function login(identifier: string) {
   expect(response.status).toBe(200);
   // supertest agents keep cookies; state-changing requests need the app origin.
   const wrap = (method: 'get' | 'post' | 'put' | 'delete') => (url: string) => agent[method](url).set('Origin', 'http://localhost:5173');
-  return { agent: { get: wrap('get'), post: wrap('post'), put: wrap('put'), delete: wrap('delete') }, id: Number(response.body.user.id) };
+  const cookie = ([] as string[]).concat(response.headers['set-cookie'] ?? []).map((c) => c.split(';')[0]).join('; ');
+  return { agent: { get: wrap('get'), post: wrap('post'), put: wrap('put'), delete: wrap('delete') }, id: Number(response.body.user.id), cookie };
+}
+
+// Calls only ring on a device that is connected: the callee's app is opened over a real socket.
+let realtimeServer: http.Server | null = null;
+let realtimeUrl = '';
+const openSockets: Socket[] = [];
+
+async function appOnline(user: { cookie: string }): Promise<Socket> {
+  if (!realtimeServer) {
+    const { initRealtime } = await import('../src/realtime/io.js');
+    realtimeServer = http.createServer(app);
+    initRealtime(realtimeServer);
+    await new Promise<void>((resolve) => realtimeServer!.listen(0, '127.0.0.1', resolve));
+    realtimeUrl = `http://127.0.0.1:${(realtimeServer.address() as AddressInfo).port}`;
+  }
+  const { io } = await import('socket.io-client');
+  const socket = io(realtimeUrl, { transports: ['websocket'], reconnection: false, extraHeaders: { cookie: user.cookie }, auth: { caps: ['call_ack'] } });
+  openSockets.push(socket);
+  // The app confirms every incoming call, like the real client does.
+  socket.on('call:incoming', (payload: { callId: string }) => socket.emit('call:ring_ack', { callId: payload.callId }));
+  await new Promise<void>((resolve, reject) => { socket.on('connect', () => resolve()); socket.on('connect_error', reject); });
+  return socket;
 }
 
 /** No test may leave a live call behind, or later "busy" checks become flaky. */
@@ -33,7 +59,11 @@ async function clearCalls(...ids: number[]) {
 }
 
 beforeAll(() => { app = createApp(); });
-afterAll(async () => { await closePool(); });
+afterAll(async () => {
+  openSockets.forEach((socket) => socket.close());
+  if (realtimeServer) await new Promise((resolve) => realtimeServer!.close(resolve));
+  await closePool();
+});
 
 describe('in-app calling', () => {
   it('rings, is accepted only by the callee, connects and records a server-side duration', async () => {
@@ -41,6 +71,7 @@ describe('in-app calling', () => {
     const callee = await login('karthik.iyer@workforce.test');
     const outsider = await login('meera.joshi@workforce.test');
     await clearCalls(caller.id, callee.id, outsider.id);
+    await appOnline(callee);
 
     const config = await caller.agent.get('/api/calls/config');
     expect(config.status).toBe(200);
@@ -91,6 +122,7 @@ describe('in-app calling', () => {
     const caller = await login('ananya.rao@workforce.test');
     const callee = await login('karthik.iyer@workforce.test');
     await clearCalls(caller.id, callee.id);
+    await appOnline(callee);
     const start = await caller.agent.post('/api/calls/start').send({ targetEmployeeId: callee.id, type: 'audio' });
     expect(start.status).toBe(201);
     expect((await callee.agent.post(`/api/calls/${start.body.callId}/reject`)).status).toBe(200);
@@ -103,6 +135,7 @@ describe('in-app calling', () => {
     const caller = await login('ananya.rao@workforce.test');
     const callee = await login('karthik.iyer@workforce.test');
     await clearCalls(caller.id, callee.id);
+    await appOnline(callee);
     const start = await caller.agent.post('/api/calls/start').send({ targetEmployeeId: callee.id, type: 'audio' });
     expect(start.status).toBe(201);
     const callId = String(start.body.callId);

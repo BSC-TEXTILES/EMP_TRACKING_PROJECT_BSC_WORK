@@ -474,8 +474,17 @@ export class ActivityService {
     return rows.length;
   }
 
-  static async stopSession(user: AuthUser) {
-    const ended = await ActivityService.endSessionsForEmployee(user.id, 'employee_stopped');
+  static async stopSession(user: AuthUser, input?: { employeeId?: number; sessionId?: number }) {
+    const targetId = input?.employeeId && (user.roleLevel >= 50 || user.permissions.includes('activity.admin') || user.permissions.includes('activity.view.team') || user.permissions.includes('activity.view.all'))
+      ? Number(input.employeeId)
+      : user.id;
+
+    if (input?.sessionId) {
+      const ended = await ActivityService.endSession(Number(input.sessionId), targetId, 'employee_stopped');
+      return { stopped: ended };
+    }
+
+    const ended = await ActivityService.endSessionsForEmployee(targetId, 'employee_stopped');
     return { stopped: ended > 0 };
   }
 

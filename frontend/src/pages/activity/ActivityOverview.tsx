@@ -186,7 +186,7 @@ export function ActivityOverview({
 
       {/* ------------------------------------------------------------ Monitoring Status Card */}
       {self && (
-        <div className="rounded-xl border border-ink-200/90 bg-surface p-4 shadow-sm">
+        <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
           {!self.consent.acknowledged && (
             <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50/80 p-3.5 text-amber-900 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-start gap-2.5">
@@ -218,26 +218,26 @@ export function ActivityOverview({
             <div className="flex items-center gap-3.5">
               <Avatar name={activeEmployeeName} size={48} />
               <div>
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-bold text-ink-900">Workstation Monitoring State</h2>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-sm font-bold text-slate-900">Workstation Monitoring State</h2>
                   <span
                     className={cx(
                       'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold tracking-wide uppercase',
                       self.session
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300'
-                        : 'bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-400',
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200',
                     )}
                   >
                     <span
                       className={cx(
                         'h-2 w-2 rounded-full',
-                        self.session ? 'bg-emerald-500 animate-pulse' : 'bg-ink-400',
+                        self.session ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400',
                       )}
                     />
                     {self.session ? 'Monitoring Active' : 'Not Monitoring'}
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-ink-500">
+                <p className="mt-1 text-xs text-slate-500 leading-normal break-words">
                   {self.session
                     ? `${self.session.deviceName} · Work session active since ${formatDateTime(self.session.startedAt)}`
                     : 'Monitoring runs strictly during active office attendance with an authorised desktop agent or browser extension.'}
@@ -248,7 +248,7 @@ export function ActivityOverview({
             {/* Monitoring session controls */}
             <div className="flex flex-wrap items-center gap-2 self-start lg:self-auto">
               <select
-                className="h-9 rounded-lg border border-ink-200 bg-surface px-2.5 text-xs font-medium text-ink-800 focus:outline-none focus:ring-2 focus:ring-brand-500/30 min-w-[160px]"
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500/30 min-w-[170px]"
                 value={deviceId}
                 onChange={(event) => onDeviceIdChange(event.target.value ? Number(event.target.value) : '')}
                 aria-label="Monitoring device"
@@ -258,14 +258,14 @@ export function ActivityOverview({
                   .filter((device) => device.status === 'active')
                   .map((device) => (
                     <option key={device.id} value={device.id}>
-                      {device.deviceName} · {device.osName}
+                      {device.deviceName} ({device.osName})
                     </option>
                   ))}
               </select>
 
               <button
                 type="button"
-                className="btn-secondary h-9 px-3 text-xs"
+                className="btn-secondary h-9 px-3 text-xs whitespace-nowrap inline-flex items-center gap-1.5"
                 disabled={busy}
                 onClick={onRegisterDevice}
                 title="Register this browser or desktop machine"
@@ -277,7 +277,7 @@ export function ActivityOverview({
               {self.session ? (
                 <button
                   type="button"
-                  className="btn-danger h-9 px-3.5 text-xs font-semibold inline-flex items-center gap-1.5"
+                  className="btn-danger h-9 px-3.5 text-xs font-semibold whitespace-nowrap inline-flex items-center gap-1.5"
                   disabled={busy}
                   onClick={onStopSession}
                 >
@@ -287,7 +287,7 @@ export function ActivityOverview({
               ) : (
                 <button
                   type="button"
-                  className="btn-primary h-9 px-3.5 text-xs font-semibold inline-flex items-center gap-1.5"
+                  className="btn-primary h-9 px-3.5 text-xs font-semibold whitespace-nowrap inline-flex items-center gap-1.5"
                   disabled={busy || !self.consent.acknowledged}
                   onClick={onStartSession}
                 >
@@ -300,27 +300,31 @@ export function ActivityOverview({
 
           {/* Device pills */}
           {self.devices.length > 0 && (
-            <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3 dark:border-ink-800/80">
-              <span className="text-[11px] font-semibold text-ink-500 uppercase tracking-wider">Registered Devices:</span>
-              {self.devices.map((device) => (
-                <span
-                  key={device.id}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-ink-200 bg-ink-50/60 px-2.5 py-0.5 text-xs font-medium text-ink-700 dark:border-ink-700 dark:bg-ink-800/60 dark:text-ink-200"
-                >
-                  <Icon name="monitor" size={13} className="text-brand-600" />
-                  <span>{device.deviceName}</span>
-                  <span className="text-[10px] text-ink-400 font-mono">({device.osName})</span>
-                  <button
-                    type="button"
-                    className="ml-1 text-ink-400 hover:text-red-600"
-                    aria-label={`Revoke ${device.deviceName}`}
-                    onClick={() => onRevokeDevice(device)}
-                    title="Revoke device"
+            <div className="mt-3.5 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider shrink-0">
+                Registered Devices:
+              </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {self.devices.map((device) => (
+                  <span
+                    key={device.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 whitespace-nowrap shadow-2xs"
                   >
-                    ×
-                  </button>
-                </span>
-              ))}
+                    <Icon name="monitor" size={13} className="text-brand-600 shrink-0" />
+                    <span className="font-semibold text-slate-800">{device.deviceName}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">({device.osName})</span>
+                    <button
+                      type="button"
+                      className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-rose-100 hover:text-rose-600 transition-colors cursor-pointer"
+                      aria-label={`Revoke ${device.deviceName}`}
+                      onClick={() => onRevokeDevice(device)}
+                      title="Revoke device"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -332,22 +336,22 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('today')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-brand-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-brand-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-brand-50 p-2 text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">
+            <span className="rounded bg-brand-50 p-2 text-brand-700">
               <Icon name="activity" size={18} strokeWidth={2.2} />
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-ink-400 group-hover:text-brand-600">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-brand-600">
               Foreground
             </span>
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Active Time</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Active Time</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {formatMinutes(activeMinutes)}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">Active application work</p>
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">Active application work</p>
           </div>
         </button>
 
@@ -355,10 +359,10 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('timeline')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-emerald-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-emerald-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-emerald-50 p-2 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+            <span className="rounded bg-emerald-50 p-2 text-emerald-700">
               <Icon name="clock" size={18} strokeWidth={2.2} />
             </span>
             <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">
@@ -366,11 +370,11 @@ export function ActivityOverview({
             </span>
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Attendance</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Attendance</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {formatMinutes(attendanceMinutes)}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">
               Break: {self?.daily?.breakMinutes ?? 0}m
             </p>
           </div>
@@ -380,10 +384,10 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('today')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-sky-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-sky-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-sky-50 p-2 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300">
+            <span className="rounded bg-sky-50 p-2 text-sky-700">
               <Icon name="checkCircle" size={18} strokeWidth={2.2} />
             </span>
             <span className="text-[10px] font-bold uppercase tracking-wider text-sky-700">
@@ -391,11 +395,11 @@ export function ActivityOverview({
             </span>
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Tasks Completed</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Tasks Completed</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {tasksCompleted}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">Store SOP milestones done</p>
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">Store SOP milestones done</p>
           </div>
         </button>
 
@@ -403,10 +407,10 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('today')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-amber-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-amber-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-amber-50 p-2 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+            <span className="rounded bg-amber-50 p-2 text-amber-700">
               <Icon name="tasks" size={18} strokeWidth={2.2} />
             </span>
             <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">
@@ -414,11 +418,11 @@ export function ActivityOverview({
             </span>
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Pending Tasks</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Pending Tasks</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {tasksPending}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">Scheduled for completion</p>
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">Scheduled for completion</p>
           </div>
         </button>
 
@@ -426,22 +430,22 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('today')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-rose-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-rose-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-rose-50 p-2 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300">
+            <span className="rounded bg-rose-50 p-2 text-rose-700">
               <Icon name="ticket" size={18} strokeWidth={2.2} />
             </span>
-            <span className={cx('text-[10px] font-bold uppercase tracking-wider', issuesCount > 0 ? 'text-rose-700' : 'text-ink-400')}>
+            <span className={cx('text-[10px] font-bold uppercase tracking-wider', issuesCount > 0 ? 'text-rose-700' : 'text-slate-400')}>
               {issuesCount > 0 ? 'Incident' : 'Optimal'}
             </span>
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Technical Issues</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Technical Issues</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {issuesCount}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">
               {self?.daily?.tickets?.length ?? 0} tickets raised
             </p>
           </div>
@@ -451,10 +455,10 @@ export function ActivityOverview({
         <button
           type="button"
           onClick={() => onSummaryCardClick?.('weekly')}
-          className="group relative flex flex-col justify-between rounded-xl border border-ink-200/90 bg-surface p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-indigo-400 shadow-xs"
+          className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-indigo-400 shadow-xs"
         >
           <div className="flex items-center justify-between">
-            <span className="rounded bg-indigo-50 p-2 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300">
+            <span className="rounded bg-indigo-50 p-2 text-indigo-700">
               <Icon name="kpi" size={18} strokeWidth={2.2} />
             </span>
             {weeklyGrade && (
@@ -464,11 +468,11 @@ export function ActivityOverview({
             )}
           </div>
           <div className="mt-3">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Weekly Score</p>
-            <p className="mt-0.5 text-2xl font-black text-ink-900 tabular-nums">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Weekly Score</p>
+            <p className="mt-0.5 text-2xl font-black text-slate-900 tabular-nums">
               {weeklyScore !== null ? `${weeklyScore}/100` : '—'}
             </p>
-            <p className="mt-1 truncate text-xs text-ink-500">
+            <p className="mt-1 text-xs text-slate-500 leading-tight break-words">
               {self?.weekly?.[0] ? 'Preliminary calculation' : 'Not calculated yet'}
             </p>
           </div>

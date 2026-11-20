@@ -8,8 +8,8 @@ import { emitToEmployees } from '../realtime/io.js';
 import { toIso } from '../lib/dates.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { EmployeeService } from '../services/EmployeeService.js';
-import { verifyCallActionToken } from '../services/PushService.js';
-import { RING_TIMEOUT_SECONDS, endActiveCall, endRingingCall, loadCall, onAccepted, startRinging, } from '../services/CallService.js';
+import { PushService, verifyCallActionToken } from '../services/PushService.js';
+import { RECONNECT_GRACE_SECONDS, RING_TIMEOUT_SECONDS, UNREACHABLE_AFTER_SECONDS, endActiveCall, endRingingCall, loadCall, logCallEvent, markConnected, markDelivered, onAccepted, startRinging, } from '../services/CallService.js';
 /**
  * Endpoints the service worker calls from a notification action. They work
  * without a session (the phone may be signed out, and a worker request may not
@@ -32,6 +32,28 @@ callsPublicRouter.post('/push-action', asyncHandler(async (req, res) => {
     }
     res.json({ ok: true });
 }));
+/**
+ * Delivery receipt from the native Android call service: the phone is ringing now.
+ * Works without a session (the app may be closed / signed out); the HMAC token in the
+ * push is bound to this call and this callee, so nobody can confirm a ring for someone else.
+ */
+callsPublicRouter.post('/ring-ack', asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({
+        callId: z.string().min(3).max(80),
+        token: z.string().min(20).max(64),
+        fcmToken: z.string().min(20).max(512).regex(/^[A-Za-z0-9_:\-.]+$/).optional(),
+        device: z.string().max(64).optional(),
+    }), req.body);
+    const call = await loadCall(body.callId);
+    if (!call || !verifyCallActionToken(call.call_id, Number(call.callee_id), body.token)) {
+        throw ApiError.forbidden('Invalid call receipt.');
+    }
+    await PushService.acknowledgeNative(Number(call.callee_id), `call:${call.call_id}`, body.fcmToken);
+    const first = await markDelivered(call.call_id, Number(call.callee_id), 'fcm', body.device ?? 'android');
+    // Tell the phone whether it should keep ringing (the call may have ended while it was waking up).
+    const current = await loadCall(call.call_id);
+    res.json({ ok: true, first, ringing: current?.status === 'ringing' });
+}));
 export const callsRouter = Router();
 callsRouter.use(authenticate);
 export function rtcIceServers() {
@@ -49,11 +71,24 @@ export function rtcIceServers() {
     }
     return servers;
 }
+/**
+ * The user-facing call state, derived from the stored status and timestamps:
+ * initiating → ringing (a device confirmed) → connecting (answered) → connected (media up) → ended,
+ * or busy / declined / missed / unreachable / failed.
+ */
+export function callState(status, deliveredAt, connectedAt, endReason) {
+    switch (status) {
+        case 'ringing': return deliveredAt ? 'ringing' : 'initiating';
+        case 'active': return connectedAt ? 'connected' : 'connecting';
+        case 'completed': return endReason === 'failed' ? 'failed' : 'ended';
+        default: return status;
+    }
+}
 async function activeCallForEmployee(employeeId) {
     return queryOne(`SELECT call_id, status, caller_id, callee_id FROM calls
      WHERE (caller_id = ? OR callee_id = ?)
-       AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL 60 SECOND)))
-     ORDER BY id DESC LIMIT 1`, [employeeId, employeeId]);
+       AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL ? SECOND)))
+     ORDER BY id DESC LIMIT 1`, [employeeId, employeeId, RING_TIMEOUT_SECONDS + 15]);
 }
 /**
  * Get list of employees available for calling
@@ -94,6 +129,9 @@ callsRouter.get('/config', asyncHandler(async (_req, res) => {
     res.json({
         iceServers: rtcIceServers(),
         ringTimeoutSeconds: RING_TIMEOUT_SECONDS,
+        unreachableAfterSeconds: UNREACHABLE_AFTER_SECONDS,
+        reconnectGraceSeconds: RECONNECT_GRACE_SECONDS,
+        turnConfigured: Boolean(config.turn.url),
         maxCallSeconds: 3600,
     });
 }));
@@ -160,8 +198,8 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
        VALUES (?, ?, ?, ?, 'ringing', 'outgoing', NULL, NOW(3))`, [callId, user.id, target.id, body.type]);
     // Two callers can pass the busy check at the same moment; the earliest live call wins.
     const contested = await queryOne(`SELECT id FROM calls WHERE id < ? AND (caller_id IN (?, ?) OR callee_id IN (?, ?))
-         AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL 60 SECOND)))
-       LIMIT 1`, [result.insertId, user.id, target.id, user.id, target.id]);
+         AND (status = 'active' OR (status = 'ringing' AND started_at > DATE_SUB(NOW(3), INTERVAL ? SECOND)))
+       LIMIT 1`, [result.insertId, user.id, target.id, user.id, target.id, RING_TIMEOUT_SECONDS + 15]);
     if (contested) {
         await execute("UPDATE calls SET status = 'busy', end_reason = 'busy', ended_at = NOW(3) WHERE id = ?", [result.insertId]);
         throw new ApiError(409, `${target.fullName} is on another call.`, 'busy');
@@ -176,8 +214,10 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
             department: user.departmentName,
             designation: user.designationTitle,
             location: user.locationName,
+            locationCode: user.locationCode ?? null,
         },
         type: body.type,
+        expiresAt: Date.now() + RING_TIMEOUT_SECONDS * 1000,
     });
     // In-app record only; the phone / browser ring is the dedicated call push below.
     await NotificationService.notify({
@@ -193,7 +233,7 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
     });
     // High-priority push to ALL of the callee's devices, re-rung until answer / decline / timeout.
     // Sent even when the callee is "online": a socket in a frozen background tab cannot ring.
-    await startRinging({
+    const ring = await startRinging({
         id: Number(result.insertId),
         call_id: callId,
         caller_id: user.id,
@@ -204,6 +244,9 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
     res.status(201).json({
         callId,
         callRecordId: result.insertId,
+        // 'calling': waiting for a device to confirm; 'unreachable': ended, nothing could ring.
+        state: ring.state,
+        ...(ring.state === 'unreachable' ? { reason: ring.reason, message: ring.message } : {}),
         peer: {
             employeeId: target.id,
             employeeCode: target.employeeCode,
@@ -211,9 +254,12 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
             photoUrl: target.photoUrl,
             department: target.departmentName,
             designation: target.designationTitle,
+            location: target.locationName ?? null,
+            locationCode: target.locationCode ?? null,
         },
         iceServers: rtcIceServers(),
         ringTimeoutSeconds: RING_TIMEOUT_SECONDS,
+        unreachableAfterSeconds: UNREACHABLE_AFTER_SECONDS,
     });
 }));
 /**
@@ -224,7 +270,7 @@ callsRouter.post('/start', asyncHandler(async (req, res) => {
 callsRouter.get('/pending', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const row = await queryOne(`SELECT c.call_id, c.type, c.started_at, c.caller_id, e.employee_code, e.full_name, e.photo_url,
-              d.name AS dept, dg.title AS desig, l.name AS loc
+              d.name AS dept, dg.title AS desig, l.name AS loc, l.code AS loc_code
        FROM calls c
        JOIN employees e ON e.id = c.caller_id
        LEFT JOIN departments d ON d.id = e.department_id
@@ -249,7 +295,9 @@ callsRouter.get('/pending', asyncHandler(async (req, res) => {
                 department: row.dept,
                 designation: row.desig,
                 location: row.loc,
+                locationCode: row.loc_code,
             },
+            expiresAt: new Date(row.started_at).getTime() + RING_TIMEOUT_SECONDS * 1000,
         },
         iceServers: rtcIceServers(),
     });
@@ -259,7 +307,8 @@ callsRouter.get('/pending', asyncHandler(async (req, res) => {
  */
 callsRouter.post('/:callId/accept', asyncHandler(async (req, res) => {
     const user = currentUser(req);
-    const callId = req.params.callId;
+    const callId = String(req.params.callId);
+    const deviceId = typeof req.body?.deviceId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(req.body.deviceId) ? req.body.deviceId : null;
     const canReceive = user.permissions.includes('calls.receive') ||
         user.roleSlug === 'super_admin' ||
         (user.roleLevel ?? 0) >= 80;
@@ -273,12 +322,13 @@ callsRouter.post('/:callId/accept', asyncHandler(async (req, res) => {
         throw ApiError.forbidden('Not authorized for this call');
     if (call.status !== 'ringing')
         throw new ApiError(409, 'Call is no longer ringing.', 'call_ended');
-    const accepted = await execute("UPDATE calls SET status = 'active', accepted_at = NOW(3) WHERE id = ? AND status = 'ringing'", [call.id]);
+    // Guarded transition: when two devices answer at the same moment, exactly one wins.
+    const accepted = await execute("UPDATE calls SET status = 'active', accepted_at = NOW(3), answered_device = ? WHERE id = ? AND status = 'ringing'", [deviceId, call.id]);
     if (accepted.affectedRows !== 1)
         throw new ApiError(409, 'Call is no longer ringing.', 'call_ended');
     emitToEmployees([call.caller_id], 'call:accepted', { callId });
     // Other devices of the callee stop ringing.
-    await onAccepted({ id: Number(call.id), call_id: callId, caller_id: Number(call.caller_id), callee_id: Number(call.callee_id), type: 'audio', status: 'active' });
+    await onAccepted({ id: Number(call.id), call_id: callId, caller_id: Number(call.caller_id), callee_id: Number(call.callee_id), type: 'audio', status: 'active' }, deviceId);
     res.json({ ok: true });
 }));
 async function participantCall(callId, userId, role) {
@@ -323,9 +373,39 @@ callsRouter.post('/:callId/cancel', asyncHandler(async (req, res) => {
         await endRingingCall(call, 'missed', 'cancelled');
     res.json({ ok: true });
 }));
+/** A participant's WebRTC media path is connected (both directions negotiated, audio flowing). */
+callsRouter.post('/:callId/connected', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const call = await participantCall(String(req.params.callId), user.id, 'either');
+    res.json({ ok: true, first: call.status === 'active' ? await markConnected(call, user.id) : false });
+}));
+/** Client-side call diagnostics (ICE restarts, quality drops, permission errors) for the audit trail. */
+callsRouter.post('/:callId/events', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        event: z.enum(['ice_restart', 'reconnecting', 'reconnected', 'quality_poor', 'quality_good', 'mic_denied', 'media_failed', 'turn_unavailable', 'audio_route']),
+        detail: z.record(z.string().max(40), z.union([z.string().max(120), z.number(), z.boolean(), z.null()])).optional(),
+    }), req.body);
+    const call = await participantCall(String(req.params.callId), user.id, 'either');
+    logCallEvent(call.call_id, user.id, body.event, null, body.detail);
+    res.json({ ok: true });
+}));
+/** The call's audit trail (participants only). */
+callsRouter.get('/:callId/events', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const call = await participantCall(String(req.params.callId), user.id, 'either');
+    const rows = await query('SELECT id, employee_id, event, device, detail, created_at FROM call_events WHERE call_id = ? ORDER BY id LIMIT 200', [call.call_id]);
+    res.json({
+        events: rows.map((r) => ({
+            id: Number(r.id), employeeId: r.employee_id === null ? null : Number(r.employee_id), event: r.event,
+            device: r.device, detail: typeof r.detail === 'string' ? JSON.parse(r.detail) : r.detail, at: toIso(r.created_at),
+        })),
+    });
+}));
 /** Either side hangs up. Ringing calls become missed / declined, connected calls completed. */
 callsRouter.post('/:callId/end', asyncHandler(async (req, res) => {
     const user = currentUser(req);
+    const failed = req.body?.reason === 'failed';
     const call = await participantCall(String(req.params.callId), user.id, 'either');
     if (call.status === 'ringing') {
         const byCaller = Number(call.caller_id) === user.id;
@@ -335,7 +415,7 @@ callsRouter.post('/:callId/end', asyncHandler(async (req, res) => {
     }
     if (call.status === 'active') {
         // Duration comes from database server timestamps, never a client clock.
-        const duration = await endActiveCall(call, 'completed');
+        const duration = await endActiveCall(call, failed ? 'failed' : 'completed');
         res.json({ ok: true, duration: duration ?? 0, status: 'completed' });
         return;
     }
@@ -360,7 +440,8 @@ callsRouter.get('/detail/:callId', asyncHandler(async (req, res) => {
     const call = await queryOne(`SELECT c.*, caller.employee_code AS caller_code, caller.full_name AS caller_name,
               caller.photo_url AS caller_photo, cd.name AS caller_dept, cg.title AS caller_desig,
               callee.employee_code AS callee_code, callee.full_name AS callee_name,
-              callee.photo_url AS callee_photo, ed.name AS callee_dept, eg.title AS callee_desig
+              callee.photo_url AS callee_photo, ed.name AS callee_dept, eg.title AS callee_desig,
+              cl.name AS caller_loc, cl.code AS caller_loc_code, el.name AS callee_loc, el.code AS callee_loc_code
        FROM calls c
        JOIN employees caller ON caller.id = c.caller_id
        JOIN employees callee ON callee.id = c.callee_id
@@ -368,6 +449,8 @@ callsRouter.get('/detail/:callId', asyncHandler(async (req, res) => {
        LEFT JOIN designations cg ON cg.id = caller.designation_id
        LEFT JOIN departments ed ON ed.id = callee.department_id
        LEFT JOIN designations eg ON eg.id = callee.designation_id
+       LEFT JOIN locations cl ON cl.id = caller.location_id
+       LEFT JOIN locations el ON el.id = callee.location_id
        WHERE c.call_id = ?`, [callId]);
     if (!call)
         throw ApiError.notFound('Call not found');
@@ -379,6 +462,8 @@ callsRouter.get('/detail/:callId', asyncHandler(async (req, res) => {
         callId: call.call_id,
         type: call.type,
         status: call.status,
+        state: callState(call.status, call.delivered_at, call.connected_at, call.end_reason),
+        endReason: call.end_reason ?? null,
         direction: outgoing ? 'outgoing' : 'incoming',
         startedAt: toIso(call.started_at),
         acceptedAt: call.accepted_at ? toIso(call.accepted_at) : null,
@@ -392,6 +477,8 @@ callsRouter.get('/detail/:callId', asyncHandler(async (req, res) => {
                 photoUrl: call.callee_photo,
                 department: call.callee_dept,
                 designation: call.callee_desig,
+                location: call.callee_loc,
+                locationCode: call.callee_loc_code,
             }
             : {
                 employeeId: Number(call.caller_id),
@@ -400,7 +487,10 @@ callsRouter.get('/detail/:callId', asyncHandler(async (req, res) => {
                 photoUrl: call.caller_photo,
                 department: call.caller_dept,
                 designation: call.caller_desig,
+                location: call.caller_loc,
+                locationCode: call.caller_loc_code,
             },
+        expiresAt: call.status === 'ringing' ? new Date(call.started_at).getTime() + RING_TIMEOUT_SECONDS * 1000 : null,
         iceServers: rtcIceServers(),
     });
 }));
@@ -414,7 +504,7 @@ callsRouter.get('/history', asyncHandler(async (req, res) => {
     const rows = await query(`
       SELECT
         c.id, c.call_id, c.type, c.direction, c.status, c.end_reason, c.duration_seconds,
-        c.started_at, c.ended_at,
+        c.started_at, c.ended_at, c.delivered_at, c.connected_at,
         c.caller_id, c.callee_id,
         caller.employee_code AS caller_code,
         caller.full_name AS caller_name,
@@ -466,6 +556,7 @@ callsRouter.get('/history', asyncHandler(async (req, res) => {
             type: r.type,
             direction: isOutgoing ? 'outgoing' : 'incoming',
             status: r.status,
+            state: callState(r.status, r.delivered_at, r.connected_at, r.end_reason),
             endReason: r.end_reason ?? null,
             duration: Number(r.duration_seconds || 0),
             participant,

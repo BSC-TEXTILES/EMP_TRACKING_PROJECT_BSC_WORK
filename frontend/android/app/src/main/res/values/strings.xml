@@ -4,4 +4,10 @@
     <string name="title_activity_main">BSC Workforce</string>
     <string name="package_name">in.bsctextiles.workforce</string>
     <string name="custom_url_scheme">in.bsctextiles.workforce</string>
+    <!-- API used by the native call service before the web app has started (overridden at runtime by CallBridge.configure). -->
+    <string name="bsc_api_origin" translatable="false">https://emptrack.bsctextiles.in</string>
+    <string name="call_channel_ring">Incoming calls</string>
+    <string name="call_channel_ring_desc">Rings with your ringtone when a colleague calls you</string>
+    <string name="call_channel_missed">Missed calls</string>
+    <string name="call_channel_ongoing">Ongoing call</string>
 </resources>

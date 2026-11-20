@@ -4,12 +4,16 @@ import { config } from '../config.js';
 import { query, queryOne } from '../db/index.js';
 import { AuthService, type AuthUser } from '../services/AuthService.js';
 import { PresenceService } from '../services/PresenceService.js';
-import { cancelDisconnectEnd, scheduleDisconnectEnd } from '../services/CallService.js';
+import { cancelDisconnectEnd, markDelivered, scheduleDisconnectEnd, takeMissedWhileAway } from '../services/CallService.js';
 
 interface SocketData {
   user: AuthUser;
   /** The page reports document.visibilityState; a hidden (background / locked phone) page cannot alert the user. */
   visible?: boolean;
+  /** Client build confirms incoming calls with `call:ring_ack` (newer web / app builds). */
+  callAck?: boolean;
+  /** Stable per-device id chosen by the client (multi-device answer sync). */
+  deviceId?: string;
 }
 
 let io: Server | null = null;
@@ -41,6 +45,23 @@ export function isOnline(employeeId: number): boolean {
  * with the screen off, keeps its socket open for minutes but cannot show or sound
  * anything. Pages that never reported visibility count as hidden.
  */
+/**
+ * How an employee can be reached right now over sockets. `ackSockets` confirm a ring;
+ * `legacySockets` belong to older client builds that may ring but never confirm it.
+ */
+export function callReach(employeeId: number): { sockets: number; ackSockets: number; legacySockets: number } {
+  const result = { sockets: 0, ackSockets: 0, legacySockets: 0 };
+  if (!io) return result;
+  for (const socketId of online.get(employeeId) ?? []) {
+    const socket = io.of('/').sockets.get(socketId);
+    if (!socket) continue;
+    result.sockets += 1;
+    if ((socket.data as SocketData).callAck) result.ackSockets += 1;
+    else result.legacySockets += 1;
+  }
+  return result;
+}
+
 export function hasVisibleClient(employeeId: number): boolean {
   if (!io) return false;
   for (const socketId of online.get(employeeId) ?? []) {
@@ -166,6 +187,11 @@ export function initRealtime(server: HttpServer): Server {
       const user = await AuthService.authenticateToken(token);
       if (!user) return next(new Error('unauthorized'));
       (socket.data as SocketData).user = user;
+      const auth = (socket.handshake.auth ?? {}) as { caps?: unknown; deviceId?: unknown };
+      (socket.data as SocketData).callAck = Array.isArray(auth.caps) && auth.caps.includes('call_ack');
+      if (typeof auth.deviceId === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(auth.deviceId)) {
+        (socket.data as SocketData).deviceId = auth.deviceId;
+      }
       next();
     } catch {
       next(new Error('unauthorized'));
@@ -194,14 +220,35 @@ export function initRealtime(server: HttpServer): Server {
     io?.emit('presence:update', { employeeId: user.id, online: true });
     socket.emit('presence:list', onlineEmployeeIds());
     refreshPresence(user.id);
+    query('UPDATE employees SET last_seen_at = NOW(3) WHERE id = ?', [user.id]).catch(() => undefined);
+
+    // Calls missed while none of this employee's devices was connected: shown once, on reconnect.
+    takeMissedWhileAway(user.id)
+      .then((calls) => {
+        if (calls.length > 0) io?.to(`user:${user.id}`).emit('call:missed_summary', { calls });
+      })
+      .catch((error) => console.error('[realtime] missed-call summary failed', error));
+
+    // The app shows the ringing screen for this call: confirms to the caller that it is really ringing.
+    socket.on('call:ring_ack', async (payload: { callId?: unknown }, ack?: (res: unknown) => void) => {
+      try {
+        const callId = String(payload?.callId ?? '');
+        if (!callId || callId.length > 80) throw new Error('invalid call');
+        await markDelivered(callId, user.id, 'socket', (socket.data as SocketData).deviceId ?? socket.id);
+        ack?.({ ok: true });
+      } catch (error) {
+        ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+      }
+    });
 
     socket.on('client:visibility', (payload: { visible?: unknown }) => {
       (socket.data as SocketData).visible = payload?.visible === true;
     });
 
     socket.on('client:heartbeat', (_payload: unknown, ack?: (res: unknown) => void) => {
-      // Confirms the authenticated socket is alive and refreshes last-activity.
+      // Confirms the authenticated socket is alive and refreshes last-activity / last-seen.
       void PresenceService.ping(user.id).catch(() => undefined);
+      query('UPDATE employees SET last_seen_at = NOW(3) WHERE id = ?', [user.id]).catch(() => undefined);
       ack?.({ ok: true, at: Date.now() });
     });
 

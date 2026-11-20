@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { asyncHandler, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { PushService } from '../services/PushService.js';
+import { markDelivered } from '../services/CallService.js';
 import { query, execute, queryOne } from '../db/index.js';
 import { config } from '../config.js';
 import type { AuthedRequest } from '../middleware/auth.js';
@@ -14,7 +15,12 @@ pushPublicRouter.post(
   '/ack',
   asyncHandler(async (req, res) => {
     const body = parseBody(z.object({ ack: z.string().length(32) }), req.body);
-    res.json({ ok: await PushService.acknowledge(body.ack) });
+    const acked = await PushService.acknowledgeDetailed(body.ack);
+    // The service worker displayed a call ring: the caller's screen may now honestly say "Ringing".
+    if (acked && acked.kind === 'call_ring' && acked.ref?.startsWith('call:')) {
+      await markDelivered(acked.ref.slice('call:'.length), acked.employeeId, 'webpush');
+    }
+    res.json({ ok: acked !== null });
   }),
 );
 
@@ -318,6 +324,9 @@ const deviceSchema = z.object({
   platform: z.enum(['android', 'ios']),
   deviceName: z.string().max(120).optional(),
   appVersion: z.string().max(40).optional(),
+  /** The app build has the native call service (full-screen ring, data-only call pushes, receipts). */
+  nativeCalls: z.boolean().optional(),
+  clientDeviceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/).optional(),
 });
 
 /** Registers (or refreshes) this phone for push. Call after login and whenever FCM rotates the token. */
