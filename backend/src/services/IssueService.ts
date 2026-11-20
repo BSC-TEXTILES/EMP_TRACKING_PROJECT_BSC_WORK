@@ -1,4 +1,4 @@
-import { query, queryOne, execute } from '../db/index.js';
+import { query, queryOne, execute, transaction } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
@@ -1344,5 +1344,118 @@ export class IssueService {
     }
 
     return { remindersSent, escalationsTriggered };
+  }
+
+  static async updateIssue(
+    id: number,
+    actor: AuthUser,
+    input: {
+      title?: string;
+      description?: string;
+      category?: string;
+      priority?: 'low' | 'medium' | 'high' | 'critical';
+      status?: string;
+      affectedModule?: string;
+      assignedTo?: number;
+    },
+  ) {
+    const existing = await queryOne<{ id: number; issue_no: string; reporter_id: number; current_assignee_id: number }>(
+      'SELECT id, issue_no, reporter_id, current_assignee_id FROM issues WHERE id = ?',
+      [id],
+    );
+    if (!existing) throw ApiError.notFound('Issue not found');
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.title !== undefined) {
+      updates.push('title = ?');
+      params.push(input.title.trim());
+    }
+    if (input.description !== undefined) {
+      updates.push('description = ?');
+      params.push(input.description.trim());
+    }
+    if (input.category !== undefined) {
+      updates.push('category = ?');
+      params.push(input.category.trim());
+    }
+    if (input.priority !== undefined) {
+      updates.push('priority = ?');
+      params.push(input.priority);
+    }
+    if (input.status !== undefined) {
+      updates.push('status = ?');
+      params.push(input.status);
+      if (input.status === 'resolved') updates.push('resolved_at = COALESCE(resolved_at, NOW(3))');
+      if (input.status === 'closed') updates.push('closed_at = COALESCE(closed_at, NOW(3))');
+    }
+    if (input.affectedModule !== undefined) {
+      updates.push('affected_module = ?');
+      params.push(input.affectedModule ? input.affectedModule.trim() : null);
+    }
+
+    if (input.assignedTo !== undefined) {
+      const newAssigneeId = Number(input.assignedTo);
+      updates.push('current_assignee_id = ?');
+      params.push(newAssigneeId);
+
+      await execute('UPDATE issue_assignments SET is_active = 0 WHERE issue_id = ?', [id]);
+      const res = await execute(
+        `INSERT INTO issue_assignments (issue_id, assigned_to, assigned_by, reason, is_active, assigned_at)
+         VALUES (?, ?, ?, 'manual_reassign', 1, NOW(3))`,
+        [id, newAssigneeId, actor.id],
+      );
+      updates.push('current_assignment_id = ?');
+      params.push(res.insertId);
+    }
+
+    if (updates.length > 0) {
+      params.push(id);
+      await execute(`UPDATE issues SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    await execute(
+      `INSERT INTO issue_activity_logs (issue_id, actor_id, action, note)
+       VALUES (?, ?, 'issue_updated', 'Issue updated')`,
+      [id, actor.id],
+    );
+
+    const recipients = new Set<number>([
+      Number(existing.reporter_id),
+      Number(existing.current_assignee_id),
+      ...(input.assignedTo ? [Number(input.assignedTo)] : []),
+      actor.id,
+    ]);
+    emitToEmployees([...recipients].filter(Boolean), 'issue:updated', { issueId: id });
+
+    return await IssueService.getIssue(id, actor);
+  }
+
+  static async deleteIssue(id: number, actor: AuthUser) {
+    const existing = await queryOne<{ id: number; issue_no: string; reporter_id: number; current_assignee_id: number }>(
+      'SELECT id, issue_no, reporter_id, current_assignee_id FROM issues WHERE id = ?',
+      [id],
+    );
+    if (!existing) throw ApiError.notFound('Issue not found');
+
+    await transaction(async (conn: any) => {
+      await conn.query('DELETE FROM issue_attachments WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issue_comments WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issue_assignments WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issue_escalation_history WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issue_activity_logs WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issue_notifications WHERE issue_id = ?', [id]);
+      await conn.query('DELETE FROM issues WHERE id = ?', [id]);
+    });
+
+    const recipients = new Set<number>([
+      Number(existing.reporter_id),
+      Number(existing.current_assignee_id),
+      actor.id,
+    ]);
+    emitToEmployees([...recipients].filter(Boolean), 'issue:deleted', { issueId: id, issueNo: existing.issue_no });
+
+    return { success: true, id };
   }
 }

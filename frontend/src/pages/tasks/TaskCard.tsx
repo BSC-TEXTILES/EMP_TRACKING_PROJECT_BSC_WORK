@@ -43,12 +43,16 @@ export function TaskCard({
   busy,
   onOpen,
   onQuick,
+  onEdit,
+  onDelete,
 }: {
   task: TaskSummary;
   role: TaskRole;
   busy: boolean;
   onOpen: () => void;
   onQuick: (quick: QuickAction) => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const quick = nextAction(task, role);
   const category = task.category ? task.category.replace(/_/g, ' ') : slotLabel(task.timeSlot);
@@ -185,17 +189,45 @@ export function TaskCard({
             </span>
           )}
         </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpen();
-          }}
-          className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-ink-600 hover:bg-ink-100 hover:text-ink-900 transition-colors"
-        >
-          Details
-          <Icon name="chevronRight" size={13} />
-        </button>
+        <div className="flex items-center gap-1">
+          {onEdit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit();
+              }}
+              title="Edit Task"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+            >
+              <Icon name="edit" size={13} />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete();
+              }}
+              title="Delete Task"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+            >
+              <Icon name="trash" size={13} />
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen();
+            }}
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-ink-600 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+          >
+            Details
+            <Icon name="chevronRight" size={13} />
+          </button>
+        </div>
       </div>
     </article>
   );

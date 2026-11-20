@@ -10,6 +10,8 @@ interface IssueCardsProps {
   onOpen: (id: number) => void;
   onAcknowledge: (id: number) => void;
   onEscalate: (id: number) => void;
+  onEdit?: (issue: IssueItem) => void;
+  onDelete?: (issue: IssueItem) => void;
 }
 
 export function IssueCards({
@@ -19,6 +21,8 @@ export function IssueCards({
   onOpen,
   onAcknowledge,
   onEscalate,
+  onEdit,
+  onDelete,
 }: IssueCardsProps) {
   if (issues.length === 0) {
     return (
@@ -168,6 +172,28 @@ export function IssueCards({
                   >
                     Details
                   </button>
+
+                  {onEdit && (
+                    <button
+                      type="button"
+                      onClick={() => onEdit(issue)}
+                      title="Edit Issue"
+                      className="p-1 rounded text-ink-500 hover:text-brand-600 hover:bg-brand-50 border border-ink-200 transition-colors"
+                    >
+                      <Icon name="edit" size={13} />
+                    </button>
+                  )}
+
+                  {onDelete && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(issue)}
+                      title="Delete Issue"
+                      className="p-1 rounded text-ink-500 hover:text-rose-600 hover:bg-rose-50 border border-ink-200 transition-colors"
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

@@ -88,4 +88,31 @@ ticketsRouter.post('/:id/action', asyncHandler(async (req, res) => {
     });
     res.json(await TicketService.detail(id, user));
 }));
+ticketsRouter.put('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        subject: z.string().min(3).max(200).optional(),
+        description: z.string().min(5).max(8000).optional(),
+        category: z.string().min(2).max(64).optional(),
+        priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+        status: z.string().max(32).optional(),
+        assigneeId: z.number().int().positive().nullable().optional(),
+        departmentId: z.number().int().positive().nullable().optional(),
+    }), req.body);
+    const updated = await TicketService.update(id, user, body, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(updated);
+}));
+ticketsRouter.delete('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const result = await TicketService.delete(id, user, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(result);
+}));
 //# sourceMappingURL=tickets.js.map

@@ -63,6 +63,11 @@ export default function Tickets() {
   const [selectedAssigneeId, setSelectedAssigneeId] = useState<number | ''>('');
   const [feedbackRating, setFeedbackRating] = useState<number>(5);
 
+  // Edit & Delete states
+  const [editTicket, setEditTicket] = useState<TicketSummary | null>(null);
+  const [deleteConfirmTicket, setDeleteConfirmTicket] = useState<TicketSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const query = new URLSearchParams({ page: String(page), pageSize: '20' });
@@ -99,6 +104,30 @@ export default function Tickets() {
     if (detail) void openDetail(detail.id, true);
   });
   useSocketEvent('ticket:created', () => void load());
+  useSocketEvent('ticket:deleted', (data: any) => {
+    void load();
+    if (detail && data?.id === detail.id) {
+      setDetail(null);
+    }
+  });
+
+  const handleDeleteTicket = async () => {
+    if (!deleteConfirmTicket) return;
+    setDeleteBusy(true);
+    try {
+      await api.del(`/tickets/${deleteConfirmTicket.id}`);
+      toast.success(`Ticket ${deleteConfirmTicket.ticketNo} deleted successfully.`);
+      if (detail?.id === deleteConfirmTicket.id) {
+        setDetail(null);
+      }
+      setDeleteConfirmTicket(null);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const openDetail = async (id: number, silent = false) => {
     try {
@@ -276,6 +305,7 @@ export default function Tickets() {
                     <th>Assignee</th>
                     <th>SLA Target</th>
                     <th>Created</th>
+                    <th className="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -303,6 +333,26 @@ export default function Tickets() {
                       <td className="text-ink-600">{ticket.assigneeName ?? <span className="text-ink-400">Unassigned</span>}</td>
                       <td className="whitespace-nowrap text-xs text-ink-500">{formatDateTime(ticket.slaDueAt)}</td>
                       <td className="whitespace-nowrap text-xs text-ink-500">{formatDateTime(ticket.createdAt)}</td>
+                      <td className="whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg text-ink-500 hover:text-brand-600 hover:bg-brand-50 transition-colors"
+                            title="Edit Ticket"
+                            onClick={() => setEditTicket(ticket)}
+                          >
+                            <Icon name="edit" size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg text-ink-500 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                            title="Delete Ticket"
+                            onClick={() => setDeleteConfirmTicket(ticket)}
+                          >
+                            <Icon name="trash" size={16} />
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -418,9 +468,27 @@ export default function Tickets() {
                   </button>
                 )}
               </div>
-              <button className="btn-secondary btn-sm" onClick={() => setDetail(null)}>
-                Close
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5 text-brand-700 hover:bg-brand-50"
+                  onClick={() => setEditTicket(detail)}
+                >
+                  <Icon name="edit" size={14} />
+                  Edit Ticket
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5 text-rose-600 hover:bg-rose-50 border-rose-200"
+                  onClick={() => setDeleteConfirmTicket(detail)}
+                >
+                  <Icon name="trash" size={14} />
+                  Delete
+                </button>
+                <button className="btn-secondary btn-sm" onClick={() => setDetail(null)}>
+                  Close
+                </button>
+              </div>
             </div>
           ) : null
         }
@@ -672,7 +740,240 @@ export default function Tickets() {
           void openDetail(ticket.id);
         }}
       />
+
+      <EditTicketModal
+        ticket={editTicket}
+        open={Boolean(editTicket)}
+        assignees={assignees}
+        onClose={() => setEditTicket(null)}
+        onSaved={(updated) => {
+          setEditTicket(null);
+          if (detail?.id === updated.id) {
+            setDetail(updated);
+          }
+          void load();
+        }}
+      />
+
+      <DeleteTicketModal
+        ticket={deleteConfirmTicket}
+        open={Boolean(deleteConfirmTicket)}
+        busy={deleteBusy}
+        onClose={() => setDeleteConfirmTicket(null)}
+        onConfirm={handleDeleteTicket}
+      />
     </div>
+  );
+}
+
+function EditTicketModal({
+  ticket,
+  open,
+  assignees,
+  onClose,
+  onSaved,
+}: {
+  ticket: TicketSummary | null;
+  open: boolean;
+  assignees: PickerEmployee[];
+  onClose: () => void;
+  onSaved: (ticket: TicketSummary) => void;
+}) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    subject: '',
+    description: '',
+    category: CATEGORIES[0],
+    priority: 'medium',
+    status: 'new',
+    assigneeId: '' as number | '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (ticket) {
+      setForm({
+        subject: ticket.subject,
+        description: ticket.description,
+        category: ticket.category,
+        priority: ticket.priority,
+        status: ticket.status,
+        assigneeId: ticket.assigneeId ?? '',
+      });
+    }
+  }, [ticket]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ticket) return;
+    if (!form.subject.trim()) {
+      toast.error('Subject is required');
+      return;
+    }
+    if (!form.description.trim()) {
+      toast.error('Description is required');
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await api.put<TicketSummary>(`/tickets/${ticket.id}`, {
+        subject: form.subject.trim(),
+        description: form.description.trim(),
+        category: form.category,
+        priority: form.priority,
+        status: form.status,
+        assigneeId: form.assigneeId ? Number(form.assigneeId) : null,
+      });
+      toast.success('Ticket updated successfully');
+      onSaved(updated);
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Edit Ticket · ${ticket?.ticketNo ?? ''}`}
+      description="Update ticket details, priority, assignment, or status."
+      size="md"
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <Field label="Subject" required>
+          <input
+            className="input"
+            value={form.subject}
+            onChange={(e) => setForm((prev) => ({ ...prev, subject: e.target.value }))}
+            required
+            placeholder="Brief summary of the issue"
+          />
+        </Field>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Category" required>
+            <select
+              className="input"
+              value={form.category}
+              onChange={(e) => setForm((prev) => ({ ...prev, category: e.target.value }))}
+            >
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Priority" required>
+            <select
+              className="input"
+              value={form.priority}
+              onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value }))}
+            >
+              <option value="low">Low (72 h SLA)</option>
+              <option value="medium">Medium (48 h SLA)</option>
+              <option value="high">High (24 h SLA)</option>
+              <option value="critical">Critical (4 h SLA)</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Status" required>
+            <select
+              className="input"
+              value={form.status}
+              onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+            >
+              {['new', 'assigned', 'acknowledged', 'in_progress', 'waiting_information', 'resolved', 'closed', 'reopened', 'cancelled'].map((st) => (
+                <option key={st} value={st}>
+                  {titleize(st)}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Assignee">
+            <select
+              className="input"
+              value={form.assigneeId}
+              onChange={(e) => setForm((prev) => ({ ...prev, assigneeId: e.target.value ? Number(e.target.value) : '' }))}
+            >
+              <option value="">Unassigned</option>
+              {assignees.map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.full_name} ({emp.employee_code})
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <Field label="Description" required>
+          <textarea
+            className="input min-h-[110px]"
+            value={form.description}
+            onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+            required
+            rows={4}
+            placeholder="Detailed description of the issue or request"
+          />
+        </Field>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-ink-100">
+          <button type="button" className="btn-secondary btn-sm" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary btn-sm" disabled={saving}>
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function DeleteTicketModal({
+  ticket,
+  open,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  ticket: TicketSummary | null;
+  open: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title="Confirm Delete Ticket" size="sm">
+      <div className="space-y-3">
+        <p className="text-sm text-ink-700">
+          Are you sure you want to permanently delete ticket{' '}
+          <strong className="text-ink-900">{ticket?.ticketNo}</strong> (<em>{ticket?.subject}</em>)?
+        </p>
+        <p className="text-xs text-rose-600 font-medium">
+          This action will remove the ticket, associated comments, attachments, and logs. It cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2 pt-3 border-t border-ink-100">
+          <button type="button" className="btn-secondary btn-sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm bg-rose-600 hover:bg-rose-700 text-white"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Deleting…' : 'Delete Ticket'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

@@ -15,6 +15,8 @@ export function TaskBoard({
   busy,
   onOpen,
   onQuick,
+  onEdit,
+  onDelete,
 }: {
   items: TaskSummary[];
   summary?: TaskListSummary;
@@ -26,6 +28,8 @@ export function TaskBoard({
   busy: boolean;
   onOpen: (task: TaskSummary) => void;
   onQuick: (task: TaskSummary, quick: QuickAction) => void;
+  onEdit?: (task: TaskSummary) => void;
+  onDelete?: (task: TaskSummary) => void;
 }) {
   const [mobileStage, setMobileStage] = useState<StageId>('assigned');
 
@@ -121,6 +125,8 @@ export function TaskBoard({
                     busy={busy}
                     onOpen={() => onOpen(task)}
                     onQuick={(quick) => onQuick(task, quick)}
+                    onEdit={onEdit ? () => onEdit(task) : undefined}
+                    onDelete={onDelete ? () => onDelete(task) : undefined}
                   />
                 ))}
               </div>

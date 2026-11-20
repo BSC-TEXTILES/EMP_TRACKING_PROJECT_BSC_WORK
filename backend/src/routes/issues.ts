@@ -211,3 +211,35 @@ issuesRouter.post(
     res.json(await IssueService.addComment(id, user, body));
   }),
 );
+
+// 13. Edit issue
+issuesRouter.put(
+  '/:id',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id, 'id');
+    const body = parseBody(
+      z.object({
+        title: z.string().min(3).max(200).optional(),
+        description: z.string().min(5).max(10000).optional(),
+        category: z.string().min(2).max(64).optional(),
+        priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+        status: z.string().max(24).optional(),
+        affectedModule: z.string().max(120).optional(),
+        assignedTo: z.number().int().positive().optional(),
+      }),
+      req,
+    );
+    res.json(await IssueService.updateIssue(id, user, body));
+  }),
+);
+
+// 14. Delete issue
+issuesRouter.delete(
+  '/:id',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id, 'id');
+    res.json(await IssueService.deleteIssue(id, user));
+  }),
+);

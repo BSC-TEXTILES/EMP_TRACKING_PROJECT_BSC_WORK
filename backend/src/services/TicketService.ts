@@ -652,4 +652,135 @@ export class TicketService {
     }
     return rows.length;
   }
+
+  static async update(
+    ticketId: number,
+    actor: AuthUser,
+    input: {
+      subject?: string;
+      description?: string;
+      category?: string;
+      priority?: 'low' | 'medium' | 'high' | 'critical';
+      status?: string;
+      assigneeId?: number | null;
+      departmentId?: number | null;
+    },
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    const existing = await queryOne<TicketRow>('SELECT * FROM tickets WHERE id = ?', [ticketId]);
+    if (!existing) throw ApiError.notFound('Ticket not found');
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.subject !== undefined) {
+      updates.push('subject = ?');
+      params.push(input.subject.trim());
+    }
+    if (input.description !== undefined) {
+      updates.push('description = ?');
+      params.push(input.description.trim());
+    }
+    if (input.category !== undefined) {
+      updates.push('category = ?');
+      params.push(input.category.trim());
+      const team = TEAM_BY_CATEGORY[input.category.trim()];
+      if (team) {
+        updates.push('assigned_team = ?');
+        params.push(team);
+      }
+    }
+    if (input.priority !== undefined) {
+      updates.push('priority = ?');
+      params.push(input.priority);
+      const hours = await TicketService.slaHours(input.priority);
+      updates.push('sla_due_at = DATE_ADD(created_at, INTERVAL ? HOUR)');
+      params.push(hours);
+    }
+    if (input.status !== undefined) {
+      updates.push('status = ?');
+      params.push(input.status);
+      if (input.status === 'resolved') {
+        updates.push('resolved_at = COALESCE(resolved_at, NOW(3))');
+      } else if (input.status === 'closed') {
+        updates.push('closed_at = COALESCE(closed_at, NOW(3))');
+      }
+    }
+    if (input.assigneeId !== undefined) {
+      updates.push('assignee_id = ?');
+      params.push(input.assigneeId ? Number(input.assigneeId) : null);
+    }
+    if (input.departmentId !== undefined) {
+      updates.push('department_id = ?');
+      params.push(input.departmentId ? Number(input.departmentId) : null);
+    }
+
+    if (updates.length > 0) {
+      params.push(ticketId);
+      await execute(`UPDATE tickets SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    await recordAudit({
+      actorId: actor.id,
+      action: 'ticket.updated',
+      entityType: 'ticket',
+      entityId: ticketId,
+      before: {
+        subject: existing.subject,
+        category: existing.category,
+        priority: existing.priority,
+        status: existing.status,
+      },
+      after: input,
+      ip: context.ip,
+      userAgent: context.userAgent,
+    });
+
+    const recipients = new Set<number>([
+      Number(existing.requester_id),
+      ...(existing.assignee_id ? [Number(existing.assignee_id)] : []),
+      actor.id,
+    ]);
+    emitToEmployees([...recipients].filter(Boolean), 'ticket:updated', { id: ticketId });
+
+    return await TicketService.detail(ticketId, actor);
+  }
+
+  static async delete(
+    ticketId: number,
+    actor: AuthUser,
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    const existing = await queryOne<TicketRow>('SELECT * FROM tickets WHERE id = ?', [ticketId]);
+    if (!existing) throw ApiError.notFound('Ticket not found');
+
+    await transaction(async (conn) => {
+      await conn.query('DELETE FROM ticket_comments WHERE ticket_id = ?', [ticketId]);
+      await conn.query('DELETE FROM ticket_assignments WHERE ticket_id = ?', [ticketId]);
+      await conn.query('DELETE FROM ticket_attachments WHERE ticket_id = ?', [ticketId]);
+      await conn.query('DELETE FROM tickets WHERE id = ?', [ticketId]);
+    });
+
+    await recordAudit({
+      actorId: actor.id,
+      action: 'ticket.deleted',
+      entityType: 'ticket',
+      entityId: ticketId,
+      before: {
+        ticketNo: existing.ticket_no,
+        subject: existing.subject,
+      },
+      ip: context.ip,
+      userAgent: context.userAgent,
+    });
+
+    const recipients = new Set<number>([
+      Number(existing.requester_id),
+      ...(existing.assignee_id ? [Number(existing.assignee_id)] : []),
+      actor.id,
+    ]);
+    emitToEmployees([...recipients].filter(Boolean), 'ticket:deleted', { id: ticketId });
+
+    return { success: true, id: ticketId };
+  }
 }

@@ -10,6 +10,8 @@ import { IssueCards } from './issues/IssueCards';
 import { IssueDetailModal } from './issues/IssueDetailModal';
 import { RaiseIssueModal } from './issues/RaiseIssueModal';
 import { EscalationRulesModal } from './issues/EscalationRulesModal';
+import { EditIssueModal } from './issues/EditIssueModal';
+import { DeleteIssueModal } from './issues/DeleteIssueModal';
 
 export default function Issues() {
   const { user, has } = useAuth();
@@ -47,6 +49,9 @@ export default function Issues() {
   const [raiseModalOpen, setRaiseModalOpen] = useState(false);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
   const [selectedIssueId, setSelectedIssueId] = useState<number | null>(null);
+  const [editIssue, setEditIssue] = useState<IssueItem | null>(null);
+  const [deleteConfirmIssue, setDeleteConfirmIssue] = useState<IssueItem | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // Check URL query parameters for deep linking (e.g. ?id=123)
   useEffect(() => {
@@ -115,6 +120,32 @@ export default function Issues() {
     void fetchIssues();
     void fetchSummary();
   });
+  useSocketEvent('issue:deleted', (data: any) => {
+    void fetchIssues();
+    void fetchSummary();
+    if (selectedIssueId && data?.issueId === selectedIssueId) {
+      setSelectedIssueId(null);
+    }
+  });
+
+  const handleDeleteIssue = async () => {
+    if (!deleteConfirmIssue) return;
+    setDeleteBusy(true);
+    try {
+      await api.del(`/issues/${deleteConfirmIssue.id}`);
+      toast.success(`Issue ${deleteConfirmIssue.issue_no} deleted successfully.`);
+      if (selectedIssueId === deleteConfirmIssue.id) {
+        setSelectedIssueId(null);
+      }
+      setDeleteConfirmIssue(null);
+      void fetchIssues();
+      void fetchSummary();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -435,6 +466,8 @@ export default function Issues() {
           onOpen={(id) => setSelectedIssueId(id)}
           onAcknowledge={handleAcknowledge}
           onEscalate={handleQuickEscalate}
+          onEdit={(issue) => setEditIssue(issue)}
+          onDelete={(issue) => setDeleteConfirmIssue(issue)}
         />
       )}
 
@@ -457,6 +490,24 @@ export default function Issues() {
           void fetchIssues();
           void fetchSummary();
         }}
+      />
+
+      <EditIssueModal
+        issue={editIssue}
+        open={Boolean(editIssue)}
+        onClose={() => setEditIssue(null)}
+        onSaved={() => {
+          void fetchIssues();
+          void fetchSummary();
+        }}
+      />
+
+      <DeleteIssueModal
+        issue={deleteConfirmIssue}
+        open={Boolean(deleteConfirmIssue)}
+        busy={deleteBusy}
+        onClose={() => setDeleteConfirmIssue(null)}
+        onConfirm={handleDeleteIssue}
       />
 
       <EscalationRulesModal

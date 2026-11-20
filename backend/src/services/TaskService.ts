@@ -1196,5 +1196,107 @@ export class TaskService {
     }
     return rows.length;
   }
+
+  static async update(
+    taskId: number,
+    actor: AuthUser,
+    input: {
+      title?: string;
+      description?: string;
+      priority?: 'low' | 'medium' | 'high' | 'critical';
+      category?: string;
+      timeSlot?: string;
+      dueDate?: string;
+      proofRequired?: boolean;
+      status?: string;
+      assigneeIds?: number[];
+    },
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    const existing = await queryOne<TaskRow>('SELECT * FROM tasks WHERE id = ? AND archived_at IS NULL', [taskId]);
+    if (!existing) throw ApiError.notFound('Task not found');
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.title !== undefined) {
+      updates.push('title = ?');
+      params.push(input.title.trim());
+    }
+    if (input.description !== undefined) {
+      updates.push('description = ?');
+      params.push(input.description.trim());
+    }
+    if (input.priority !== undefined) {
+      updates.push('priority = ?');
+      params.push(input.priority);
+    }
+    if (input.category !== undefined) {
+      updates.push('category = ?');
+      params.push(input.category.trim());
+    }
+    if (input.timeSlot !== undefined) {
+      updates.push('time_slot = ?');
+      params.push(input.timeSlot.trim());
+    }
+    if (input.dueDate !== undefined) {
+      updates.push('due_date = ?');
+      params.push(input.dueDate);
+    }
+    if (input.proofRequired !== undefined) {
+      updates.push('proof_required = ?');
+      params.push(input.proofRequired ? 1 : 0);
+    }
+    if (input.status !== undefined) {
+      updates.push('status = ?');
+      params.push(input.status);
+    }
+
+    if (updates.length > 0) {
+      params.push(taskId);
+      await execute(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    if (input.assigneeIds && Array.isArray(input.assigneeIds)) {
+      await execute('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
+      for (const empId of input.assigneeIds) {
+        await execute('INSERT IGNORE INTO task_assignments (task_id, employee_id, role, status) VALUES (?, ?, ?, ?)', [
+          taskId,
+          empId,
+          'assignee',
+          input.status ?? existing.status ?? 'assigned',
+        ]);
+      }
+    }
+
+    const detail = await TaskService.detail(taskId, actor);
+    emitToEmployees([...detail.assigneeIds, detail.createdBy, ...(detail.managerId ? [detail.managerId] : []), actor.id].filter(Boolean), 'task:updated', {
+      id: taskId,
+      status: detail.status,
+    });
+
+    return detail;
+  }
+
+  static async delete(
+    taskId: number,
+    actor: AuthUser,
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    const existing = await queryOne<TaskRow>('SELECT * FROM tasks WHERE id = ?', [taskId]);
+    if (!existing) throw ApiError.notFound('Task not found');
+
+    await transaction(async (conn) => {
+      await conn.query('DELETE FROM task_time_logs WHERE task_id = ?', [taskId]);
+      await conn.query('DELETE FROM task_subtasks WHERE task_id = ?', [taskId]);
+      await conn.query('DELETE FROM task_comments WHERE task_id = ?', [taskId]);
+      await conn.query('DELETE FROM task_assignments WHERE task_id = ?', [taskId]);
+      await conn.query('DELETE FROM tasks WHERE id = ?', [taskId]);
+    });
+
+    emitToEmployees([Number(existing.created_by), actor.id].filter(Boolean), 'task:deleted', { id: taskId });
+
+    return { success: true, id: taskId };
+  }
 }
 

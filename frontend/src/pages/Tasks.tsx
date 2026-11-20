@@ -123,6 +123,11 @@ export default function Tasks() {
   const [submitFile, setSubmitFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Edit & Delete Task states
+  const [editTask, setEditTask] = useState<TaskSummary | null>(null);
+  const [deleteConfirmTask, setDeleteConfirmTask] = useState<TaskSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   const pageSize = viewMode === 'flow' ? 60 : 20;
   const query = new URLSearchParams();
   if (view !== 'all') query.set('view', view);
@@ -186,6 +191,30 @@ export default function Tasks() {
     if (detail) void openDetail(detail.id, true);
   });
   useSocketEvent('task:created', () => void reload());
+  useSocketEvent('task:deleted', (data: any) => {
+    void reload();
+    if (detail && data?.id === detail.id) {
+      setDetail(null);
+    }
+  });
+
+  const handleDeleteTask = async () => {
+    if (!deleteConfirmTask) return;
+    setDeleteBusy(true);
+    try {
+      await api.del(`/tasks/${deleteConfirmTask.id}`);
+      toast.success(`Task ${deleteConfirmTask.taskNo} deleted successfully.`);
+      if (detail?.id === deleteConfirmTask.id) {
+        setDetail(null);
+      }
+      setDeleteConfirmTask(null);
+      void reload();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const updateParams = (mutate: (next: URLSearchParams) => void) => {
     const next = new URLSearchParams(params);
@@ -653,6 +682,8 @@ export default function Tasks() {
                   busy={busy}
                   onOpen={(task) => void openDetail(task.id)}
                   onQuick={onQuick}
+                  onEdit={(task) => setEditTask(task)}
+                  onDelete={(task) => setDeleteConfirmTask(task)}
                 />
                 <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
               </div>
@@ -675,6 +706,8 @@ export default function Tasks() {
                   busy={busy}
                   onOpen={(task) => void openDetail(task.id)}
                   onQuick={onQuick}
+                  onEdit={(task) => setEditTask(task)}
+                  onDelete={(task) => setDeleteConfirmTask(task)}
                 />
                 <Pagination page={data.page} pageSize={data.pageSize} total={data.total} onPage={setPage} />
               </>
@@ -693,7 +726,23 @@ export default function Tasks() {
         footer={
           detail ? (
             <div className="flex w-full flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <button className="btn-ghost btn-sm" onClick={() => setDetail(null)}>Close</button>
+              <div className="flex items-center gap-1.5">
+                <button className="btn-ghost btn-sm" onClick={() => setDetail(null)}>Close</button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5 text-brand-700 hover:bg-brand-50"
+                  onClick={() => setEditTask(detail)}
+                >
+                  <Icon name="edit" size={14} /> Edit Task
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm inline-flex items-center gap-1.5 text-rose-600 hover:bg-rose-50 border-rose-200"
+                  onClick={() => setDeleteConfirmTask(detail)}
+                >
+                  <Icon name="trash" size={14} /> Delete
+                </button>
+              </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {/* Employee (assignee) actions */}
                 {role.isAssignee && ['assigned', 'not_started', 'rejected'].includes(detail.status) && (
@@ -1203,7 +1252,259 @@ export default function Tasks() {
           void reload();
         }}
       />
+
+      <EditTaskModal
+        task={editTask}
+        open={Boolean(editTask)}
+        assignees={assignees}
+        onClose={() => setEditTask(null)}
+        onSaved={() => {
+          const updatedId = editTask?.id;
+          setEditTask(null);
+          if (detail && updatedId && detail.id === updatedId) {
+            void openDetail(updatedId);
+          }
+          void reload();
+        }}
+      />
+
+      <DeleteTaskModal
+        task={deleteConfirmTask}
+        open={Boolean(deleteConfirmTask)}
+        busy={deleteBusy}
+        onClose={() => setDeleteConfirmTask(null)}
+        onConfirm={handleDeleteTask}
+      />
     </div>
+  );
+}
+
+function EditTaskModal({
+  task,
+  open,
+  assignees,
+  onClose,
+  onSaved,
+}: {
+  task: TaskSummary | null;
+  open: boolean;
+  assignees: PickerEmployee[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const toast = useToast();
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    priority: 'medium',
+    timeSlot: 'operations',
+    dueDate: '',
+    proofRequired: false,
+    status: 'assigned',
+    assigneeIds: [] as number[],
+  });
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (task) {
+      setForm({
+        title: task.title,
+        description: task.description ?? '',
+        priority: task.priority,
+        timeSlot: task.timeSlot ?? 'operations',
+        dueDate: task.dueDate ? task.dueDate.slice(0, 10) : '',
+        proofRequired: Boolean(task.requiresEvidence),
+        status: task.status,
+        assigneeIds: task.assigneeIds ?? [],
+      });
+    }
+  }, [task]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!task) return;
+    if (!form.title.trim()) {
+      toast.error('Task title is required');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.put(`/tasks/${task.id}`, {
+        title: form.title.trim(),
+        description: form.description.trim(),
+        priority: form.priority,
+        timeSlot: form.timeSlot,
+        dueDate: form.dueDate || undefined,
+        proofRequired: form.proofRequired,
+        status: form.status,
+        assigneeIds: form.assigneeIds,
+      });
+      toast.success('Task updated successfully');
+      onSaved();
+      onClose();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`Edit Task · ${task?.taskNo ?? ''}`}
+      description="Update task details, assignment, priority, and SOP schedule."
+      size="md"
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <Field label="Task Title" required>
+          <input
+            className="input"
+            value={form.title}
+            onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
+            required
+            placeholder="Actionable task title"
+          />
+        </Field>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Priority" required>
+            <select
+              className="input"
+              value={form.priority}
+              onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value }))}
+            >
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </Field>
+
+          <Field label="SOP Shift Slot" required>
+            <select
+              className="input"
+              value={form.timeSlot}
+              onChange={(e) => setForm((prev) => ({ ...prev, timeSlot: e.target.value }))}
+            >
+              <option value="morning">Morning SOP (09:30 - 11:00)</option>
+              <option value="operations">Store Operations (11:00 - 17:00)</option>
+              <option value="evening">Evening Peak (17:00 - 20:00)</option>
+              <option value="closing">Night Closing (20:00 - 21:30)</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Status" required>
+            <select
+              className="input"
+              value={form.status}
+              onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+            >
+              <option value="assigned">Assigned</option>
+              <option value="accepted">Accepted</option>
+              <option value="in_progress">In Progress</option>
+              <option value="on_hold">On Hold</option>
+              <option value="pending_approval">Pending Approval</option>
+              <option value="completed">Completed / Verified</option>
+              <option value="overdue">Overdue</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+          </Field>
+
+          <Field label="Due Date">
+            <input
+              type="date"
+              className="input"
+              value={form.dueDate}
+              onChange={(e) => setForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+            />
+          </Field>
+        </div>
+
+        <Field label="Assignees">
+          <select
+            className="input"
+            value={form.assigneeIds[0] ?? ''}
+            onChange={(e) =>
+              setForm((prev) => ({
+                ...prev,
+                assigneeIds: e.target.value ? [Number(e.target.value)] : [],
+              }))
+            }
+          >
+            <option value="">Select Assignee</option>
+            {assignees.map((emp) => (
+              <option key={emp.id} value={emp.id}>
+                {emp.full_name} ({emp.employee_code})
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Description">
+          <textarea
+            className="input min-h-[90px]"
+            value={form.description}
+            onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+            rows={3}
+            placeholder="Operational guidelines and steps to execute"
+          />
+        </Field>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-ink-100">
+          <button type="button" className="btn-secondary btn-sm" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary btn-sm" disabled={saving}>
+            {saving ? 'Saving…' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function DeleteTaskModal({
+  task,
+  open,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  task: TaskSummary | null;
+  open: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title="Confirm Delete Task" size="sm">
+      <div className="space-y-3">
+        <p className="text-sm text-ink-700">
+          Are you sure you want to delete task{' '}
+          <strong className="text-ink-900 font-mono">{task?.taskNo}</strong> ({task?.title})?
+        </p>
+        <p className="text-xs text-rose-600 font-medium">
+          This will permanently remove the task allocation, time logs, and subtasks. This action cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2 pt-3 border-t border-ink-100">
+          <button type="button" className="btn-secondary btn-sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm bg-rose-600 hover:bg-rose-700 text-white"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Deleting…' : 'Delete Task'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

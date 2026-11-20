@@ -54,6 +54,8 @@ export function TaskTable({
   busy,
   onOpen,
   onQuick,
+  onEdit,
+  onDelete,
 }: {
   items: TaskSummary[];
   sort: string;
@@ -64,6 +66,8 @@ export function TaskTable({
   busy: boolean;
   onOpen: (task: TaskSummary) => void;
   onQuick: (task: TaskSummary, quick: QuickAction) => void;
+  onEdit?: (task: TaskSummary) => void;
+  onDelete?: (task: TaskSummary) => void;
 }) {
   const headerProps = { sort, dir, onSort };
 
@@ -191,6 +195,26 @@ export function TaskTable({
                   <div className="flex items-center justify-end gap-1.5">
                     {quick && (
                       <QuickActionButton quick={quick} busy={busy} onClick={() => onQuick(task, quick)} compact />
+                    )}
+                    {onEdit && (
+                      <button
+                        type="button"
+                        onClick={() => onEdit(task)}
+                        title="Edit Task"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+                      >
+                        <Icon name="edit" size={13} />
+                      </button>
+                    )}
+                    {onDelete && (
+                      <button
+                        type="button"
+                        onClick={() => onDelete(task)}
+                        title="Delete Task"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                      >
+                        <Icon name="trash" size={13} />
+                      </button>
                     )}
                     <button
                       type="button"

@@ -210,4 +210,33 @@ tasksRouter.get('/meta/assignable', requireAny('tasks.assign'), asyncHandler(asy
        ORDER BY e.full_name`, ids);
     res.json({ employees: rows });
 }));
+tasksRouter.put('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        title: z.string().min(2).max(200).optional(),
+        description: z.string().max(8000).optional(),
+        priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+        category: z.string().max(64).optional(),
+        timeSlot: z.string().max(64).optional(),
+        dueDate: z.string().optional(),
+        proofRequired: z.boolean().optional(),
+        status: z.string().max(32).optional(),
+        assigneeIds: z.array(z.number().int().positive()).optional(),
+    }), req.body);
+    const updated = await TaskService.update(id, user, body, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(updated);
+}));
+tasksRouter.delete('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const result = await TaskService.delete(id, user, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(result);
+}));
 //# sourceMappingURL=tasks.js.map
