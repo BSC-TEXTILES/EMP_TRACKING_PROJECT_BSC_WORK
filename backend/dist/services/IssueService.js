@@ -37,7 +37,8 @@ export class IssueService {
         // 2. Check reporting_assignments
         const reportingRow = await queryOne(`SELECT manager_id 
        FROM reporting_assignments 
-       WHERE employee_id = ? AND is_active = 1 
+       WHERE employee_id = ? AND (effective_to IS NULL OR effective_to > NOW(3)) 
+       ORDER BY id DESC 
        LIMIT 1`, [reporter.id]);
         if (reportingRow?.manager_id) {
             const mgr = await queryOne(`SELECT id, status FROM employees WHERE id = ? AND status = 'active'`, [reportingRow.manager_id]);
@@ -245,7 +246,7 @@ export class IssueService {
             whereClauses.push("i.status = 'escalated'");
             if (!isSuperAdmin) {
                 if (isManager) {
-                    whereClauses.push('(i.assigned_to = ? OR i.reporter_id = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ?))');
+                    whereClauses.push('(i.assigned_to = ? OR i.reporter_id = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ? AND (effective_to IS NULL OR effective_to > NOW(3))))');
                     params.push(actor.id, actor.id, actor.locationId ?? 0, actor.id);
                 }
                 else {
@@ -259,7 +260,7 @@ export class IssueService {
                 // sees all team issues
             }
             else if (isManager) {
-                whereClauses.push('(i.assigned_to = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ?))');
+                whereClauses.push('(i.assigned_to = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ? AND (effective_to IS NULL OR effective_to > NOW(3))))');
                 params.push(actor.id, actor.locationId ?? 0, actor.id);
             }
             else {
@@ -271,7 +272,7 @@ export class IssueService {
             // General 'all' tab or default
             if (!isSuperAdmin) {
                 if (isManager) {
-                    whereClauses.push('(i.reporter_id = ? OR i.assigned_to = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ?))');
+                    whereClauses.push('(i.reporter_id = ? OR i.assigned_to = ? OR i.location_id = ? OR i.reporter_id IN (SELECT employee_id FROM reporting_assignments WHERE manager_id = ? AND (effective_to IS NULL OR effective_to > NOW(3))))');
                     params.push(actor.id, actor.id, actor.locationId ?? 0, actor.id);
                 }
                 else {
@@ -446,7 +447,7 @@ export class IssueService {
         f.original_name,
         f.mime_type,
         f.size_bytes,
-        f.download_url,
+        CONCAT('/api/files/', f.id, '/download') AS download_url,
         e.full_name AS uploaded_by_name
        FROM issue_attachments ia
        JOIN files f ON f.id = ia.file_id

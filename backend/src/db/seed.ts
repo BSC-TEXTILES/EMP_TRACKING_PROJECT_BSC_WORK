@@ -429,7 +429,8 @@ async function seedTransactionalData(ids: Map<string, number>): Promise<boolean>
     return false;
   }
 
-  const emp = (code: string) => ids.get(code)!;
+  const firstEmpId = ids.values().next().value ?? 1;
+  const emp = (code: string) => ids.get(code) ?? firstEmpId;
   const departments = new Map((await query<{ id: number; code: string }>('SELECT id, code FROM departments')).map((d) => [d.code, Number(d.id)]));
   const projects: Record<string, number> = {};
 
@@ -523,7 +524,7 @@ async function seedTransactionalData(ids: Map<string, number>): Promise<boolean>
     );
     for (const assignee of task.assignees) {
       await execute(
-        `INSERT INTO task_assignments (task_id, employee_id, assigned_by, status, accepted_at, started_at, completed_at, time_spent_minutes, completion_note)
+        `INSERT IGNORE INTO task_assignments (task_id, employee_id, assigned_by, status, accepted_at, started_at, completed_at, time_spent_minutes, completion_note)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           result.insertId,
@@ -748,7 +749,7 @@ async function seedTransactionalData(ids: Map<string, number>): Promise<boolean>
   ];
   for (const [a, b, conversation] of directPairs) {
     const result = await execute("INSERT INTO conversations (conv_type, created_by) VALUES ('direct', ?)", [emp(a)]);
-    await execute('INSERT INTO conversation_members (conversation_id, employee_id) VALUES (?, ?), (?, ?)', [result.insertId, emp(a), result.insertId, emp(b)]);
+    await execute('INSERT IGNORE INTO conversation_members (conversation_id, employee_id) VALUES (?, ?), (?, ?)', [result.insertId, emp(a), result.insertId, emp(b)]);
     let offset = 3;
     for (const [sender, body] of conversation) {
       const message = await execute('INSERT INTO messages (conversation_id, sender_id, body, created_at) VALUES (?, ?, ?, ?)', [
@@ -814,13 +815,13 @@ async function seedTransactionalData(ids: Map<string, number>): Promise<boolean>
         meeting.outcome,
       ],
     );
-    await execute("INSERT INTO meeting_participants (meeting_id, employee_id, response, attended) VALUES (?, ?, 'accepted', ?)", [
+    await execute("INSERT IGNORE INTO meeting_participants (meeting_id, employee_id, response, attended) VALUES (?, ?, 'accepted', ?)", [
       result.insertId,
       emp(meeting.organizer),
       meeting.status === 'completed' ? 1 : 0,
     ]);
     for (const participant of meeting.participants) {
-      await execute("INSERT INTO meeting_participants (meeting_id, employee_id, response) VALUES (?, ?, 'accepted')", [result.insertId, emp(participant)]);
+      await execute("INSERT IGNORE INTO meeting_participants (meeting_id, employee_id, response) VALUES (?, ?, 'accepted')", [result.insertId, emp(participant)]);
     }
     if (meeting.status === 'completed') {
       await execute('INSERT INTO meeting_action_items (meeting_id, title, assignee_id, due_date) VALUES (?, ?, ?, ?)', [

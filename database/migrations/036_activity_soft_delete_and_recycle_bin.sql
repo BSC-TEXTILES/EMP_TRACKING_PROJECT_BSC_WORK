@@ -64,9 +64,11 @@ INSERT INTO permissions (code, module, action, description) VALUES
 ON DUPLICATE KEY UPDATE description = VALUES(description);
 
 -- 8. Assign permissions to authorized roles
--- Super Admin (role_id = 1) gets delete, restore, permanent
+-- Super Admin gets delete, restore, permanent
 INSERT INTO role_permissions (role_id, permission_id)
-SELECT 1, id FROM permissions WHERE code IN ('activity.delete', 'activity.restore', 'activity.delete.permanent')
+SELECT r.id, p.id FROM roles r
+CROSS JOIN permissions p
+WHERE r.slug = 'super_admin' AND p.code IN ('activity.delete', 'activity.restore', 'activity.delete.permanent')
 ON DUPLICATE KEY UPDATE role_id = VALUES(role_id);
 
 -- Admin (roles with slug 'admin' or role_id = 2) gets delete, restore
