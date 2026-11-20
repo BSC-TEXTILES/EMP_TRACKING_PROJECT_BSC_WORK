@@ -24,6 +24,7 @@ storage/
 backend/storage/
 *.log
 .env.local
+.idea/
 .DS_Store
 Thumbs.db
 coverage/

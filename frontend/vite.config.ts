@@ -18,5 +18,10 @@ export default defineConfig({
       '/uploads': { target: apiTarget, changeOrigin: false },
     },
   },
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: false,
+    sourcemap: false,
+    modulePreload: { polyfill: true },
+  },
 });

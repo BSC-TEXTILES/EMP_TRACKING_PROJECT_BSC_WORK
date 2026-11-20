@@ -16,6 +16,19 @@ import './lib/installPrompt';
 
 initTheme();
 if (isNative) document.documentElement.dataset.native = '1';
+
+// Global recovery for stale bundle chunks across all dynamically imported routes.
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault();
+  const key = 'vite_chunk_reload_lock';
+  const last = parseInt(sessionStorage.getItem(key) || '0', 10);
+  const now = Date.now();
+  if (now - last > 15000) {
+    sessionStorage.setItem(key, String(now));
+    window.location.reload();
+  }
+});
+
 // Chat messages written offline are re-sent automatically when the connection returns.
 initOutbox();
 

@@ -57,13 +57,17 @@ export function createApp() {
         index: false,
         setHeaders: (res, filePath) => {
           if (filePath.endsWith('index.html') || filePath.endsWith('sw.js')) {
-            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
           } else {
             res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
           }
         },
       }),
     );
+    // Missing asset chunks must return 404, never fallback to index.html
+    app.use('/assets', (_req: Request, res: Response) => {
+      res.status(404).set('Cache-Control', 'no-cache, no-store, must-revalidate').send('Asset not found');
+    });
     app.get(/^\/(?!api\/|socket\.io\/).*/, (_req: Request, res: Response) => {
       res.sendFile(path.join(clientDir, 'index.html'));
     });

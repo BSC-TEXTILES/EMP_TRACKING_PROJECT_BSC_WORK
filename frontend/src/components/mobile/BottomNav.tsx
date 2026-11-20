@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { cx } from '../../lib/format';
+import { isNative } from '../../lib/native';
 import { Icon } from '../icons';
 
 export interface BottomNavItem {
@@ -14,6 +15,16 @@ export interface BottomNavItem {
  * navigation drawer. Sits above the home indicator (safe area).
  */
 export function BottomNav({ items, onMore, moreBadge }: { items: BottomNavItem[]; onMore: () => void; moreBadge?: number }) {
+  const triggerHaptic = async () => {
+    if (!isNative) return;
+    try {
+      const { Haptics, ImpactStyle } = await import('@capacitor/haptics');
+      await Haptics.impact({ style: ImpactStyle.Light });
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
     <nav
       aria-label="Main"
@@ -25,6 +36,7 @@ export function BottomNav({ items, onMore, moreBadge }: { items: BottomNavItem[]
             key={item.to}
             to={item.to}
             end={item.to === '/'}
+            onClick={() => void triggerHaptic()}
             className={({ isActive }) => cx(
               'relative flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium select-none',
               isActive ? 'text-brand-700' : 'text-ink-500',
@@ -43,7 +55,10 @@ export function BottomNav({ items, onMore, moreBadge }: { items: BottomNavItem[]
         ))}
         <button
           type="button"
-          onClick={onMore}
+          onClick={() => {
+            void triggerHaptic();
+            onMore();
+          }}
           className="relative flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-ink-500 select-none"
         >
           <span className="flex h-7 w-12 items-center justify-center rounded-full">

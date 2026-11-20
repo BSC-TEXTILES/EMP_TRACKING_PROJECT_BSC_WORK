@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, errorMessage } from '../lib/api';
 import { useToast } from '../contexts/ToastContext';
+import { isNative } from '../lib/native';
+import { captureNativeImage } from '../lib/nativeMedia';
 import { Avatar } from './ui';
 import { Icon } from './icons';
 
@@ -95,6 +97,18 @@ export function ImageUpload({
     }
   };
 
+  const triggerUpload = async () => {
+    if (isNative) {
+      const captured = await captureNativeImage('photos');
+      if (captured?.blob) {
+        const file = new File([captured.blob], 'photo.jpg', { type: captured.blob.type || 'image/jpeg' });
+        void upload(file);
+        return;
+      }
+    }
+    inputRef.current?.click();
+  };
+
   const shown = preview ?? photoUrl;
 
   return (
@@ -116,7 +130,7 @@ export function ImageUpload({
         <button
           type="button"
           className="group relative rounded-full focus:outline-none focus-visible:ring-4 focus-visible:ring-brand-300"
-          onClick={() => inputRef.current?.click()}
+          onClick={() => void triggerUpload()}
           disabled={disabled || busy}
           aria-label={shown ? 'Change profile photo' : 'Upload profile photo'}
           title={shown ? 'Change profile photo' : 'Upload profile photo'}

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { currentPushEndpoint, unsubscribeWebPush } from '../lib/notifications';
+import { initNativePushNotifications, unregisterNativePush } from '../lib/nativePush';
 import { ApiError, api, refreshMediaToken } from '../lib/api';
 import { isNative } from '../lib/native';
 import type { CurrentUser } from '../lib/types';
@@ -120,10 +121,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* clearing client state is enough */
     }
     if (!keepNotifications) await unsubscribeWebPush();
+    await unregisterNativePush();
     localStorage.removeItem(SESSION_KEY);
     setUser(null);
     window.location.href = '/login';
   }, []);
+
+  // Initialize native push notifications when signed in on Android / iOS
+  useEffect(() => {
+    if (user?.id) {
+      void initNativePushNotifications();
+    }
+  }, [user?.id]);
 
   // Activity monitoring starts automatically at login and keeps a heartbeat
   // while the employee is signed in. A network interruption only delays the
