@@ -56,6 +56,13 @@ export function startJobs() {
             return `${result.missed} unanswered call(s) marked missed, ${result.closed} abandoned call(s) closed`;
         });
     });
+    cron.schedule('* * * * *', () => {
+        void runJob('issue_escalation_sweep', async () => {
+            const { IssueService } = await import('../services/IssueService.js');
+            const result = await IssueService.runEscalationSweep();
+            return `${result.remindersSent} reminder(s) sent, ${result.escalationsTriggered} auto-escalation(s) triggered`;
+        });
+    });
     cron.schedule('35 3 * * *', () => {
         void runJob('push_log_retention', async () => {
             const { PushService } = await import('../services/PushService.js');

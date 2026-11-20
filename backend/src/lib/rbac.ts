@@ -43,6 +43,17 @@ export const PERMISSION_DEFINITIONS: PermissionDefinition[] = [
   { code: 'tickets.assign', module: 'tickets', action: 'assign', description: 'Assign tickets' },
   { code: 'tickets.resolve', module: 'tickets', action: 'resolve', description: 'Progress and resolve tickets' },
   { code: 'tickets.manage', module: 'tickets', action: 'manage', description: 'Configure ticket workflow' },
+  { code: 'issues.create', module: 'issues', action: 'create', description: 'Raise issues and track own issues' },
+  { code: 'issues.view.own', module: 'issues', action: 'view.own', description: 'View own raised and assigned issues' },
+  { code: 'issues.view.team', module: 'issues', action: 'view.team', description: 'View issues raised by the reporting team' },
+  { code: 'issues.view.all', module: 'issues', action: 'view.all', description: 'View all issues in permitted locations' },
+  { code: 'issues.assign', module: 'issues', action: 'assign', description: 'Accept and assign issues to authorised employees' },
+  { code: 'issues.escalate', module: 'issues', action: 'escalate', description: 'Escalate issues to a higher authorised manager' },
+  { code: 'issues.priority', module: 'issues', action: 'priority', description: 'Change issue priority' },
+  { code: 'issues.internal_notes', module: 'issues', action: 'internal_notes', description: 'Read and write manager-only internal notes' },
+  { code: 'issues.resolve', module: 'issues', action: 'resolve', description: 'Update status and resolve issues' },
+  { code: 'issues.reopen', module: 'issues', action: 'reopen', description: 'Reopen resolved issues with a reason' },
+  { code: 'issues.configure', module: 'issues', action: 'configure', description: 'Configure issue routing and escalation rules' },
 
   { code: 'notifications.send', module: 'notifications', action: 'send', description: 'Send bulk announcements' },
 
@@ -121,6 +132,10 @@ export const EMPLOYEE_BASE_PERMISSIONS = [
   'chat.use',
   'tickets.create',
   'tickets.view.own',
+  'issues.create',
+  'issues.view.own',
+  'issues.escalate',
+  'issues.reopen',
   'kpi.view.own',
   'leave.apply',
   'leave.view.own',
@@ -146,6 +161,11 @@ export const MANAGER_PERMISSIONS = [
   'tickets.view.team',
   'tickets.assign',
   'tickets.resolve',
+  'issues.view.team',
+  'issues.assign',
+  'issues.priority',
+  'issues.internal_notes',
+  'issues.resolve',
   'kpi.view.team',
   'kpi.review',
   'leave.view.team',
@@ -177,6 +197,7 @@ export const HR_PERMISSIONS = [
   'activity.policy.manage',
   'hierarchy.view.all',
   'groups.view.all',
+  'issues.view.all',
 ];
 
 export const IT_ADMIN_PERMISSIONS = [
@@ -239,6 +260,8 @@ export const ROLE_DEFINITIONS: {
       'locations.view.all',
       'hierarchy.view.all',
       'groups.view.all',
+      'issues.view.all',
+      'issues.configure',
     ],
   },
   {
@@ -247,7 +270,7 @@ export const ROLE_DEFINITIONS: {
     category: 'executive',
     level: 80,
     description: 'Multi-department operational leadership.',
-    permissions: [...MANAGER_PERMISSIONS, 'employees.view.all', 'kpi.view.all', 'analytics.view.all', 'admin.dashboard', 'notifications.send', 'collections.view.all', 'collections.delete'],
+    permissions: [...MANAGER_PERMISSIONS, 'employees.view.all', 'kpi.view.all', 'analytics.view.all', 'admin.dashboard', 'notifications.send', 'collections.view.all', 'collections.delete', 'issues.view.all'],
   },
   {
     slug: 'department_head',
@@ -312,7 +335,7 @@ export const ROLE_DEFINITIONS: {
     category: 'retail',
     level: 50,
     description: 'Retail location management with location-scoped access.',
-    permissions: [...MANAGER_PERMISSIONS, 'attendance.view.all', 'reports.view.all', 'hierarchy.view.all', 'groups.view.all'],
+    permissions: [...MANAGER_PERMISSIONS, 'attendance.view.all', 'reports.view.all', 'hierarchy.view.all', 'groups.view.all', 'issues.view.all'],
   },
   {
     slug: 'software_manager',
@@ -352,6 +375,7 @@ export const ROLE_DEFINITIONS: {
       'activity.view.all',
       'hierarchy.view.all',
       'groups.view.all',
+      'issues.view.all',
     ],
   },
   {

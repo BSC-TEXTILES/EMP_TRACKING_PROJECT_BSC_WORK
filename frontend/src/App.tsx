@@ -17,6 +17,7 @@ const DailyReports = lazy(() => import('./pages/DailyReports'));
 const Chat = lazy(() => import('./pages/Chat'));
 const Mailbox = lazy(() => import('./pages/Mailbox'));
 const Tickets = lazy(() => import('./pages/Tickets'));
+const Issues = lazy(() => import('./pages/Issues'));
 const Calendar = lazy(() => import('./pages/Calendar'));
 const Meetings = lazy(() => import('./pages/Meetings'));
 const MeetingRoom = lazy(() => import('./pages/MeetingRoom'));
@@ -141,6 +142,7 @@ export function App() {
           <Route path="chat" element={<Chat />} />
           <Route path="mailbox" element={<Mailbox />} />
           <Route path="tickets" element={<Tickets />} />
+          <Route path="issues" element={<Issues />} />
           <Route path="calendar" element={<Calendar />} />
           <Route path="meetings" element={<Meetings />} />
           <Route path="meetings/:id/room" element={<MeetingRoom />} />

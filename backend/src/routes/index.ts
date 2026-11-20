@@ -29,6 +29,7 @@ import { devicesRouter } from './devices.js';
 import { pushPublicRouter, pushRouter } from './push.js';
 import { groupsRouter } from './groups.js';
 import { hierarchyRouter } from './hierarchy.js';
+import { issuesRouter } from './issues.js';
 import { asyncHandler } from '../lib/http.js';
 
 export const apiRouter = Router();
@@ -72,3 +73,4 @@ apiRouter.use('/presence', presenceRouter);
 apiRouter.use('/admin/webhooks', webhooksRouter);
 apiRouter.use('/groups', groupsRouter);
 apiRouter.use('/hierarchy', hierarchyRouter);
+apiRouter.use('/issues', issuesRouter);

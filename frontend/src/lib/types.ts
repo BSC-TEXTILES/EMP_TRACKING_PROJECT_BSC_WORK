@@ -192,6 +192,125 @@ export interface TicketSummary {
   assignmentHistory?: { id: number; employeeName: string; assignedAt: string; note: string | null }[];
 }
 
+export interface IssueItem {
+  id: number;
+  issue_no: string;
+  title: string;
+  description: string;
+  category: string;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  status: 'new' | 'pending' | 'in_progress' | 'on_hold' | 'escalated' | 'resolved' | 'closed' | 'reopened' | 'cancelled';
+  affected_module: string | null;
+  reporter_id: number;
+  reporter_name: string;
+  reporter_code: string;
+  reporter_photo: string | null;
+  assigned_to: number;
+  assigned_to_name: string;
+  assigned_to_code: string;
+  assigned_to_photo: string | null;
+  location_id: number | null;
+  location_name: string | null;
+  location_code: string | null;
+  department_id: number | null;
+  department_name: string | null;
+  routing_mode: 'auto' | 'manual';
+  escalation_level: number;
+  escalation_exhausted: number;
+  acknowledged_at: string | null;
+  due_at: string | null;
+  last_escalated_at: string | null;
+  resolved_at: string | null;
+  resolved_by: number | null;
+  resolved_by_name?: string | null;
+  resolution: string | null;
+  reopen_count: number;
+  comment_count?: number;
+  attachment_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IssueCommentItem {
+  id: number;
+  issue_id: number;
+  author_id: number;
+  author_name: string;
+  author_code: string;
+  author_photo: string | null;
+  author_role: string;
+  kind: string;
+  body: string;
+  is_internal: number;
+  created_at: string;
+}
+
+export interface IssueAttachmentItem {
+  id: number;
+  issue_id: number;
+  comment_id: number | null;
+  file_id: number;
+  original_name: string;
+  mime_type: string;
+  size_bytes: number;
+  download_url: string;
+  uploaded_by_name: string;
+  is_internal: number;
+  created_at: string;
+}
+
+export interface IssueEscalationHistoryItem {
+  id: number;
+  issue_id: number;
+  from_employee_id: number | null;
+  from_employee_name: string | null;
+  to_employee_id: number;
+  to_employee_name: string;
+  from_level: number;
+  to_level: number;
+  escalation_type: string;
+  reason: string;
+  escalated_by: number | null;
+  escalated_by_name: string | null;
+  notification_status: string;
+  created_at: string;
+}
+
+export interface IssueActivityLogItem {
+  id: number;
+  issue_id: number;
+  actor_id: number | null;
+  actor_name: string | null;
+  actor_code: string | null;
+  action: string;
+  from_status: string | null;
+  to_status: string | null;
+  details: any;
+  is_internal: number;
+  created_at: string;
+}
+
+export interface IssueDetailData {
+  issue: IssueItem;
+  comments: IssueCommentItem[];
+  attachments: IssueAttachmentItem[];
+  escalationHistory: IssueEscalationHistoryItem[];
+  activityLogs: IssueActivityLogItem[];
+  canSeeInternal: boolean;
+}
+
+export interface EscalationRuleItem {
+  id: number;
+  priority: 'low' | 'medium' | 'high' | 'critical';
+  ack_reminder_minutes: number;
+  escalate_after_minutes: number;
+  resolve_within_hours: number;
+  overdue_repeat_minutes: number;
+  max_level: number;
+  notify_higher_immediately: number;
+  is_active: number;
+}
+
 export interface MeetingSummary {
   id: number;
   title: string;

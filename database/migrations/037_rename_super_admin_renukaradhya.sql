@@ -34,9 +34,6 @@ SET status = 'inactive',
     full_name = CONCAT(full_name, ' (old placeholder)')
 WHERE @real_id IS NOT NULL AND id = @placeholder_id AND status <> 'inactive';
 
-DELETE FROM employee_roles
-WHERE @real_id IS NOT NULL AND employee_id = @placeholder_id AND role_id = @super_role;
-
 -- 3. Rename the real account in place and make sure it is the active Super Admin at the top of the hierarchy.
 UPDATE employees
 SET full_name = 'Renukaradhya',
@@ -48,9 +45,6 @@ SET full_name = 'Renukaradhya',
     locked_until = NULL
 WHERE id = @real_id
   AND NOT EXISTS (SELECT 1 FROM (SELECT id FROM employees WHERE LOWER(email) = 'renukaradhya@bsctextiles.in') AS taken WHERE taken.id <> @real_id);
-
-INSERT IGNORE INTO employee_roles (employee_id, role_id)
-SELECT @real_id, @super_role FROM DUAL WHERE @real_id IS NOT NULL AND @super_role IS NOT NULL;
 
 -- 4. No gagan.cb@ account (fresh / local database): the existing Renukaradhya row simply gets the new email.
 UPDATE employees
