@@ -8,6 +8,7 @@ import { NotificationService } from './NotificationService.js';
 import { ChatService } from './ChatService.js';
 import { GroupService } from './GroupService.js';
 import { HierarchyService } from './HierarchyService.js';
+import { emitToEmployee, getIO } from '../realtime/io.js';
 import type { AuthUser } from './AuthService.js';
 
 export interface EmployeeListFilters {
@@ -65,6 +66,8 @@ async function employeeScope(user: AuthUser): Promise<{ clause: string; params: 
 }
 
 const SUPER_ADMIN_LEVEL = 100;
+/** Store Manager (50) and above count as managers/admins for self-service location changes. */
+const SELF_LOCATION_MIN_LEVEL = 50;
 
 /**
  * Role hierarchy guard: you may only manage people whose role ranks strictly
@@ -774,6 +777,100 @@ export class EmployeeService {
     });
 
     return { ok: true };
+  }
+
+  /** Admins and managers may move their own primary work location. */
+  static canChangeOwnLocation(user: AuthUser): boolean {
+    const slug = (user.roleSlug ?? '').toLowerCase();
+    return user.roleLevel >= SELF_LOCATION_MIN_LEVEL || /(admin|manager|owner)/.test(slug);
+  }
+
+  /** Active locations an admin/manager may pick as their own location. */
+  static async selfLocationOptions(user: AuthUser) {
+    if (!EmployeeService.canChangeOwnLocation(user)) return [];
+    return query<{ id: number; code: string; name: string; city: string | null }>(
+      "SELECT id, code, name, city FROM locations WHERE is_active = 1 ORDER BY FIELD(code, 'SHI', 'DAV', 'BEL', 'HQ') DESC, name",
+    );
+  }
+
+  static async changeOwnLocation(
+    actor: AuthUser,
+    input: { locationId: number; reason?: string },
+    context?: { ipAddress?: string; userAgent?: string },
+  ) {
+    if (!EmployeeService.canChangeOwnLocation(actor)) {
+      throw ApiError.forbidden('Only administrators and managers can change their own location.');
+    }
+    const target = await queryOne<{ id: number; full_name: string; location_id: number | null; group_id: number | null }>(
+      'SELECT id, full_name, location_id, group_id FROM employees WHERE id = ?',
+      [actor.id],
+    );
+    if (!target) throw ApiError.notFound('Employee not found.');
+    const loc = await queryOne<{ id: number; name: string; code: string }>(
+      'SELECT id, name, code FROM locations WHERE id = ? AND is_active = 1',
+      [input.locationId],
+    );
+    if (!loc) throw ApiError.badRequest('That location does not exist or is inactive.');
+    const fromLocationId = target.location_id ? Number(target.location_id) : null;
+    if (fromLocationId === Number(loc.id)) {
+      return { ok: true, changed: false, location: loc };
+    }
+
+    // A workforce group belongs to one location: keep it only if it matches the new one.
+    let keepGroup = false;
+    if (target.group_id) {
+      const grp = await queryOne<{ id: number }>('SELECT id FROM workforce_groups WHERE id = ? AND location_id = ?', [target.group_id, loc.id]);
+      keepGroup = Boolean(grp);
+    }
+
+    await transaction(async (conn) => {
+      if (keepGroup) {
+        await conn.query('UPDATE employees SET location_id = ? WHERE id = ?', [loc.id, actor.id]);
+      } else {
+        await conn.query('UPDATE employees SET location_id = ?, group_id = NULL WHERE id = ?', [loc.id, actor.id]);
+        await conn.query('DELETE FROM employee_group_members WHERE employee_id = ?', [actor.id]);
+      }
+    });
+
+    await GroupService.logLocationAudit({
+      actor,
+      action: 'self_location_change',
+      targetEmployeeId: actor.id,
+      targetEmployeeName: target.full_name,
+      groupId: keepGroup ? target.group_id : null,
+      fromLocationId,
+      toLocationId: loc.id,
+      toLocationName: loc.name,
+      details: { reason: input.reason ?? 'Changed own location from My Profile', userAgent: context?.userAgent ?? null },
+      ipAddress: context?.ipAddress,
+    });
+    await recordAudit({
+      actorId: actor.id,
+      action: 'employee.own_location_changed',
+      entityType: 'employee',
+      entityId: actor.id,
+      before: { locationId: fromLocationId, groupId: target.group_id },
+      after: { locationId: loc.id, groupId: keepGroup ? target.group_id : null, reason: input.reason },
+    });
+
+    // Move this user's live sockets to the new location room; keep the old one only if still granted.
+    const io = getIO();
+    if (io) {
+      io.in(`user:${actor.id}`).socketsJoin(`location:${loc.id}`);
+      if (fromLocationId) {
+        const stillGranted = await queryOne<{ location_id: number }>(
+          `SELECT location_id FROM employee_locations WHERE employee_id = ? AND location_id = ?
+           UNION SELECT location_id FROM location_hr_assignments WHERE employee_id = ? AND location_id = ?`,
+          [actor.id, fromLocationId, actor.id, fromLocationId],
+        );
+        if (!stillGranted && !actor.permissions.includes('locations.view.all')) {
+          io.in(`user:${actor.id}`).socketsLeave(`location:${fromLocationId}`);
+        }
+      }
+    }
+    // Every open tab/device of this user refreshes its session.
+    emitToEmployee(actor.id, 'profile:location_changed', { locationId: loc.id, locationName: loc.name, locationCode: loc.code });
+    return { ok: true, changed: true, location: loc };
   }
 
   static async getUserAllowedLocations(user: AuthUser) {

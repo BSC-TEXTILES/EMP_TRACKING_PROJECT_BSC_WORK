@@ -311,9 +311,9 @@ export default function Tickets() {
                 <tbody>
                   {items.map((ticket) => (
                     <tr key={ticket.id} className="cursor-pointer hover:bg-ink-50/70" onClick={() => void openDetail(ticket.id)}>
-                      <td>
-                        <p className="font-semibold text-ink-900">{ticket.subject}</p>
-                        <p className="text-xs text-ink-400">
+                      <td className="max-w-[280px]">
+                        <p className="font-semibold text-ink-900 break-words">{ticket.subject}</p>
+                        <p className="text-xs text-ink-400 mt-0.5">
                           {ticket.ticketNo} · {ticket.requesterName}
                         </p>
                       </td>

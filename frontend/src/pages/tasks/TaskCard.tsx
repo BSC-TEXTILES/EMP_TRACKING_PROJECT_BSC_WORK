@@ -64,28 +64,28 @@ export function TaskCard({
     <article
       onClick={onOpen}
       className={cx(
-        'group relative flex flex-col justify-between rounded-xl border bg-surface p-3.5 shadow-sm transition-all duration-200 cursor-pointer',
+        'group relative flex flex-col justify-between rounded-xl border bg-white p-3.5 shadow-sm transition-all duration-200 cursor-pointer',
         'hover:-translate-y-0.5 hover:shadow-md hover:border-brand-400',
         task.isOverdue
-          ? 'border-rose-300 dark:border-rose-900/50 bg-rose-50/10'
-          : 'border-ink-200/90 dark:border-ink-800',
+          ? 'border-rose-300 bg-rose-50/20'
+          : 'border-slate-200',
       )}
     >
       <div>
-        {/* Top Header: Task ID, Location, Priority */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="shrink-0 font-mono text-[11px] font-bold tracking-tight text-ink-600 bg-ink-100 dark:bg-ink-800 px-2 py-0.5 rounded-md border border-ink-200 dark:border-ink-700">
+        {/* Top Header: Task ID, Location, Status, Priority - flex-wrap ensures no text is clipped or overlapping */}
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-mono text-[11px] font-bold tracking-tight text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200/90 shrink-0">
               {task.taskNo}
             </span>
             {task.locationCodes && (
-              <span className="inline-flex shrink-0 items-center gap-1 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-bold text-brand-700 border border-brand-200/60 dark:bg-brand-950/40 dark:text-brand-300">
+              <span className="inline-flex shrink-0 items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 border border-blue-200/80">
                 <Icon name="building" size={10} />
                 {task.locationCodes}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex flex-wrap items-center gap-1 shrink-0">
             {!['assigned', 'accepted', 'in_progress', 'pending_approval', 'completed'].includes(task.status) && (
               <StatusBadge status={task.status} />
             )}
@@ -93,9 +93,9 @@ export function TaskCard({
           </div>
         </div>
 
-        {/* Task Title */}
+        {/* Task Title - break-words and no truncation so full text is clearly visible and divides cleanly */}
         <h3
-          className="mt-2.5 line-clamp-2 text-sm font-bold leading-snug text-ink-900 group-hover:text-brand-700 transition-colors"
+          className="mt-2.5 text-sm font-bold leading-snug text-slate-900 group-hover:text-brand-700 transition-colors break-words"
           title={task.title}
         >
           {task.title}
@@ -103,25 +103,25 @@ export function TaskCard({
 
         {/* Category & Slot info */}
         {category && (
-          <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-ink-500">
-            <span className="truncate capitalize">{category}</span>
+          <p className="mt-1 flex items-center gap-1 text-[11px] font-medium text-slate-500">
+            <span className="capitalize break-words">{category}</span>
           </p>
         )}
 
         {/* Assignee & Due Date Row */}
-        <div className="mt-3 flex items-center justify-between gap-2 border-t border-ink-100 pt-2.5 text-xs dark:border-ink-800/60">
-          <span className="flex min-w-0 items-center gap-1.5 font-medium text-ink-700" title={assignee}>
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[10px] font-bold text-ink-600 dark:bg-ink-800">
-              <Icon name="user" size={11} className="text-ink-500" />
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5 text-xs">
+          <span className="flex min-w-0 items-center gap-1.5 font-medium text-slate-700" title={assignee}>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[10px] font-bold text-slate-600">
+              <Icon name="user" size={11} className="text-slate-500" />
             </span>
-            <span className="truncate">{assignee}</span>
+            <span className="truncate max-w-[140px]">{assignee}</span>
           </span>
 
           {due && (
             <span
               className={cx(
                 'inline-flex shrink-0 items-center gap-1 font-semibold text-[11px]',
-                task.isOverdue ? 'text-rose-600' : 'text-ink-500',
+                task.isOverdue ? 'text-rose-600' : 'text-slate-500',
               )}
             >
               <Icon name="clock" size={12} />
@@ -132,7 +132,7 @@ export function TaskCard({
 
         {/* Progress Bar */}
         <div className="mt-2.5 flex items-center gap-2">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
+          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
             <div
               className={cx(
                 'h-full rounded-full transition-all duration-300',
@@ -141,7 +141,7 @@ export function TaskCard({
               style={{ width: `${Math.max(0, Math.min(100, task.progress))}%` }}
             />
           </div>
-          <span className="w-8 text-right text-[11px] font-bold tabular-nums text-ink-500">
+          <span className="w-8 text-right text-[11px] font-bold tabular-nums text-slate-500">
             {task.progress}%
           </span>
         </div>
@@ -154,8 +154,8 @@ export function TaskCard({
                 className={cx(
                   'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 border',
                   task.evidenceFileId
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-                    : 'bg-brand-50 text-brand-700 border-brand-200 dark:bg-brand-950/40 dark:text-brand-300 dark:border-brand-800',
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                    : 'bg-blue-50 text-blue-700 border-blue-200',
                 )}
               >
                 <Icon name="camera" size={11} />
@@ -163,13 +163,13 @@ export function TaskCard({
               </span>
             )}
             {task.requiresMetric && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
+              <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-amber-800 border border-amber-200">
                 <Icon name="chart" size={11} />
                 {task.metricLabel ?? 'Metric'}
               </span>
             )}
             {task.isOverdue && (
-              <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-rose-700 border border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800">
+              <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-1.5 py-0.5 text-rose-700 border border-rose-200">
                 <Icon name="alertTriangle" size={11} />
                 Overdue
               </span>
@@ -179,17 +179,17 @@ export function TaskCard({
       </div>
 
       {/* Card Actions Footer */}
-      <div className="mt-3.5 flex items-center justify-between gap-2 border-t border-ink-100 pt-3 dark:border-ink-800/80">
-        <div>
+      <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+        <div className="shrink-0">
           {quick ? (
             <QuickActionButton quick={quick} busy={busy} onClick={() => onQuick(quick)} compact />
           ) : (
-            <span className="text-[11px] font-medium text-ink-400 capitalize">
+            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 capitalize">
               {task.status.replace(/_/g, ' ')}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 shrink-0">
           {onEdit && (
             <button
               type="button"
@@ -198,7 +198,7 @@ export function TaskCard({
                 onEdit();
               }}
               title="Edit Task"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
             >
               <Icon name="edit" size={13} />
             </button>
@@ -211,7 +211,7 @@ export function TaskCard({
                 onDelete();
               }}
               title="Delete Task"
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
             >
               <Icon name="trash" size={13} />
             </button>
@@ -222,7 +222,7 @@ export function TaskCard({
               e.stopPropagation();
               onOpen();
             }}
-            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-ink-600 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+            className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-colors"
           >
             Details
             <Icon name="chevronRight" size={13} />

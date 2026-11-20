@@ -39,6 +39,9 @@ interface EmployeeDetail {
   };
 }
 
+interface LocationOption { id: number; code: string; name: string; city: string | null }
+interface SelfLocationInfo { canChange: boolean; currentLocationId: number | null; locations: LocationOption[] }
+
 export default function Profile() {
   useDocumentTitle('My profile');
   const { user, refresh } = useAuth();
@@ -48,6 +51,47 @@ export default function Profile() {
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirm: '' });
   const [busy, setBusy] = useState(false);
+  const [locationInfo, setLocationInfo] = useState<SelfLocationInfo | null>(null);
+  const [locationChoice, setLocationChoice] = useState('');
+  const [locationReason, setLocationReason] = useState('');
+  const [locationBusy, setLocationBusy] = useState(false);
+
+  const loadLocations = async () => {
+    try {
+      const result = await api.get<SelfLocationInfo>('/employees/me/location');
+      setLocationInfo(result);
+      setLocationChoice(result.currentLocationId ? String(result.currentLocationId) : '');
+    } catch {
+      setLocationInfo({ canChange: false, currentLocationId: null, locations: [] });
+    }
+  };
+
+  const changeLocation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!locationChoice) {
+      toast.error('Select a location.');
+      return;
+    }
+    if (Number(locationChoice) === locationInfo?.currentLocationId) {
+      toast.info('That is already your location.');
+      return;
+    }
+    setLocationBusy(true);
+    try {
+      const result = await api.patch<{ changed: boolean; location: LocationOption }>('/employees/me/location', {
+        locationId: Number(locationChoice),
+        reason: locationReason.trim() || undefined,
+      });
+      toast.success(result.changed ? `Your location is now ${result.location.name}.` : 'Location unchanged.');
+      setLocationReason('');
+      await refresh();
+      await Promise.all([load(), loadLocations()]);
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setLocationBusy(false);
+    }
+  };
 
   const load = async () => {
     if (!user) return;
@@ -68,6 +112,7 @@ export default function Profile() {
 
   useEffect(() => {
     void load();
+    void loadLocations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
@@ -217,6 +262,40 @@ export default function Profile() {
           </div>
         </Card>
       </div>
+
+      {locationInfo?.canChange && (
+        <Card className="card-pad">
+          <SectionHeader
+            title="Work location"
+            description="As an administrator or manager you can move your own primary location. Your dashboards, notifications and location-scoped data follow the new location."
+          />
+          <form onSubmit={changeLocation} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <Field label="Location" required>
+              <select className="input" value={locationChoice} onChange={(event) => setLocationChoice(event.target.value)} required>
+                <option value="" disabled>Select a location</option>
+                {locationInfo.locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name} ({loc.code}){loc.id === locationInfo.currentLocationId ? ' — current' : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Reason" hint="Optional, recorded in the audit log">
+              <input className="input" value={locationReason} maxLength={500} onChange={(event) => setLocationReason(event.target.value)} placeholder="e.g. Covering the Davanagere store" />
+            </Field>
+            <button
+              type="submit"
+              className="btn-primary btn-sm"
+              disabled={locationBusy || !locationChoice || Number(locationChoice) === locationInfo.currentLocationId}
+            >
+              {locationBusy ? 'Updating…' : 'Change location'}
+            </button>
+          </form>
+          {locationInfo.locations.length === 0 && (
+            <p className="mt-2 text-xs text-ink-500">No active locations are configured.</p>
+          )}
+        </Card>
+      )}
 
       <Modal open={passwordOpen} onClose={() => setPasswordOpen(false)} title="Change password" description="Minimum 10 characters with upper case, lower case, a number and a symbol."
         footer={<><button className="btn-secondary" onClick={() => setPasswordOpen(false)}>Cancel</button><button className="btn-primary" form="password-form" type="submit" disabled={busy}>{busy ? 'Updating…' : 'Update password'}</button></>}>

@@ -101,11 +101,11 @@ export function TaskTable({
               >
                 {/* Title & Task No */}
                 <td className="py-3.5 px-3.5 max-w-[340px]">
-                  <p className="truncate text-sm font-bold text-ink-900 group-hover:text-brand-700 transition-colors" title={task.title}>
+                  <p className="text-sm font-bold text-slate-900 group-hover:text-brand-700 transition-colors break-words" title={task.title}>
                     {task.title}
                   </p>
-                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-ink-500">
-                    <span className="font-mono text-[11px] font-bold text-ink-600 bg-ink-100 dark:bg-ink-800 px-1.5 py-0.2 rounded">
+                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
+                    <span className="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                       {task.taskNo}
                     </span>
                     {task.requiresEvidence && (

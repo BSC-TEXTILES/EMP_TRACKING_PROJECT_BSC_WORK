@@ -33,6 +33,26 @@ employeesRouter.get('/allowed-locations', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     res.json({ locations: await EmployeeService.getUserAllowedLocations(user) });
 }));
+employeesRouter.get('/me/location', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const canChange = EmployeeService.canChangeOwnLocation(user);
+    res.json({
+        canChange,
+        currentLocationId: user.locationId ?? null,
+        locations: canChange ? await EmployeeService.selfLocationOptions(user) : [],
+    });
+}));
+employeesRouter.patch('/me/location', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        locationId: z.coerce.number().int().positive(),
+        reason: z.string().trim().max(500).optional(),
+    }), req.body);
+    res.json(await EmployeeService.changeOwnLocation(user, body, {
+        ipAddress: clientIp(req),
+        userAgent: req.headers['user-agent'],
+    }));
+}));
 employeesRouter.get('/', requireAny('employees.view.own', 'employees.view.team', 'employees.view.all'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     res.json(await EmployeeService.list(user, {

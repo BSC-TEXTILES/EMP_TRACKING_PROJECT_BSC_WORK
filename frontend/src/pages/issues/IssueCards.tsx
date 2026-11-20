@@ -103,7 +103,7 @@ export function IssueCards({
               </div>
 
               {/* Title & Category */}
-              <h3 className="mt-2.5 text-sm font-bold text-ink-900 group-hover:text-brand-700 transition-colors line-clamp-2">
+              <h3 className="mt-2.5 text-sm font-bold text-ink-900 group-hover:text-brand-700 transition-colors break-words">
                 {issue.title}
               </h3>
 
@@ -113,7 +113,7 @@ export function IssueCards({
               </div>
 
               {/* Description preview */}
-              <p className="mt-2 text-xs text-ink-600 line-clamp-2 leading-relaxed">
+              <p className="mt-2 text-xs text-ink-600 leading-relaxed break-words">
                 {issue.description}
               </p>
             </div>

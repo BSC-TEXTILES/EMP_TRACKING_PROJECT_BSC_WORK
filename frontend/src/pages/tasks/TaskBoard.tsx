@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Icon } from '../../components/icons';
 import { cx } from '../../lib/format';
 import type { TaskSummary } from '../../lib/types';
 import { TaskCard } from './TaskCard';
@@ -80,7 +81,7 @@ export function TaskBoard({
             key={col.id}
             aria-label={col.title}
             className={cx(
-              'min-w-0 rounded-2xl border border-ink-200/90 bg-ink-50/70 p-3.5 dark:bg-ink-900/30 dark:border-ink-800 transition-colors',
+              'min-w-0 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-3.5 transition-colors',
               mobileStage === col.id ? 'block' : 'hidden md:block',
             )}
           >
@@ -89,7 +90,7 @@ export function TaskBoard({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={cx('h-2.5 w-2.5 shrink-0 rounded-full', col.dot)} aria-hidden="true" />
-                  <h2 className="truncate text-sm font-bold text-ink-900">{col.title}</h2>
+                  <h2 className="text-sm font-bold text-slate-900 break-words">{col.title}</h2>
                 </div>
                 <span
                   className={cx(
@@ -100,7 +101,7 @@ export function TaskBoard({
                   {col.total}
                 </span>
               </div>
-              <p className="mt-1 line-clamp-1 text-xs text-ink-500">{col.description}</p>
+              <p className="mt-1 text-xs text-slate-500 leading-normal break-words">{col.description}</p>
               {col.total > col.items.length && col.items.length > 0 && (
                 <p className="mt-1 text-[11px] font-medium text-brand-700">
                   Showing {col.items.length} of {col.total} tasks
@@ -110,8 +111,9 @@ export function TaskBoard({
 
             {/* Task Cards List */}
             {col.items.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-ink-200 py-8 px-4 text-center dark:border-ink-800">
-                <p className="text-xs font-medium text-ink-400">
+              <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200/90 bg-white/70 py-8 px-4 text-center">
+                <Icon name="checkCircle" size={18} className="text-slate-300 mb-1.5" />
+                <p className="text-xs font-medium text-slate-500">
                   {col.total > 0 ? 'Tasks available on other pages' : 'No tasks in this stage'}
                 </p>
               </div>

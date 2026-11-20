@@ -32,7 +32,7 @@ const AVAILABILITY_OPTIONS: { key: string; label: string; color: string; dot: st
 ];
 
 export function AppShell() {
-  const { user, logout, has, canAny, unreadNotifications, setUnreadNotifications } = useAuth();
+  const { user, logout, has, canAny, unreadNotifications, setUnreadNotifications, refresh: refreshAuth } = useAuth();
   const displayName = user?.fullName ?? '';
   const displayCode = user?.employeeCode ?? '';
   const displayDept = user?.departmentName ?? 'Organisation';
@@ -78,6 +78,12 @@ export function AppShell() {
         .catch(() => undefined);
     }
   }, [user?.id]);
+
+  // An admin/manager changed their own location (possibly on another device): reload the session.
+  useSocketEvent('profile:location_changed', () => {
+    void refreshAuth();
+    setRefreshKey((key) => key + 1);
+  });
 
   useSocketEvent('presence:status', (raw: unknown) => {
     const data = raw as { employeeId?: number; status?: string } | null | undefined;

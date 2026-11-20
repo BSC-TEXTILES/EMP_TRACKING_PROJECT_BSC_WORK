@@ -113,13 +113,13 @@ export function SummaryCards({
             aria-pressed={selected}
             onClick={() => onSelect(selected && card.id !== '' ? '' : card.id)}
             className={cx(
-              'group relative flex min-w-0 flex-col justify-between rounded-xl border bg-surface p-4 text-left transition-all duration-200',
+              'group relative flex min-w-0 flex-col justify-between rounded-xl border bg-white p-4 text-left transition-all duration-200',
               'hover:-translate-y-0.5 hover:shadow-md hover:border-brand-400',
               selected
                 ? card.activeRing
                 : isOverdue
                   ? 'border-rose-300 shadow-sm shadow-rose-500/5'
-                  : 'border-ink-200/90 shadow-sm',
+                  : 'border-slate-200 shadow-sm',
             )}
           >
             {/* Top row: Icon & Status indicator */}
@@ -136,18 +136,18 @@ export function SummaryCards({
 
             {/* Middle: Big Metric Number */}
             <div className="mt-3 min-w-0">
-              <span className="block truncate text-[11px] font-bold uppercase tracking-wider text-ink-500">
+              <span className="block truncate text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 {card.label}
               </span>
               <span
                 className={cx(
                   'mt-0.5 block text-2xl font-black tabular-nums tracking-tight sm:text-3xl',
-                  isOverdue ? 'text-rose-600' : 'text-ink-900',
+                  isOverdue ? 'text-rose-600' : 'text-slate-900',
                 )}
               >
                 {count === null ? (
                   loading ? (
-                    <span className="inline-block h-7 w-12 animate-pulse rounded bg-ink-200" />
+                    <span className="inline-block h-7 w-12 animate-pulse rounded bg-slate-200" />
                   ) : (
                     '—'
                   )
@@ -155,7 +155,7 @@ export function SummaryCards({
                   count.toLocaleString()
                 )}
               </span>
-              <span className="mt-1 block truncate text-[11px] font-medium text-ink-400">
+              <span className="mt-1 block text-[11px] font-medium text-slate-500 leading-tight break-words">
                 {card.hint}
               </span>
             </div>
@@ -191,11 +191,11 @@ export function SlotCards({
             aria-pressed={selected}
             onClick={() => onSelect(selected ? '' : slot.id)}
             className={cx(
-              'group relative flex min-w-0 flex-col justify-between rounded-xl border bg-surface p-4 text-left transition-all duration-200',
+              'group relative flex min-w-0 flex-col justify-between rounded-xl border bg-white p-4 text-left transition-all duration-200',
               'hover:-translate-y-0.5 hover:shadow-md hover:border-brand-400',
               selected
                 ? 'border-brand-600 ring-2 ring-brand-500/20 bg-brand-50/20 shadow-md'
-                : 'border-ink-200/90 shadow-sm',
+                : 'border-slate-200 shadow-sm',
             )}
           >
             {/* Top row: Icon, Title, and Hours */}
@@ -233,7 +233,7 @@ export function SlotCards({
             </div>
 
             {/* Description */}
-            <p className="mt-2.5 line-clamp-1 text-xs text-ink-500" title={slot.desc}>
+            <p className="mt-2 text-xs text-slate-500 leading-normal break-words" title={slot.desc}>
               {slot.desc}
             </p>
 
