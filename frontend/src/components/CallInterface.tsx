@@ -6,7 +6,8 @@ import { useToast } from '../contexts/ToastContext';
 import { Avatar } from './ui';
 import { Icon } from './icons';
 import { cx } from '../lib/format';
-import { showDesktopNotification, PhoneRingtone, closeCallNotification } from '../lib/notifications';
+import { showDesktopNotification, PhoneRingtone, closeCallNotification, pushDeviceId } from '../lib/notifications';
+import { hasNativeCalls, nativeCalls, type AudioRoute } from '../lib/nativeCalls';
 
 export type CallType = 'audio' | 'video';
 
@@ -18,6 +19,7 @@ export interface CallPeer {
   department: string | null;
   designation: string | null;
   location?: string | null;
+  locationCode?: string | null;
 }
 
 interface IncomingCall {
@@ -33,7 +35,21 @@ interface CallSession {
   isCaller: boolean;
   phase: 'ringing' | 'active';
   startedAt: number | null;
+  /** Caller side: a device of the callee confirmed it is ringing (until then the screen says "Calling…"). */
+  delivered: boolean;
+  /** WebRTC media path connected (audio flowing). */
+  mediaConnected: boolean;
 }
+
+/** Shown for a moment after a call ends, so the user sees what happened (never a silent close). */
+interface EndedCall {
+  peer: CallPeer;
+  message: string;
+  tone: 'neutral' | 'warning' | 'error';
+  duration?: number;
+}
+
+type Quality = 'good' | 'fair' | 'poor' | null;
 
 interface IceServerConfig {
   urls: string;
@@ -55,13 +71,25 @@ interface CallContextValue {
 const CallContext = createContext<CallContextValue | null>(null);
 
 const DEFAULT_ICE: IceServerConfig[] = [{ urls: 'stun:stun.l.google.com:19302' }];
-/** The server ends unanswered calls at 45 s; this client timer is only a backstop. */
-const RING_TIMEOUT_MS = 50_000;
+/** The server ends unanswered calls (default 30 s); this client timer is only a backstop. */
+const DEFAULT_RING_TIMEOUT_SECONDS = 30;
+const DEVICE_ID = pushDeviceId();
 
 interface PendingCallResponse {
   call: { callId: string; type: CallType; caller: CallPeer } | null;
   iceServers?: IceServerConfig[];
 }
+
+interface StartCallResponse {
+  callId: string;
+  peer: CallPeer;
+  iceServers: IceServerConfig[];
+  ringTimeoutSeconds?: number;
+  state?: 'calling' | 'ringing' | 'unreachable';
+  message?: string;
+}
+
+const ENDED_VISIBLE_MS = 2600;
 
 type SocketLike = { connected: boolean; once: (event: string, cb: () => void) => unknown };
 
@@ -91,8 +119,29 @@ function formatDuration(seconds: number): string {
 }
 
 function peerSubtitle(peer: CallPeer): string {
-  const parts = [peer.employeeCode, peer.designation, peer.department, peer.location].filter(Boolean);
+  const parts = [peer.employeeCode, peer.designation, peer.department].filter(Boolean);
   return parts.join(' · ');
+}
+
+/** "BEL · Belagavi", or whichever of the two is known. */
+function peerLocation(peer: CallPeer): string {
+  const code = peer.locationCode?.trim();
+  const name = peer.location?.trim();
+  if (code && name && code.toLowerCase() !== name.toLowerCase()) return `${code} · ${name}`;
+  return code || name || '';
+}
+
+/** Three signal bars for the live connection quality. */
+function QualityBars({ quality }: { quality: Quality }) {
+  const level = quality === 'good' ? 3 : quality === 'fair' ? 2 : quality === 'poor' ? 1 : 0;
+  const color = quality === 'good' ? 'bg-emerald-400' : quality === 'fair' ? 'bg-amber-400' : 'bg-red-400';
+  return (
+    <span className="flex items-end gap-0.5" aria-hidden="true">
+      {[1, 2, 3].map((bar) => (
+        <span key={bar} className={cx('w-1 rounded-sm', bar <= level ? color : 'bg-white/25')} style={{ height: `${bar * 4 + 2}px` }} />
+      ))}
+    </span>
+  );
 }
 
 function isVideoSupported(): boolean {
@@ -127,6 +176,12 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const [speakerEnabled, setSpeakerEnabled] = useState(true);
   const [speakerVolume, setSpeakerVolume] = useState(100);
   const [connectionQuality, setConnectionQuality] = useState<'connecting' | 'ringing' | 'connected' | 'reconnecting' | 'failed'>('connecting');
+  const [quality, setQuality] = useState<Quality>(null);
+  const [ended, setEnded] = useState<EndedCall | null>(null);
+  const [audioRoutes, setAudioRoutes] = useState<AudioRoute[]>([]);
+  const [audioRoute, setAudioRouteState] = useState<AudioRoute>('earpiece');
+  const [turnConfigured, setTurnConfigured] = useState(true);
+  const [ringTimeoutSeconds, setRingTimeoutSeconds] = useState(DEFAULT_RING_TIMEOUT_SECONDS);
 
   const sessionRef = useRef<CallSession | null>(null);
   const incomingRef = useRef<IncomingCall | null>(null);
@@ -145,6 +200,20 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const acceptRef = useRef<() => Promise<void>>(async () => undefined);
   const reconnectNoticeRef = useRef(false);
+  /** Call currently being answered on this device: a second Answer (native + web) must not post /accept twice. */
+  const acceptingRef = useRef<string | null>(null);
+  const connectedReportedRef = useRef<string | null>(null);
+  const endedTimerRef = useRef<number | null>(null);
+  const nativeStartedRef = useRef<string | null>(null);
+
+  const showEnded = useCallback((info: EndedCall) => {
+    if (endedTimerRef.current !== null) window.clearTimeout(endedTimerRef.current);
+    setEnded(info);
+    endedTimerRef.current = window.setTimeout(() => {
+      endedTimerRef.current = null;
+      setEnded(null);
+    }, ENDED_VISIBLE_MS);
+  }, []);
 
   const updateSession = useCallback((next: CallSession | null) => {
     sessionRef.current = next;
@@ -181,10 +250,19 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
   }, []);
 
-  const teardown = useCallback((options: { leaveRoom?: boolean } = {}) => {
+  const teardown = useCallback((options: { leaveRoom?: boolean; nativeReason?: string } = {}) => {
     const current = sessionRef.current;
     const ringingId = current?.callId ?? incomingRef.current?.callId;
     if (ringingId) void closeCallNotification(ringingId);
+    // Native app: stop the lock-screen ring / ongoing-call service and release call audio.
+    if (ringingId) {
+      if (nativeStartedRef.current === ringingId) void nativeCalls.callEnded(ringingId, options.nativeReason);
+      else void nativeCalls.dismissIncoming(ringingId, 'local');
+    }
+    nativeStartedRef.current = null;
+    acceptingRef.current = null;
+    connectedReportedRef.current = null;
+    setQuality(null);
     if (current && options.leaveRoom !== false) {
       socketRef.current?.emit('call:leave', { callId: current.callId });
     }
@@ -268,7 +346,9 @@ export function CallProvider({ children }: { children: ReactNode }) {
         return stream;
       }
       const message = name === 'NotAllowedError'
-        ? 'Microphone or camera permission was denied. Allow access in the browser and try again.'
+        ? (hasNativeCalls
+          ? 'Microphone permission is off. Allow it in Settings → Apps → BSC Workforce → Permissions, then try again.'
+          : 'Microphone or camera permission was denied. Allow access in the browser (lock icon in the address bar) and try again.')
         : name === 'NotFoundError'
           ? 'No microphone was found on this device.'
           : 'Could not start the microphone or camera.';
@@ -311,24 +391,60 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (!pcRef.current) return;
       if (pc.connectionState === 'connected') {
         setConnectionQuality('connected');
+        const wasRestart = restartAttemptedRef.current;
         restartAttemptedRef.current = false;
+        const current = sessionRef.current;
+        if (current) {
+          if (!current.mediaConnected) {
+            const next = { ...current, mediaConnected: true };
+            sessionRef.current = next;
+            setSession(next);
+          }
+          if (connectedReportedRef.current !== current.callId) {
+            connectedReportedRef.current = current.callId;
+            void api.post(`/calls/${current.callId}/connected`).catch(() => undefined);
+            // Native app: microphone foreground service, Telecom "active", screen over the lock screen.
+            if (nativeStartedRef.current !== current.callId) {
+              nativeStartedRef.current = current.callId;
+              void nativeCalls.callStarted(current.callId, current.peer.name, current.type === 'video');
+            }
+          } else if (wasRestart) {
+            void api.post(`/calls/${current.callId}/events`, { event: 'reconnected' }).catch(() => undefined);
+          }
+        }
       } else if (pc.connectionState === 'connecting') {
         setConnectionQuality('connecting');
       } else if (pc.connectionState === 'disconnected') {
         setConnectionQuality('reconnecting');
       } else if (pc.connectionState === 'failed') {
         setConnectionQuality('failed');
+        const current = sessionRef.current;
         if (!restartAttemptedRef.current) {
           restartAttemptedRef.current = true;
+          if (current) void api.post(`/calls/${current.callId}/events`, { event: 'ice_restart' }).catch(() => undefined);
           try {
             pc.restartIce();
           } catch {
             /* no-op */
           }
+          // Only the caller offers (avoids glare); the callee answers the ICE-restart offer.
+          if (current?.isCaller) void makeOfferRef.current(true);
         } else {
-          toastRef.current.error('The call connection was lost.');
-          void api.post(`/calls/${sessionRef.current?.callId}/end`).catch(() => undefined);
-          teardown();
+          const neverConnected = current && !current.mediaConnected;
+          if (current && neverConnected && !turnConfigured) {
+            void api.post(`/calls/${current.callId}/events`, { event: 'turn_unavailable' }).catch(() => undefined);
+          }
+          void api.post(`/calls/${current?.callId}/end`, { reason: 'failed' }).catch(() => undefined);
+          if (current) {
+            showEnded({
+              peer: current.peer,
+              tone: 'error',
+              message: neverConnected
+                ? 'Could not connect the audio. One of the networks blocks calls; try Wi-Fi or mobile data.'
+                : 'The call connection was lost.',
+            });
+          }
+          teardown({ nativeReason: 'failed' });
           setHistoryVersion((value) => value + 1);
         }
       }
@@ -341,7 +457,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
     };
     return pc;
-  }, [emitSignal, teardown]);
+  }, [emitSignal, showEnded, teardown, turnConfigured]);
+  const makeOfferRef = useRef<(restart?: boolean) => Promise<void>>(async () => undefined);
 
   /**
    * The caller creates the offer, but only once the callee is in the call room
@@ -366,6 +483,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       setHistoryVersion((value) => value + 1);
     }
   }, [emitSignal, teardown]);
+  makeOfferRef.current = makeOffer;
 
   const joinRoom = useCallback((callId: string, rejoin = false) => {
     const socket = socketRef.current;
@@ -419,15 +537,26 @@ export function CallProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      const result = await api.post<{ callId: string; peer: CallPeer; iceServers: IceServerConfig[] }>('/calls/start', {
+      const result = await api.post<StartCallResponse>('/calls/start', {
         targetEmployeeId: employeeId,
         type,
       });
+      const peer: CallPeer = result.peer ?? peerHint ?? {
+        employeeId, employeeCode: '', name: 'Colleague', photoUrl: null, department: null, designation: null, location: null,
+      };
+      if (result.state === 'unreachable') {
+        // Nothing could ring: no fake "Ringing", the server already recorded it and told the callee.
+        stopLocalMedia();
+        showEnded({ peer, tone: 'warning', message: result.message ?? 'User is offline or unreachable' });
+        setHistoryVersion((value) => value + 1);
+        return;
+      }
       const servers = result.iceServers?.length ? result.iceServers : iceServers;
       setIceServers(servers);
+      const timeoutSeconds = result.ringTimeoutSeconds ?? ringTimeoutSeconds;
       const next: CallSession = {
         callId: result.callId,
-        peer: result.peer ?? peerHint ?? {
+        peer: peer ?? {
           employeeId,
           employeeCode: '',
           name: 'Colleague',
@@ -440,32 +569,40 @@ export function CallProvider({ children }: { children: ReactNode }) {
         isCaller: true,
         phase: 'ringing',
         startedAt: null,
+        delivered: result.state === 'ringing',
+        mediaConnected: false,
       };
       updateSession(next);
       offerSentRef.current = false;
       pendingIceRef.current = [];
       createPeer(servers);
       joinRoom(result.callId);
-      ringtoneRef.current.start('outgoing');
+      // Ringback only once a device really rings (call:ringing); "Calling…" is silent, like a phone.
+      if (next.delivered) ringtoneRef.current.start('outgoing');
       ringTimeoutRef.current = window.setTimeout(() => {
         void api.post(`/calls/${result.callId}/cancel`).catch(() => undefined);
-        toastRef.current.warning('No answer. The call was cancelled.');
+        showEnded({ peer: next.peer, tone: 'warning', message: 'No answer' });
         teardown();
         setHistoryVersion((value) => value + 1);
-      }, RING_TIMEOUT_MS);
+      }, (timeoutSeconds + 5) * 1000);
     } catch (error) {
       stopLocalMedia();
       toastRef.current.error(errorMessage(error));
     }
-  }, [acquireMedia, createPeer, iceServers, joinRoom, stopLocalMedia, teardown, updateSession, user]);
+  }, [acquireMedia, createPeer, iceServers, joinRoom, ringTimeoutSeconds, showEnded, stopLocalMedia, teardown, updateSession, user]);
 
   const accept = useCallback(async () => {
     const current = incomingRef.current;
     if (!current) return;
+    // Native Answer + in-app Answer (or a double tap) for the same call: answer once.
+    if (acceptingRef.current === current.callId) return;
+    acceptingRef.current = current.callId;
     ringtoneRef.current.stop();
     void closeCallNotification(current.callId);
+    void nativeCalls.dismissIncoming(current.callId, 'answered');
     const connectedNow = await waitForSocket(() => socketRef.current, 10_000);
     if (!connectedNow) {
+      acceptingRef.current = null;
       toastRef.current.error('The live connection is offline. Check your network and ask the caller to try again.');
       return;
     }
@@ -473,13 +610,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
       await acquireMedia(current.type);
     } catch (error) {
       toastRef.current.error(errorMessage(error));
+      void api.post(`/calls/${current.callId}/events`, { event: 'mic_denied' }).catch(() => undefined);
       await api.post(`/calls/${current.callId}/reject`).catch(() => undefined);
       teardown();
       setHistoryVersion((value) => value + 1);
       return;
     }
     try {
-      await api.post(`/calls/${current.callId}/accept`);
+      await api.post(`/calls/${current.callId}/accept`, { deviceId: DEVICE_ID });
       const next: CallSession = {
         callId: current.callId,
         peer: current.peer,
@@ -487,6 +625,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
         isCaller: false,
         phase: 'active',
         startedAt: Date.now(),
+        delivered: true,
+        mediaConnected: false,
       };
       updateSession(next);
       updateIncoming(null);
@@ -495,12 +635,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
       createPeer(iceServers);
       joinRoom(current.callId);
     } catch (error) {
-      toastRef.current.error(errorMessage(error));
+      const code = (error as { code?: string }).code;
+      if (code === 'call_ended') {
+        showEnded({ peer: current.peer, tone: 'neutral', message: 'This call has already ended' });
+      } else {
+        toastRef.current.error(errorMessage(error));
+      }
       stopLocalMedia();
       teardown();
       setHistoryVersion((value) => value + 1);
     }
-  }, [acquireMedia, createPeer, iceServers, joinRoom, stopLocalMedia, teardown, updateIncoming, updateSession]);
+  }, [acquireMedia, createPeer, iceServers, joinRoom, showEnded, stopLocalMedia, teardown, updateIncoming, updateSession]);
   acceptRef.current = accept;
 
   /** Shows a ringing call fetched from the server (push tap, reconnect, app resumed). */
@@ -509,7 +654,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (incomingRef.current?.callId === call.callId || sessionRef.current?.callId === call.callId) return;
     if (sessionRef.current || incomingRef.current) return;
     updateIncoming({ callId: call.callId, peer: call.caller, type: call.type });
-    ringtoneRef.current.start('incoming');
+    // Confirms to the caller that this device is really ringing.
+    socketRef.current?.emit('call:ring_ack', { callId: call.callId });
+    // In the Android app the native layer rings while the app is in the background; in the
+    // foreground the in-app screen takes over so the phone does not ring twice.
+    if (!hasNativeCalls || document.visibilityState === 'visible') {
+      ringtoneRef.current.start('incoming');
+      if (hasNativeCalls) void nativeCalls.dismissIncoming(call.callId, 'local');
+    }
   }, [updateIncoming]);
 
   /**
@@ -555,6 +707,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
     if (!current) return;
     ringtoneRef.current.stop();
     updateIncoming(null);
+    void nativeCalls.dismissIncoming(current.callId, 'declined');
     await api.post(`/calls/${current.callId}/reject`).catch(() => undefined);
     teardown({ leaveRoom: false });
     setHistoryVersion((value) => value + 1);
@@ -571,20 +724,34 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const path = currentSession.phase === 'ringing' && currentSession.isCaller
       ? `/calls/${currentSession.callId}/cancel`
       : `/calls/${currentSession.callId}/end`;
+    const duration = currentSession.phase === 'active' && currentSession.startedAt
+      ? Math.max(0, Math.floor((Date.now() - currentSession.startedAt) / 1000))
+      : 0;
+    showEnded({
+      peer: currentSession.peer,
+      tone: 'neutral',
+      message: currentSession.phase === 'active' ? 'Call ended' : 'Call cancelled',
+      duration: currentSession.phase === 'active' ? duration : undefined,
+    });
     // Tear down first so the server's own call:missed / call:ended echo is ignored (no stray toast).
     teardown();
     await api.post(path).catch(() => undefined);
     setHistoryVersion((value) => value + 1);
-  }, [reject, teardown]);
+  }, [reject, showEnded, teardown]);
+  const hangupRef = useRef(hangup);
+  hangupRef.current = hangup;
 
   // Load TURN/STUN configuration and restore an incoming call opened from a
   // push notification link (/calls?incoming=<callId>).
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
-    void api.get<{ iceServers: IceServerConfig[] }>('/calls/config')
+    void api.get<{ iceServers: IceServerConfig[]; ringTimeoutSeconds?: number; turnConfigured?: boolean }>('/calls/config')
       .then((result) => {
-        if (!cancelled && result.iceServers?.length) setIceServers(result.iceServers);
+        if (cancelled) return;
+        if (result.iceServers?.length) setIceServers(result.iceServers);
+        if (result.ringTimeoutSeconds) setRingTimeoutSeconds(result.ringTimeoutSeconds);
+        if (typeof result.turnConfigured === 'boolean') setTurnConfigured(result.turnConfigured);
       })
       .catch(() => undefined);
 
@@ -597,6 +764,100 @@ export function CallProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [checkPendingCall, restoreFromNotification, user?.id]);
+
+  // Native Android call layer: Answer / Decline / Hang up from the lock screen, the notification,
+  // a Bluetooth headset or a car. Also picks up an Answer tapped while the app was closed.
+  useEffect(() => {
+    if (!hasNativeCalls || !user) return;
+    let disposed = false;
+    let remove: (() => void) | null = null;
+    const handle = (action: { action: string; callId: string } | null) => {
+      if (!action?.callId) return;
+      if (action.action === 'answer') void restoreFromNotification(action.callId, true);
+      else if (action.action === 'hangup') {
+        if (sessionRef.current?.callId === action.callId) void hangupRef.current();
+      } else if (action.action === 'declined') {
+        if (incomingRef.current?.callId === action.callId) {
+          ringtoneRef.current.stop();
+          teardown({ leaveRoom: false });
+          setHistoryVersion((value) => value + 1);
+        }
+      } else if (action.action === 'missed') {
+        window.dispatchEvent(new CustomEvent('sw:navigate', { detail: '/calls' }));
+      }
+    };
+    void nativeCalls.onAction(handle).then((off) => {
+      if (disposed) off();
+      else remove = off;
+    });
+    void nativeCalls.launchAction().then(handle);
+    return () => {
+      disposed = true;
+      remove?.();
+    };
+  }, [restoreFromNotification, teardown, user?.id]);
+
+  // Internet came back during a call: the caller renegotiates with an ICE restart right away
+  // instead of waiting for the browser to notice the old path is dead.
+  useEffect(() => {
+    const onOnline = () => {
+      const current = sessionRef.current;
+      if (!current || current.phase !== 'active') return;
+      if (current.isCaller) void makeOfferRef.current(true);
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, []);
+
+  // Live connection quality from WebRTC statistics (round-trip time, packet loss, jitter).
+  useEffect(() => {
+    if (!session || session.phase !== 'active' || !session.mediaConnected) return;
+    let lastLost = 0;
+    let lastReceived = 0;
+    const timer = window.setInterval(async () => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      try {
+        const stats = await pc.getStats();
+        let rtt: number | null = null;
+        let lost = 0;
+        let received = 0;
+        let jitter = 0;
+        stats.forEach((report) => {
+          const r = report as Record<string, unknown>;
+          if (r.type === 'candidate-pair' && r.nominated && typeof r.currentRoundTripTime === 'number') rtt = r.currentRoundTripTime as number;
+          if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+            lost = Number(r.packetsLost ?? 0);
+            received = Number(r.packetsReceived ?? 0);
+            jitter = Number(r.jitter ?? 0);
+          }
+        });
+        const dLost = Math.max(0, lost - lastLost);
+        const dReceived = Math.max(0, received - lastReceived);
+        lastLost = lost;
+        lastReceived = received;
+        const lossRate = dLost + dReceived > 0 ? dLost / (dLost + dReceived) : 0;
+        const rttMs = rtt === null ? 0 : (rtt as number) * 1000;
+        setQuality(lossRate > 0.08 || rttMs > 600 || jitter > 0.1 ? 'poor' : lossRate > 0.02 || rttMs > 300 || jitter > 0.04 ? 'fair' : 'good');
+      } catch {
+        /* stats unavailable */
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [session?.callId, session?.phase, session?.mediaConnected, session]);
+
+  // Native app: available audio outputs (earpiece / speaker / Bluetooth headset / wired).
+  useEffect(() => {
+    if (!hasNativeCalls || !session || session.phase !== 'active') return;
+    const refresh = () => void nativeCalls.audioRoutes().then((r) => {
+      if (!r) return;
+      setAudioRoutes(r.routes);
+      setAudioRouteState(r.current);
+    });
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [session?.callId, session?.phase, session]);
 
   // Notification tapped / "Answer" while the app is already running (no reload).
   useEffect(() => {
@@ -669,7 +930,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
         return;
       }
       updateIncoming({ callId: payload.callId, peer: payload.caller, type: payload.type });
-      ringtoneRef.current.start('incoming');
+      // Confirms to the caller that this device is really ringing (switches them from "Calling…" to "Ringing…").
+      socket.emit('call:ring_ack', { callId: payload.callId });
+      if (!hasNativeCalls || document.visibilityState === 'visible') {
+        ringtoneRef.current.start('incoming');
+        if (hasNativeCalls) void nativeCalls.dismissIncoming(payload.callId, 'local');
+      }
+      if (hasNativeCalls) return; // the native layer shows the lock-screen ring while in the background
       // Background tab without a push subscription: socket fallback, same tag as the push so they merge.
       if (document.visibilityState !== 'visible') {
         void showDesktopNotification(payload.caller.name, {
@@ -689,7 +956,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       if (current.phase === 'ringing') {
         clearRingTimeout();
         ringtoneRef.current.stop();
-        const next: CallSession = { ...current, phase: 'active', startedAt: Date.now() };
+        const next: CallSession = { ...current, phase: 'active', startedAt: Date.now(), delivered: true };
         updateSession(next);
       }
       reconnectNoticeRef.current = false;
@@ -703,7 +970,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       clearRingTimeout();
       ringtoneRef.current.stop();
       if (current.phase !== 'active') {
-        const next: CallSession = { ...current, phase: 'active', startedAt: Date.now() };
+        const next: CallSession = { ...current, phase: 'active', startedAt: Date.now(), delivered: true };
         updateSession(next);
       }
       // No offer here: the callee may not be in the call room yet. call:peer_joined triggers it.
@@ -732,33 +999,89 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    const onRinging = (payload: { callId: string }) => {
+      const current = sessionRef.current;
+      if (!current || current.callId !== payload.callId || !current.isCaller || current.phase !== 'ringing') return;
+      if (!current.delivered) {
+        updateSession({ ...current, delivered: true });
+        ringtoneRef.current.start('outgoing');
+      }
+    };
+
+    const onUnreachable = (payload: { callId: string; message?: string }) => {
+      const current = sessionRef.current;
+      if (!current || current.callId !== payload.callId) return;
+      showEnded({ peer: current.peer, tone: 'warning', message: payload.message ?? 'User is offline or unreachable' });
+      teardown();
+      setHistoryVersion((value) => value + 1);
+    };
+
+    const onAnsweredElsewhere = (payload: { callId: string; deviceId?: string | null }) => {
+      if (payload.deviceId && payload.deviceId === DEVICE_ID) return;
+      if (incomingRef.current?.callId !== payload.callId || acceptingRef.current === payload.callId) return;
+      ringtoneRef.current.stop();
+      toastRef.current.info('Answered on another device.');
+      teardown({ leaveRoom: false });
+    };
+
+    const onMissedSummary = (payload: { calls?: { callId: string; caller: { name: string }; startedAt: string }[] }) => {
+      const calls = payload?.calls ?? [];
+      if (calls.length === 0) return;
+      const names = [...new Set(calls.map((c) => c.caller.name))];
+      toastRef.current.warning(
+        calls.length === 1
+          ? `You missed a call from ${names[0]} while you were offline.`
+          : `You missed ${calls.length} calls while you were offline (${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}).`,
+      );
+      setHistoryVersion((value) => value + 1);
+    };
+
     const onRejected = (payload: { callId: string }) => {
       if (!matches(payload)) return;
-      toastRef.current.info('Call declined.');
+      const current = sessionRef.current;
+      if (current) showEnded({ peer: current.peer, tone: 'warning', message: 'Call declined' });
       teardown();
       setHistoryVersion((value) => value + 1);
     };
 
     const onMissed = (payload: { callId: string }) => {
       if (!matches(payload)) return;
-      toastRef.current.warning(sessionRef.current?.isCaller ? 'No answer.' : 'Missed call.');
+      const current = sessionRef.current;
+      if (current?.isCaller) showEnded({ peer: current.peer, tone: 'warning', message: 'No answer' });
+      else {
+        const peer = incomingRef.current?.peer;
+        if (peer) showEnded({ peer, tone: 'warning', message: 'Missed call' });
+      }
       teardown();
       setHistoryVersion((value) => value + 1);
     };
 
-    const onEnded = (payload: { callId: string; reason?: string }) => {
+    const onEnded = (payload: { callId: string; reason?: string; duration?: number }) => {
       if (!matches(payload)) return;
       const reason = payload.reason;
       const message = reason === 'no_answer'
-        ? 'No answer.'
+        ? (sessionRef.current?.isCaller ? 'No answer' : 'Missed call')
         : reason === 'rejected'
-          ? 'Call declined.'
-          : reason === 'disconnected'
-            ? 'The other participant disconnected.'
-            : 'Call ended.';
-      if (incomingRef.current) toastRef.current.warning(message);
-      else if (sessionRef.current?.phase === 'active') toastRef.current.info(message);
-      teardown();
+          ? 'Call declined'
+          : reason === 'unreachable'
+            ? 'User is offline or unreachable'
+            : reason === 'disconnected'
+              ? 'The other participant lost their connection'
+              : reason === 'failed'
+                ? 'The call connection failed'
+                : 'Call ended';
+      const peer = sessionRef.current?.peer ?? incomingRef.current?.peer;
+      // The callee declined it themselves (e.g. on another device): no "Call declined" screen for their own action.
+      const ownDecline = reason === 'rejected' && !sessionRef.current && Boolean(incomingRef.current);
+      if (peer && !ownDecline) {
+        showEnded({
+          peer,
+          tone: reason === 'failed' || reason === 'disconnected' ? 'error' : reason === 'ended' ? 'neutral' : 'warning',
+          message,
+          duration: sessionRef.current?.phase === 'active' ? payload.duration : undefined,
+        });
+      }
+      teardown({ nativeReason: reason === 'disconnected' ? 'remote' : reason });
       setHistoryVersion((value) => value + 1);
     };
 
@@ -789,8 +1112,16 @@ export function CallProvider({ children }: { children: ReactNode }) {
     socket.on('call:missed', onMissed);
     socket.on('call:ended', onEnded);
     socket.on('call:peer_left', onPeerLeft);
+    socket.on('call:ringing', onRinging);
+    socket.on('call:unreachable', onUnreachable);
+    socket.on('call:answered_elsewhere', onAnsweredElsewhere);
+    socket.on('call:missed_summary', onMissedSummary);
 
     return () => {
+      socket.off('call:ringing', onRinging);
+      socket.off('call:unreachable', onUnreachable);
+      socket.off('call:answered_elsewhere', onAnsweredElsewhere);
+      socket.off('call:missed_summary', onMissedSummary);
       socket.off('call:incoming', onIncoming);
       socket.off('call:peer_joined', onPeerJoined);
       socket.off('call:accepted', onAccepted);
@@ -800,7 +1131,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       socket.off('call:ended', onEnded);
       socket.off('call:peer_left', onPeerLeft);
     };
-  }, [clearRingTimeout, emitSignal, flushCandidates, makeOffer, socket, teardown, updateIncoming, updateSession, user?.id]);
+  }, [clearRingTimeout, emitSignal, flushCandidates, makeOffer, showEnded, socket, teardown, updateIncoming, updateSession, user?.id]);
 
   // Duration ticker.
   useEffect(() => {
@@ -865,7 +1196,23 @@ export function CallProvider({ children }: { children: ReactNode }) {
     setMuted(next);
   }, []);
 
+  const chooseAudioRoute = useCallback(async (route: AudioRoute) => {
+    try {
+      await nativeCalls.setAudioRoute(route);
+      setAudioRouteState(route);
+      const current = sessionRef.current;
+      if (current) void api.post(`/calls/${current.callId}/events`, { event: 'audio_route', detail: { route } }).catch(() => undefined);
+    } catch (error) {
+      toastRef.current.info(errorMessage(error));
+    }
+  }, []);
+
   const toggleSpeaker = useCallback(() => {
+    if (hasNativeCalls) {
+      // On the phone the button switches between earpiece and loudspeaker, like a phone call.
+      void chooseAudioRoute(audioRoute === 'speaker' ? (audioRoutes.includes('bluetooth') ? 'bluetooth' : audioRoutes.includes('wired') ? 'wired' : 'earpiece') : 'speaker');
+      return;
+    }
     setSpeakerEnabled((prev) => {
       const next = !prev;
       if (remoteVideoRef.current) {
@@ -874,7 +1221,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
       }
       return next;
     });
-  }, [speakerVolume]);
+  }, [audioRoute, audioRoutes, chooseAudioRoute, speakerVolume]);
 
   const changeSpeakerVolume = useCallback((val: number) => {
     const clamped = Math.max(0, Math.min(100, val));
@@ -988,49 +1335,71 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const speakerDevices = devices.filter((device) => device.kind === 'audiooutput');
   const canSelectSpeaker = typeof (HTMLMediaElement.prototype as { setSinkId?: unknown }).setSinkId === 'function';
   const hasLocalVideo = Boolean(localStream?.getVideoTracks().length);
-  const phaseLabel = session?.phase === 'ringing'
-    ? (session.isCaller ? 'Ringing…' : 'Connecting…')
-    : elapsed > 0
-      ? formatDuration(elapsed)
-      : 'Connecting…';
+  // Honest call status: "Calling…" until a device confirms, "Ringing…" after, then the timer.
+  const phaseLabel = !session
+    ? ''
+    : session.phase === 'ringing'
+      ? (session.isCaller ? (session.delivered ? 'Ringing…' : 'Calling…') : 'Connecting…')
+      : connectionQuality === 'reconnecting'
+        ? 'Reconnecting…'
+        : session.mediaConnected
+          ? formatDuration(elapsed)
+          : 'Connecting…';
+  const qualityLabel = quality === 'good' ? 'Good connection' : quality === 'fair' ? 'Fair connection' : quality === 'poor' ? 'Poor connection' : '';
 
   return (
     <CallContext.Provider value={value}>
       {children}
 
       {incoming && !session && (
-        <div className="fixed inset-0 z-[120] flex items-stretch justify-center bg-slate-950/80 backdrop-blur-sm sm:items-center sm:p-4" role="alertdialog" aria-label={`Incoming call from ${incoming.peer.name}`}>
-          <div className="flex h-full w-full flex-col overflow-hidden bg-white shadow-2xl sm:h-auto sm:max-w-sm sm:rounded-2xl">
-            <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-brand-600 to-brand-700 px-6 pb-6 pt-8 text-center text-white sm:flex-none">
-              <div className="relative mx-auto mb-4 h-28 w-28">
-                <span className="absolute inset-0 animate-ping rounded-full bg-white/20" />
-                <Avatar name={incoming.peer.name} src={incoming.peer.photoUrl} size={112} className="relative ring-4 ring-white/30" />
-              </div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/70">
-                Incoming {incoming.type} call
+        <div className="fixed inset-0 z-[120] flex items-stretch justify-center bg-slate-950/85 backdrop-blur-sm sm:items-center sm:p-4" role="alertdialog" aria-label={`Incoming call from ${incoming.peer.name}`}>
+          <div className="relative flex h-full w-full flex-col overflow-hidden bg-gradient-to-b from-brand-600 via-brand-800 to-slate-950 text-white shadow-2xl sm:h-auto sm:min-h-[560px] sm:max-w-sm sm:rounded-3xl">
+            <div className="flex flex-1 flex-col items-center px-6 pt-12 text-center" style={{ paddingTop: 'max(3rem, env(safe-area-inset-top))' }}>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/60">BSC Workforce</p>
+              <p className="mt-1.5 flex items-center gap-2 text-sm font-medium text-white/85">
+                <Icon name={incoming.type === 'video' ? 'video' : 'phone'} size={15} />
+                Incoming {incoming.type === 'video' ? 'video' : 'voice'} call
               </p>
-              <h2 className="mt-1 truncate text-2xl font-semibold">{incoming.peer.name}</h2>
-              <p className="mt-1 truncate text-sm text-white/80">{peerSubtitle(incoming.peer) || 'Employee'}</p>
+              <div className="relative mx-auto mb-6 mt-10 flex h-44 w-44 items-center justify-center">
+                <span className="absolute inset-4 animate-ping rounded-full bg-white/15 [animation-duration:1.6s]" />
+                <span className="absolute inset-0 animate-pulse rounded-full bg-white/10" />
+                <Avatar name={incoming.peer.name} src={incoming.peer.photoUrl} size={128} className="relative ring-4 ring-white/30" />
+              </div>
+              <h2 className="max-w-full truncate text-3xl font-semibold">{incoming.peer.name}</h2>
+              {peerSubtitle(incoming.peer) && <p className="mt-1.5 max-w-full truncate text-sm text-white/80">{peerSubtitle(incoming.peer)}</p>}
+              {peerLocation(incoming.peer) && (
+                <span className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold tracking-wide">
+                  <Icon name="mapPin" size={12} /> {peerLocation(incoming.peer)}
+                </span>
+              )}
+              <p className="mt-6 animate-pulse text-sm text-white/70">{acceptingRef.current === incoming.callId ? 'Connecting…' : 'Ringing…'}</p>
             </div>
-            <div className="flex items-center justify-center gap-16 px-6 py-10 sm:gap-10 sm:py-6" style={{ paddingBottom: 'max(2.5rem, env(safe-area-inset-bottom))' }}>
-              <button
-                type="button"
-                onClick={() => void reject()}
-                className="flex h-16 w-16 items-center justify-center rounded-full bg-red-500 text-white shadow-lg transition hover:bg-red-600"
-                aria-label="Decline call"
-              >
-                <Icon name="phoneOff" size={26} />
-              </button>
-              <button
-                type="button"
-                onClick={() => void accept()}
-                className="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg transition hover:bg-emerald-600"
-                aria-label="Accept call"
-              >
-                <Icon name={incoming.type === 'video' ? 'video' : 'phone'} size={26} />
-              </button>
+            <div className="grid grid-cols-2 gap-6 px-10 pb-10 pt-6" style={{ paddingBottom: 'max(2.5rem, env(safe-area-inset-bottom))' }}>
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void reject()}
+                  className="flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-full bg-red-500 text-white shadow-xl shadow-red-950/40 transition hover:bg-red-600 active:scale-95"
+                  aria-label="Decline call"
+                >
+                  <Icon name="phoneOff" size={30} />
+                </button>
+                <span className="text-sm font-medium text-white/85">Decline</span>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void accept()}
+                  disabled={acceptingRef.current === incoming.callId}
+                  className="flex h-[4.5rem] w-[4.5rem] animate-bounce items-center justify-center rounded-full bg-emerald-500 text-white shadow-xl shadow-emerald-950/40 transition [animation-duration:1.4s] hover:bg-emerald-600 active:scale-95 disabled:animate-none disabled:opacity-70"
+                  aria-label="Answer call"
+                >
+                  <Icon name={incoming.type === 'video' ? 'video' : 'phone'} size={30} />
+                </button>
+                <span className="text-sm font-medium text-white/85">Answer</span>
+              </div>
             </div>
-            {mediaError && <p className="px-6 pb-4 text-center text-xs text-red-600">{mediaError}</p>}
+            {mediaError && <p className="px-6 pb-4 text-center text-xs text-red-200">{mediaError}</p>}
           </div>
         </div>
       )}
@@ -1042,24 +1411,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
               <p className="truncate text-sm font-semibold">{session.peer.name}</p>
               <p className="truncate text-xs text-white/60">{phaseLabel}</p>
             </div>
-            <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs">
-              <span
-                className={cx(
-                  'h-2 w-2 rounded-full',
-                  connectionQuality === 'connected'
-                    ? 'bg-emerald-400'
-                    : connectionQuality === 'reconnecting'
-                    ? 'bg-amber-400 animate-ping'
-                    : 'bg-blue-400 animate-pulse',
-                )}
-              />
-              <span>
-                {session.phase === 'active'
-                  ? connectionQuality === 'reconnecting'
-                    ? 'Reconnecting…'
-                    : `HD Audio · ${formatDuration(elapsed)}`
-                  : 'Ringing…'}
-              </span>
+            <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1 text-xs" title={qualityLabel || undefined}>
+              {session.phase === 'active' && session.mediaConnected && connectionQuality !== 'reconnecting' ? (
+                <QualityBars quality={quality} />
+              ) : (
+                <span
+                  className={cx(
+                    'h-2 w-2 rounded-full',
+                    connectionQuality === 'reconnecting' ? 'animate-ping bg-amber-400' : 'animate-pulse bg-blue-400',
+                  )}
+                />
+              )}
+              <span>{qualityLabel && session.mediaConnected && connectionQuality !== 'reconnecting' ? qualityLabel : phaseLabel}</span>
             </div>
           </div>
 
@@ -1078,9 +1441,17 @@ export function CallProvider({ children }: { children: ReactNode }) {
                 </div>
                 <h2 className="text-2xl font-semibold">{session.peer.name}</h2>
                 <p className="mt-1 text-sm text-white/60">{peerSubtitle(session.peer) || 'Employee'}</p>
-                <p className="mt-4 text-sm text-white/50">
-                  {session.phase === 'ringing' ? (session.isCaller ? 'Waiting for answer…' : 'Connecting…') : 'Audio call in progress'}
+                {peerLocation(session.peer) && (
+                  <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-semibold text-white/80">
+                    <Icon name="mapPin" size={11} /> {peerLocation(session.peer)}
+                  </span>
+                )}
+                <p className={cx('mt-5 text-base font-medium', session.mediaConnected ? 'font-mono text-white/90' : 'animate-pulse text-white/70')}>
+                  {phaseLabel}
                 </p>
+                {connectionQuality === 'reconnecting' && session.phase === 'active' && (
+                  <p className="mt-1 text-xs text-amber-200">Connection interrupted. Trying to restore the audio…</p>
+                )}
               </div>
             )}
 
@@ -1101,6 +1472,23 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
           {showDevices && (
             <div className="mx-auto mb-3 w-full max-w-md space-y-3 rounded-xl bg-white/10 p-3 text-xs">
+              {hasNativeCalls && audioRoutes.length > 0 && (
+                <div>
+                  <span className="mb-1 block text-white/60">Audio output</span>
+                  <div className="flex flex-wrap gap-2">
+                    {audioRoutes.map((route) => (
+                      <button
+                        key={route}
+                        type="button"
+                        onClick={() => void chooseAudioRoute(route)}
+                        className={cx('rounded-full px-3 py-1.5 font-medium capitalize', audioRoute === route ? 'bg-white text-slate-900' : 'bg-white/15 text-white hover:bg-white/25')}
+                      >
+                        {route === 'earpiece' ? 'Phone' : route === 'wired' ? 'Headphones' : route}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <label className="block">
                 <span className="mb-1 block text-white/60">Microphone</span>
                 <select
@@ -1175,12 +1563,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
               onClick={toggleSpeaker}
               className={cx(
                 'flex h-14 w-14 items-center justify-center rounded-full transition shadow-md',
-                !speakerEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-white/15 hover:bg-white/25',
+                hasNativeCalls
+                  ? (audioRoute === 'speaker' ? 'bg-white text-slate-900' : 'bg-white/15 hover:bg-white/25')
+                  : !speakerEnabled ? 'bg-red-500 hover:bg-red-600' : 'bg-white/15 hover:bg-white/25',
               )}
-              aria-label={speakerEnabled ? 'Turn speaker OFF' : 'Turn speaker ON'}
-              title={speakerEnabled ? 'Speaker ON (Click to mute)' : 'Speaker OFF (Click to unmute)'}
+              aria-label={hasNativeCalls ? (audioRoute === 'speaker' ? 'Turn loudspeaker off' : 'Turn loudspeaker on') : speakerEnabled ? 'Turn speaker OFF' : 'Turn speaker ON'}
+              title={hasNativeCalls ? (audioRoute === 'speaker' ? 'Loudspeaker on' : 'Loudspeaker off') : speakerEnabled ? 'Speaker ON (Click to mute)' : 'Speaker OFF (Click to unmute)'}
             >
-              <Icon name={speakerEnabled ? 'volume' : 'volumeOff'} size={22} />
+              <Icon name={hasNativeCalls ? (audioRoute === 'speaker' ? 'volume' : 'volumeOff') : speakerEnabled ? 'volume' : 'volumeOff'} size={22} />
             </button>
             {session.type === 'video' && (
               <button
@@ -1222,6 +1612,23 @@ export function CallProvider({ children }: { children: ReactNode }) {
             </button>
           </div>
           {mediaError && <p className="pb-4 text-center text-xs text-red-300">{mediaError}</p>}
+        </div>
+      )}
+      {ended && !session && !incoming && (
+        <div className="fixed inset-0 z-[115] flex flex-col items-center justify-center bg-slate-950 px-6 text-center text-white" role="status" aria-live="assertive">
+          <Avatar name={ended.peer.name} src={ended.peer.photoUrl} size={104} className="opacity-90 ring-4 ring-white/10" />
+          <h2 className="mt-5 text-2xl font-semibold">{ended.peer.name}</h2>
+          {peerSubtitle(ended.peer) && <p className="mt-1 text-sm text-white/60">{peerSubtitle(ended.peer)}</p>}
+          <p className={cx(
+            'mt-6 rounded-full px-4 py-1.5 text-sm font-semibold',
+            ended.tone === 'error' ? 'bg-red-500/20 text-red-200' : ended.tone === 'warning' ? 'bg-amber-500/20 text-amber-100' : 'bg-white/10 text-white/85',
+          )}>
+            {ended.message}
+          </p>
+          {ended.duration !== undefined && <p className="mt-2 font-mono text-sm text-white/60">{formatDuration(ended.duration)}</p>}
+          <button type="button" onClick={() => setEnded(null)} className="mt-8 rounded-full bg-white/10 px-5 py-2 text-sm text-white/80 hover:bg-white/20">
+            Close
+          </button>
         </div>
       )}
     </CallContext.Provider>

@@ -101,7 +101,7 @@ STUN_URLS=stun:turn.example.com:3478,stun:stun.l.google.com:19302
 Verify with https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/ (a `relay` candidate must appear).
 
 ### Database
-`npm run db:migrate` applies `034_push_calls_reliability.sql` (additive only; it runs automatically on boot).
+`npm run db:migrate` applies `034_push_calls_reliability.sql` and `039_call_reachability_native.sql` (additive only; they run automatically on boot). Manual rollback for 039: `database/rollback/039_call_reachability_native.down.sql`.
 
 ## 4. Platform limits
 
@@ -113,23 +113,118 @@ Verify with https://webrtc.github.io/samples/src/content/peerconnection/trickle-
 | **Signed out (kept on)** | Calls ring; chat shows "New message · sign in to read it". Answering requires signing in. |
 
 A web app cannot draw a full-screen call UI over the lock screen or ring continuously like a phone
-call. That requires a native wrapper.
+call. The Android app does this natively (below).
 
-### Native-style ringing (recommended next step)
-The repo already ships a Capacitor shell (`frontend/ios`, `@capacitor/*`). For real phone-call behaviour:
+### Android app: native ringing (migration 039)
+The Android app no longer depends on a notification for calls. It rings like a phone call:
 
-- **Android**: send FCM **data-only, high-priority** messages for `call_ring` (no `notification` block),
-  handle them in a `FirebaseMessagingService`, and show a `CallStyle` notification with a
-  full-screen intent (`USE_FULL_SCREEN_INTENT` permission) or register with
-  `ConnectionService` / `TelecomManager` (self-managed). This rings over the lock screen with the
-  system ringtone until answered or cancelled by the `call_cancel` message.
-- **iOS**: register a **VoIP push** (PushKit) token, send `call_ring` through APNs with
-  `apns-push-type: voip`, and report it to **CallKit** (`CXProvider.reportNewIncomingCall`) in the
-  PushKit handler. This gives the native full-screen incoming-call UI. Apple requires every VoIP push
-  to be reported to CallKit.
-- Plugins: `@capacitor-firebase/messaging` plus a CallKit / ConnectionService plugin such as
-  `capacitor-plugin-callkit-voip`, or a small custom plugin. The server side already has
-  `PushService.sendCall`; add a `voip` token type next to `push_device_tokens`.
+| Piece | File | What it does |
+|-------|------|--------------|
+| FCM entry point | `calls/CallMessagingService.java` | The app's only FCM service (replaces the Capacitor plugin's in the manifest). Call messages are handled natively; everything else goes to the Capacitor push plugin unchanged. |
+| Ring logic | `calls/CallManager.java` | `call_ring` → CallStyle notification with a **full-screen intent**, looping ringtone + vibration (`FLAG_INSISTENT`), Telecom registration, delivery receipt to `/api/calls/ring-ack`. `call_cancel` / `call_missed` stop the ring (and show "Missed call from X"). Duplicate / late pushes for a finished call are ignored. |
+| Lock-screen screen | `calls/IncomingCallActivity.java` | Full-screen call over the lock screen: initials / photo, name, employee ID · designation, location chip (BEL / DAV / SHI / HQ), animated rings, Decline / Answer. Turns the screen on. |
+| Telecom | `calls/TelecomBridge.java`, `calls/BscConnectionService.java` | Self-managed `ConnectionService` (Android 8+): answer / hang up from a Bluetooth headset or car, other apps' audio paused, system call-audio routing. Falls back to the notification alone if Telecom refuses. |
+| Ongoing call | `calls/OngoingCallService.java` | Microphone foreground service while connected, so audio keeps working when the phone is locked or another app is opened. Ongoing-call notification with timer and Hang up. |
+| Web bridge | `calls/CallBridgePlugin.java` ↔ `src/lib/nativeCalls.ts` | Answer / Decline / Hang up events to the web app (also an Answer tapped while the app was closed), stop the native ring when the web app answers, audio routes (phone / speaker / Bluetooth / headphones), capability checks, settings shortcuts. |
+
+The server sends **data-only, high-priority** FCM messages to app builds that registered with
+`nativeCalls: true` (`push_device_tokens.native_calls`). Older app builds keep receiving the previous
+notification pushes, so nothing breaks while people update.
+
+**Android permissions.** The ring needs notification permission (Android 13+ asks). Full-screen over the
+lock screen needs "Use full-screen intents": Android 14+ grants it automatically only to calling apps
+installed from Play with the calling declaration, otherwise the user enables it (the Calls page shows a
+banner with a button that opens the setting). Without it the call still rings as a heads-up notification
+with Answer / Decline. Battery optimisation "Restricted" can delay pushes; the Calls page links to it.
+
+**Firebase setup (required for the app to ring while closed).**
+1. Firebase console → project → add an Android app with package `in.bsctextiles.workforce`.
+2. Download `google-services.json` to `frontend/android/app/google-services.json` (the build applies the
+   Google Services plugin only when this file exists; without it the app builds but cannot receive FCM).
+3. Firebase console → Project settings → Service accounts → generate a key, and set
+   `FCM_SERVICE_ACCOUNT_FILE` (or `FCM_SERVICE_ACCOUNT_JSON`) on the backend.
+4. Build: `cd frontend && npm run build && npx cap sync android && cd android && ./gradlew assembleRelease`
+   (JDK 17 or 21; Gradle 8.14 does not run on JDK 25).
+
+**Debug-only test hook.** Debug builds contain `src/debug/.../DebugCallReceiver.java`, which feeds a fake
+call push into the same code path FCM uses (no server is contacted):
+```bash
+adb shell am broadcast -a in.bsctextiles.workforce.DEBUG_CALL -p in.bsctextiles.workforce \
+  --es type call_ring --es callId t1 --es callerName "'Gagan C B'" --es callerCode EMP-1001 \
+  --es callerDesignation "'Store Manager'" --es callerLocationCode BEL --es callerLocationName Belagavi
+adb shell am broadcast -a in.bsctextiles.workforce.DEBUG_CALL -p in.bsctextiles.workforce --es type call_cancel --es callId t1
+```
+
+**iOS** still uses standard push (no CallKit / PushKit yet). That needs an Apple VoIP push certificate and
+a CallKit plugin; the server side would add a `voip` token type next to `push_device_tokens`.
+
+## 4a. Honest call states and reachability (migration 039)
+
+The caller's screen never shows a fake "Ringing":
+
+```
+POST /calls/start ── no live connection AND no registered device ──► "User is offline or unreachable" (immediately)
+        │
+        ▼ state "calling" (screen: Calling…, no ringback)
+  a device confirms ── socket call:ring_ack (open app) ──────────┐
+                     ── service-worker push receipt (/push/ack) ─┼─► calls.delivered_at, caller gets call:ringing (screen: Ringing…, ringback)
+                     ── native Android receipt (/calls/ring-ack) ┘
+  no confirmation in CALL_UNREACHABLE_SECONDS (12 s) ──► status 'unreachable'
+        end_reason 'offline'            (seen in the last 3 min: lost internet)  → "User is offline or unreachable"
+        end_reason 'device_unavailable' (not seen recently: phone off)          → "User's device is unavailable"
+        caller: call:unreachable + in-app "Call not connected" record
+        callee: missed-call push queued for 24 h + call:missed_summary on the next connection
+  ringing and not answered in CALL_RING_TIMEOUT_SECONDS (30 s) ──► 'missed' (no_answer)
+  answered ── guarded UPDATE (one device wins) ──► 'active' (Connecting…), other devices: call:answered_elsewhere + call_cancel push
+  WebRTC media connected ── POST /calls/:id/connected ──► calls.connected_at, call:connected (timer runs)
+```
+
+Devices on older builds that cannot confirm a ring never cause a false "unreachable"; with them the
+caller sees "Calling…" until answered or the ring timeout.
+
+User-facing states (`state` in `/calls/detail/:id` and `/calls/history`): `initiating`, `ringing`,
+`connecting`, `connected`, `ended`, `busy`, `declined`, `missed`, `unreachable`, `failed`.
+Every transition is logged to `call_events` (`GET /api/calls/:callId/events`).
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `CALL_RING_TIMEOUT_SECONDS` | 30 | Ring time before "missed" (15–120) |
+| `CALL_UNREACHABLE_SECONDS` | 12 | Wait for a device receipt before "unreachable" (5 .. ring time − 3) |
+| `CALL_RECONNECT_GRACE_SECONDS` | 20 | A participant whose network dropped may rejoin within this time |
+
+### Call API
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| GET | `/api/calls/config` | session | ICE servers, ring / unreachable / grace timings, `turnConfigured` |
+| POST | `/api/calls/start` | session | `{targetEmployeeId, type}` → `{callId, state: calling\|unreachable, message?, peer, iceServers}`; 409 `busy` / `already_in_call` |
+| GET | `/api/calls/pending` | session | Call ringing for me (checked on reconnect / resume) |
+| POST | `/api/calls/:id/accept` | callee | `{deviceId}`; 409 `call_ended` if another device already answered |
+| POST | `/api/calls/:id/reject` | callee | Decline |
+| POST | `/api/calls/:id/cancel` | caller | Hang up before answer |
+| POST | `/api/calls/:id/connected` | participant | WebRTC media connected |
+| POST | `/api/calls/:id/end` | participant | `{reason?: 'failed'}`; returns server-measured duration |
+| POST / GET | `/api/calls/:id/events` | participant | Client diagnostics (ICE restart, quality, mic denied, audio route) / audit trail |
+| GET | `/api/calls/history` | session | History with `status`, `state`, `endReason` |
+| POST | `/api/calls/ring-ack` | HMAC token | Native Android receipt `{callId, token, fcmToken?, device?}` → `{first, ringing}` |
+| POST | `/api/calls/push-action` | HMAC token | Decline / missed from a notification while signed out |
+
+Socket events to clients: `call:incoming`, `call:ringing`, `call:unreachable`, `call:accepted`,
+`call:answered_elsewhere`, `call:connected`, `call:rejected`, `call:missed`, `call:ended`, `call:peer_left`,
+`call:missed_summary`. From clients: `call:ring_ack`, `call:join`, `call:signal`, `call:leave`, `client:heartbeat`.
+Every socket event re-checks that the authenticated employee is a participant; ids in requests are never trusted.
+
+### Verification done (20 Nov 2026)
+- Backend: `tests/call-reachability.test.ts` (real Socket.IO server): immediate unreachable + missed-call
+  summary exactly once on reconnect; "Calling" → "Ringing" only after a device ack; answer on one device
+  stops the other and a second answer gets 409; native receipt rejects forged / other-employee tokens;
+  a silent device becomes unreachable after the window and never shows "ringing". 5/5 pass.
+- Android (emulator, API 37, debug hook): CallStyle heads-up over another app with Decline / Answer;
+  full-screen call screen with caller details; screen-off device woken by the call with the full-screen
+  screen shown automatically; Decline stops the ring and the Telecom call; remote cancel closes the screen;
+  Answer opens the app; missed-call notification; self-managed Telecom account registered; lint 0 errors.
+- **Not yet verified, needs two real phones and the Firebase project:** FCM delivery to a closed app, the
+  ring over a secured (PIN / pattern) keyguard, two-way audio between phones on mobile data (needs TURN),
+  Bluetooth headset answer, OEM battery managers (Xiaomi, Oppo, Vivo, Samsung "deep sleep"). Use §5.
 
 ## 5. Test plan
 

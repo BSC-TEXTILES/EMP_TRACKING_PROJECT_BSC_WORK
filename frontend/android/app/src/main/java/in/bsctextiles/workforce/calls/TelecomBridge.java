@@ -48,7 +48,7 @@ public final class TelecomBridge {
     }
 
     public static void register(Context ctx) {
-        if (registered || !supported(ctx)) return;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || registered || !supported(ctx)) return;
         try {
             TelecomManager tm = ctx.getSystemService(TelecomManager.class);
             if (tm == null) return;
@@ -65,7 +65,7 @@ public final class TelecomBridge {
 
     /** Returns true when Telecom accepted the incoming call (it will call onShowIncomingCallUi). */
     public static boolean addIncomingCall(Context ctx, CallInfo info) {
-        if (!supported(ctx)) return false;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !supported(ctx)) return false;
         register(ctx);
         try {
             TelecomManager tm = ctx.getSystemService(TelecomManager.class);
@@ -104,17 +104,20 @@ public final class TelecomBridge {
 
     /** Answered (our screen, notification, headset or car): Telecom moves the call to active and gives it call audio. */
     static void markAnswering(String callId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         BscConnectionService.BscConnection c = CONNECTIONS.get(callId);
         if (c != null && c.getState() == android.telecom.Connection.STATE_RINGING) c.setActive();
     }
 
     /** WebRTC is connected in the app. */
     public static void setActive(String callId) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         BscConnectionService.BscConnection c = CONNECTIONS.get(callId);
         if (c != null) c.setActive();
     }
 
     public static void endCall(String callId, String reason) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
         BscConnectionService.BscConnection c = CONNECTIONS.remove(callId);
         UI_SHOWN.remove(callId);
         if (c == null) return;
@@ -133,6 +136,7 @@ public final class TelecomBridge {
 
     /** Audio route of the active Telecom call, or null when there is none. */
     static BscConnectionService.BscConnection active() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null;
         for (BscConnectionService.BscConnection c : CONNECTIONS.values()) {
             if (c.getState() == android.telecom.Connection.STATE_ACTIVE) return c;
         }
@@ -142,6 +146,7 @@ public final class TelecomBridge {
     /** Routes call audio: "earpiece", "speaker", "bluetooth" or "wired". Returns false without a Telecom call. */
     @SuppressWarnings("deprecation")
     static boolean setAudioRoute(String route) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false;
         BscConnectionService.BscConnection c = active();
         if (c == null) return false;
         int r;

@@ -9,14 +9,18 @@ import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, Skeleton, Ta
 import { Icon } from '../components/icons';
 import { cx, formatDateTime } from '../lib/format';
 import { useCall, type CallPeer } from '../components/CallInterface';
+import { hasNativeCalls, nativeCalls, type NativeCallCapabilities } from '../lib/nativeCalls';
+import { getNotificationPermission, registerWebPushSubscription, requestNotificationPermission } from '../lib/notifications';
 
 interface CallRecord {
   id: number;
   callId: string;
   type: 'audio' | 'video';
   direction: 'incoming' | 'outgoing';
-  status: 'completed' | 'missed' | 'declined' | 'busy' | 'failed' | 'ringing' | 'active';
-  /** no_answer | cancelled | declined | busy | completed | disconnected | failed */
+  status: 'completed' | 'missed' | 'declined' | 'busy' | 'failed' | 'unreachable' | 'ringing' | 'active';
+  /** initiating | ringing | connecting | connected | ended | busy | declined | missed | unreachable | failed */
+  state?: string;
+  /** no_answer | cancelled | declined | busy | completed | disconnected | failed | offline | device_unavailable */
   endReason?: string | null;
   duration: number;
   participant: {
@@ -51,9 +55,24 @@ const STATUS_LABEL: Record<string, string> = {
   declined: 'Declined',
   busy: 'Busy',
   failed: 'Failed',
+  unreachable: 'Unreachable',
   ringing: 'Ringing',
   active: 'In progress',
 };
+
+type HistoryTab = 'recent' | 'incoming' | 'outgoing' | 'missed' | 'declined' | 'failed';
+
+function inTab(record: CallRecord, tab: HistoryTab): boolean {
+  switch (tab) {
+    case 'incoming': return record.direction === 'incoming';
+    case 'outgoing': return record.direction === 'outgoing';
+    case 'missed': return record.status === 'missed' || (record.status === 'unreachable' && record.direction === 'incoming');
+    case 'declined': return record.status === 'declined' || record.status === 'busy';
+    case 'failed': return record.status === 'failed' || record.status === 'unreachable' || record.state === 'failed'
+      || (record.status === 'completed' && record.endReason === 'disconnected');
+    default: return true;
+  }
+}
 
 /** What happened, from this user's side of the call. */
 function statusLabel(record: CallRecord): string {
@@ -62,14 +81,19 @@ function statusLabel(record: CallRecord): string {
     if (!outgoing) return 'Missed';
     return record.endReason === 'cancelled' ? 'Cancelled' : 'No answer';
   }
+  if (record.status === 'unreachable') {
+    if (!outgoing) return 'Missed (you were offline)';
+    return record.endReason === 'device_unavailable' ? 'Device unavailable' : 'Offline / unreachable';
+  }
   if (record.status === 'completed' && record.endReason === 'disconnected') return 'Dropped';
+  if (record.status === 'completed' && record.endReason === 'failed') return 'Connection failed';
   return STATUS_LABEL[record.status] ?? record.status;
 }
 
 function statusTone(status: string): 'success' | 'danger' | 'warning' | 'neutral' {
   if (status === 'completed' || status === 'active') return 'success';
   if (status === 'missed' || status === 'failed') return 'danger';
-  if (status === 'declined' || status === 'busy') return 'warning';
+  if (status === 'declined' || status === 'busy' || status === 'unreachable') return 'warning';
   return 'neutral';
 }
 
@@ -100,7 +124,7 @@ export default function CallsPage() {
   const { call, active, historyVersion } = useCall();
   const { onlineIds, syncVersion } = useRealtime();
 
-  const [tab, setTab] = useState<'recent' | 'missed'>('recent');
+  const [tab, setTab] = useState<HistoryTab>('recent');
   const [records, setRecords] = useState<CallRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -160,9 +184,11 @@ export default function CallsPage() {
   useSocketEvent('call:missed', () => void loadHistory());
   useSocketEvent('call:rejected', () => void loadHistory());
   useSocketEvent('call:accepted', () => void loadHistory());
+  useSocketEvent('call:unreachable', () => void loadHistory());
+  useSocketEvent('call:missed_summary', () => void loadHistory());
 
   const filtered = useMemo(
-    () => (tab === 'missed' ? records.filter((record) => record.status === 'missed' || record.status === 'declined') : records),
+    () => records.filter((record) => inTab(record, tab)),
     [records, tab],
   );
 
@@ -211,16 +237,22 @@ export default function CallsPage() {
         }
       />
 
+      <CallReadiness />
+
       <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
         <Card>
           <div className="border-b border-ink-100 px-4 pt-2">
             <Tabs
               tabs={[
-                { value: 'recent', label: 'Recent' },
+                { value: 'recent', label: 'All' },
+                { value: 'incoming', label: 'Incoming' },
+                { value: 'outgoing', label: 'Outgoing' },
                 { value: 'missed', label: 'Missed' },
+                { value: 'declined', label: 'Declined' },
+                { value: 'failed', label: 'Failed' },
               ]}
               value={tab}
-              onChange={(value) => setTab(value as 'recent' | 'missed')}
+              onChange={(value) => setTab(value as HistoryTab)}
             />
           </div>
 
@@ -237,10 +269,10 @@ export default function CallsPage() {
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={tab === 'missed' ? 'No missed calls' : 'No call history yet'}
+              title={tab === 'recent' ? 'No call history yet' : `No ${tab} calls`}
               description={
-                tab === 'missed'
-                  ? 'Calls you missed or declined will appear here.'
+                tab !== 'recent'
+                  ? 'Calls of this kind will appear here.'
                   : 'Start an audio or video call from quick dial.'
               }
             />
@@ -547,5 +579,79 @@ export default function CallsPage() {
         </div>
       </Modal>
     </div>
+  );
+}
+
+/**
+ * Shows whether this device can actually ring for incoming calls, and how to fix it.
+ * Android app: notifications, full-screen call screen over the lock screen, battery optimisation.
+ * Browser: notification permission (calls ring only while a tab is open without it).
+ */
+function CallReadiness() {
+  const [caps, setCaps] = useState<NativeCallCapabilities | null>(null);
+  const [webPermission, setWebPermission] = useState(() => getNotificationPermission());
+
+  useEffect(() => {
+    if (!hasNativeCalls) return;
+    const load = () => void nativeCalls.capabilities().then(setCaps);
+    load();
+    // Returning from Android Settings: re-check.
+    document.addEventListener('visibilitychange', load);
+    return () => document.removeEventListener('visibilitychange', load);
+  }, []);
+
+  if (hasNativeCalls) {
+    if (!caps) return null;
+    const issues: { text: string; action?: { label: string; run: () => void } }[] = [];
+    if (!caps.notifications) {
+      issues.push({ text: 'Notifications are off: incoming calls cannot ring while the app is closed.', action: { label: 'Open settings', run: () => void nativeCalls.openFullScreenSettings() } });
+    }
+    if (!caps.fullScreenIntent) {
+      issues.push({ text: 'Full-screen calls are not allowed: on the lock screen a call shows only as a notification.', action: { label: 'Allow', run: () => void nativeCalls.openFullScreenSettings() } });
+    }
+    if (issues.length === 0) return null;
+    return (
+      <Card className="border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <p className="font-semibold">Incoming calls may not ring on this phone</p>
+        <ul className="mt-2 space-y-2">
+          {issues.map((issue) => (
+            <li key={issue.text} className="flex flex-wrap items-center justify-between gap-2">
+              <span>{issue.text}</span>
+              {issue.action && <button type="button" className="btn-secondary btn-sm" onClick={issue.action.run}>{issue.action.label}</button>}
+            </li>
+          ))}
+        </ul>
+        <p className="mt-2 text-xs text-amber-800">
+          Also set the app's battery usage to "Unrestricted" so calls are not delayed.{' '}
+          <button type="button" className="underline" onClick={() => void nativeCalls.openBatterySettings()}>Battery settings</button>
+        </p>
+      </Card>
+    );
+  }
+
+  if (webPermission === 'granted' || webPermission === 'unsupported') return null;
+  return (
+    <Card className="border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p className="font-semibold">Calls ring only while this page is open</p>
+      <p className="mt-1">
+        {webPermission === 'denied'
+          ? 'Notifications are blocked for this site. Allow them in the browser\'s site settings (lock icon in the address bar) to get calls in the background.'
+          : 'Turn on notifications so incoming calls also reach you when this tab is in the background or the browser is closed.'}
+        {' '}For locked-phone ringing, install the BSC Workforce Android app.
+      </p>
+      {webPermission === 'default' && (
+        <button
+          type="button"
+          className="btn-primary btn-sm mt-2"
+          onClick={async () => {
+            const result = await requestNotificationPermission();
+            setWebPermission(result);
+            if (result === 'granted') void registerWebPushSubscription();
+          }}
+        >
+          Turn on notifications
+        </button>
+      )}
+    </Card>
   );
 }
