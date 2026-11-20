@@ -283,6 +283,15 @@ public class CallBridgePlugin extends Plugin {
     @SuppressWarnings("deprecation")
     public void setAudioRoute(PluginCall call) {
         String route = call.getString("route", "earpiece");
+        if ("bluetooth".equals(route) && Build.VERSION.SDK_INT >= 31
+            && androidx.core.content.ContextCompat.checkSelfPermission(getContext(), android.Manifest.permission.BLUETOOTH_CONNECT)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            if (getActivity() != null) {
+                androidx.core.app.ActivityCompat.requestPermissions(getActivity(), new String[] {android.Manifest.permission.BLUETOOTH_CONNECT}, 7101);
+            }
+            call.reject("Allow the Nearby devices permission, then choose the headset again.", "bluetooth_permission");
+            return;
+        }
         if (TelecomBridge.setAudioRoute(route)) {
             call.resolve(new JSObject().put("route", route).put("via", "telecom"));
             return;
