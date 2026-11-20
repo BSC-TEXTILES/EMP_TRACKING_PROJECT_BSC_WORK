@@ -1,5 +1,7 @@
 import { isNative, nativePlatform } from './native';
 import { api } from './api';
+import { configureNativeCalls, hasNativeCalls } from './nativeCalls';
+import { pushDeviceId } from './notifications';
 
 let pushInitialized = false;
 let currentDeviceToken: string | null = null;
@@ -32,11 +34,15 @@ export async function initNativePushNotifications(onNavigate?: (link: string) =>
     // Listen for FCM registration token
     await PushNotifications.addListener('registration', async (token: { value: string }) => {
       currentDeviceToken = token.value;
-      console.log('[NativePush] FCM Device Token received:', token.value.slice(0, 15) + '...');
+      // The native call service needs the API origin and its own token for delivery receipts.
+      await configureNativeCalls(token.value);
       try {
         await api.post('/push/devices', {
           token: token.value,
           platform: nativePlatform === 'ios' ? 'ios' : 'android',
+          // This build rings natively (data-only call pushes, lock-screen call screen, receipts).
+          nativeCalls: hasNativeCalls,
+          clientDeviceId: pushDeviceId(),
         });
       } catch (err) {
         console.warn('[NativePush] Failed to register token with backend:', err);
@@ -50,8 +56,9 @@ export async function initNativePushNotifications(onNavigate?: (link: string) =>
 
     // Listen for push notifications while app is in foreground
     await PushNotifications.addListener('pushNotificationReceived', (notification: { title?: string; body?: string; data?: Record<string, unknown> }) => {
-      console.log('[NativePush] Push received in foreground:', notification.title);
-      // Let app handle sound or in-app toast notification if needed
+      // Call pushes never reach this listener (the native call service handles them); the open app
+      // shows other updates through the realtime connection.
+      void notification;
     });
 
     // Listen for notification tap action
@@ -80,7 +87,8 @@ export async function unregisterNativePush(): Promise<void> {
 
   try {
     if (currentDeviceToken) {
-      await api.del('/push/devices').catch(() => undefined);
+      // The server needs the token to know which phone to forget.
+      await api.delWithBody('/push/devices', { token: currentDeviceToken }).catch(() => undefined);
       currentDeviceToken = null;
     }
 

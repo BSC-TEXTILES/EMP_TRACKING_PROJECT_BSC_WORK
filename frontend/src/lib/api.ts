@@ -439,6 +439,7 @@ export const api = {
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: body === undefined ? undefined : JSON.stringify(body) }),
   del: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  delWithBody: <T>(path: string, body: unknown) => request<T>(path, { method: 'DELETE', body: JSON.stringify(body) }),
   upload: <T>(file: File) => uploadFile(file) as Promise<T>,
   uploadFile,
   uploadPhoto: <T>(file: File) => {

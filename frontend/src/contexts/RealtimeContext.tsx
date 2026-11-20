@@ -4,7 +4,10 @@ import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
 import { ensureFreshAccess } from '../lib/api';
 import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
-import { showDesktopNotification, playMessageSound, registerWebPushSubscription } from '../lib/notifications';
+import { showDesktopNotification, playMessageSound, registerWebPushSubscription, pushDeviceId } from '../lib/notifications';
+
+/** Sent in the socket handshake: this client confirms incoming calls, and identifies the device for multi-device sync. */
+const CALL_HANDSHAKE = { caps: ['call_ack'], deviceId: pushDeviceId() };
 
 /** Notification types that have their own alert path (service-worker push / call UI). */
 const SELF_ALERTING_TYPES = new Set(['chat_message', 'incoming_call', 'missed_call']);
@@ -106,7 +109,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       auth: (cb) => {
         void ensureFreshAccess()
           .catch(() => null)
-          .then((token) => cb({ token: token ?? nativeTokens()?.accessToken ?? '' }));
+          .then((token) => cb({ token: token ?? nativeTokens()?.accessToken ?? '', ...CALL_HANDSHAKE }));
       },
       reconnection: true,
       reconnectionDelay: 1_000,
@@ -117,6 +120,8 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       autoConnect: true,
     }) : io(import.meta.env.VITE_WEBSOCKET_URL || undefined, {
       withCredentials: true,
+      // This build confirms incoming calls (call:ring_ack), so the caller sees an honest "Ringing".
+      auth: { ...CALL_HANDSHAKE },
       // Polling first ensures handshake succeeds behind all reverse proxies, then upgrades cleanly to WebSocket
       transports: ['polling', 'websocket'],
       tryAllTransports: true,
