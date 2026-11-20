@@ -3,7 +3,6 @@ package in.bsctextiles.workforce.calls;
 import android.animation.AnimatorSet;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
-import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -296,12 +295,6 @@ public class IncomingCallActivity extends AppCompatActivity {
     }
 
     @Override
-    public void onBackPressed() {
-        // Back only hides this screen; the phone keeps ringing until the call is answered or declined.
-        super.onBackPressed();
-    }
-
-    @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
         try {
@@ -310,11 +303,5 @@ public class IncomingCallActivity extends AppCompatActivity {
             // never registered (expired call)
         }
         super.onDestroy();
-    }
-
-    @SuppressWarnings("unused")
-    private void requestUnlock() {
-        KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-        if (km != null && Build.VERSION.SDK_INT >= 26) km.requestDismissKeyguard(this, null);
     }
 }
