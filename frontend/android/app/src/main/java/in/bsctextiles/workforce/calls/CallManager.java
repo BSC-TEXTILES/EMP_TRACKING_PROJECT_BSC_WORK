@@ -323,18 +323,26 @@ public final class CallManager {
 
     /** Answer: stop the ring and open the app, which joins the WebRTC call (CallBridge 'callAction'). */
     public static void answer(Context ctx, CallInfo info) {
+        answer(ctx, info, true);
+    }
+
+    /** launch=false when the app is already being opened by the notification's Answer button. */
+    public static void answer(Context ctx, CallInfo info, boolean launch) {
+        // A backup ring push that arrives after answering must not ring again.
+        markFinished(info.callId);
         CallInfo current = ringing;
         if (current != null && current.callId.equals(info.callId)) ringing = null;
         NotificationManagerCompat.from(ctx).cancel(NOTIFICATION_TAG, info.notificationId());
         TelecomBridge.markAnswering(info.callId);
         CallBridgePlugin.queueAction(ctx, "answer", info.callId);
+        ctx.sendBroadcast(new Intent(ACTION_CLOSE_UI).setPackage(ctx.getPackageName()).putExtra(EXTRA_CALL_ID, info.callId));
+        if (!launch) return;
         Intent open = new Intent(ctx, MainActivity.class)
             .setAction(ACTION_ANSWER)
             .putExtra(EXTRA_CALL_ACTION, "answer")
             .putExtra(EXTRA_CALL_ID, info.callId)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
         ctx.startActivity(open);
-        ctx.sendBroadcast(new Intent(ACTION_CLOSE_UI).setPackage(ctx.getPackageName()).putExtra(EXTRA_CALL_ID, info.callId));
     }
 
     /** Decline from the lock screen / notification: works without the web app or a session (HMAC token). */
