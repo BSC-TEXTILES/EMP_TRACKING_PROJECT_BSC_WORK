@@ -771,6 +771,20 @@ export function AppShell() {
                           </span>
                         )}
                       </Link>
+                      <a
+                        href="/downloads/bsc-hrms-release.apk"
+                        download="bsc-hrms-release.apk"
+                        onClick={() => setProfileOpen(false)}
+                        className="flex items-center justify-between px-4 py-2.5 text-sm font-medium text-emerald-700 hover:bg-emerald-50 cursor-pointer transition"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <Icon name="smartphone" size={16} className="text-emerald-600" />
+                          <span>Download Android App</span>
+                        </div>
+                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
+                          APK
+                        </span>
+                      </a>
                     </div>
 
                     <div className="border-t border-ink-100 p-1.5">

@@ -59,3 +59,7 @@ agent-smoke.log
 # Firebase service-account keys (server secret)
 *firebase-adminsdk*.json
 fcm-service-account*.json
+
+tools/
+*.zip
+*.jks

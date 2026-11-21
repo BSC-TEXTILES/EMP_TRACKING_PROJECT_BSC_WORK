@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useApi, useDocumentTitle } from '../lib/hooks';
@@ -40,6 +40,7 @@ export default function Dashboard() {
   }>>([]);
   const [dashboardLocationId, setDashboardLocationId] = useState<number | null>(user?.locationId ?? null);
   const [taskUpdatingId, setTaskUpdatingId] = useState<number | null>(null);
+  const [todayReport, setTodayReport] = useState<{ id: number; status: string; reviewNote?: string | null } | null>(null);
 
   const handleTaskAction = async (taskId: number, action: string, note?: string) => {
     setTaskUpdatingId(taskId);
@@ -73,6 +74,16 @@ export default function Dashboard() {
       .catch(() => setGroupSummary([]));
   }, [dashboardLocationId]);
 
+  const loadTodayReport = useCallback(() => {
+    api.get<{ report: { id: number; status: string; reviewNote?: string | null } | null }>('/reports/today')
+      .then((res) => setTodayReport(res.report))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    loadTodayReport();
+  }, [loadTodayReport]);
+
   useEffect(() => {
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 30_000);
     return () => window.clearInterval(timer);
@@ -81,7 +92,10 @@ export default function Dashboard() {
   useSocketEvent('task:updated', () => void reload());
   useSocketEvent('task:created', () => void reload());
   useSocketEvent('attendance:update', () => void attendance.refresh());
-  useSocketEvent('report:updated', () => void reload());
+  useSocketEvent('report:updated', () => {
+    void reload();
+    loadTodayReport();
+  });
 
   const greeting = (() => {
     const hour = new Date().getHours();
@@ -201,6 +215,47 @@ export default function Dashboard() {
         pending={attendance.pending}
         onAction={attendance.act}
       />
+
+      {/* End-of-Day Report Dynamic Status Banner */}
+      {todayReport?.status === 'changes_requested' ? (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 shadow-2xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-200 text-amber-800 shrink-0">
+                <Icon name="alertTriangle" size={18} />
+              </span>
+              <div>
+                <p className="text-sm font-bold text-amber-900">Your End-of-Day Report needs correction</p>
+                <p className="text-xs text-amber-800">
+                  Manager note: {todayReport.reviewNote || 'Reviewer requested changes. Please update and resubmit.'}
+                </p>
+              </div>
+            </div>
+            <Link to="/reports?tab=mine" className="btn-primary btn-sm">
+              Correct & Resubmit EOD Report
+            </Link>
+          </div>
+        </div>
+      ) : !todayReport && (attendance.state?.status === 'checked_in' || data.today.attendance?.status === 'checked_in') ? (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-4 shadow-2xs">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-200 text-blue-800 shrink-0">
+                <Icon name="report" size={18} />
+              </span>
+              <div>
+                <p className="text-sm font-bold text-blue-950">End-of-Day Work Report Reminder</p>
+                <p className="text-xs text-blue-800">
+                  You are checked in for today&apos;s shift. Remember to submit your End-of-Day report summarizing completed tasks before sign-off.
+                </p>
+              </div>
+            </div>
+            <Link to="/reports?tab=mine" className="btn-primary btn-sm">
+              Submit EOD Report
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard

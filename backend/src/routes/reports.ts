@@ -24,6 +24,61 @@ reportsRouter.get(
   }),
 );
 
+// Compliance & Missing EOD Inspector
+reportsRouter.get(
+  '/compliance',
+  requireAny('reports.view.own', 'reports.view.team', 'reports.view.all'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const date = req.query.date ? String(req.query.date) : undefined;
+    const locationId = req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined;
+    const departmentId = req.query.departmentId ? intParam(String(req.query.departmentId), 'departmentId') : undefined;
+    res.json(await DailyReportService.compliance(user, { date, locationId, departmentId }));
+  }),
+);
+
+// Trigger missing report reminders
+reportsRouter.post(
+  '/remind',
+  requireAny('reports.review', 'reports.view.all'),
+  asyncHandler(async (_req: AuthedRequest, res) => {
+    const reminded = await DailyReportService.remindMissing();
+    res.json({ ok: true, reminded });
+  }),
+);
+
+// Export Excel
+reportsRouter.get(
+  '/export/excel',
+  requireAny('reports.view.team', 'reports.view.all'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const from = req.query.from ? String(req.query.from) : undefined;
+    const to = req.query.to ? String(req.query.to) : undefined;
+    const locationId = req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined;
+    const buffer = await DailyReportService.exportExcel(user, { from, to, locationId });
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="BSC_HRMS_EOD_Reports_${Date.now()}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  }),
+);
+
+// Export PDF
+reportsRouter.get(
+  '/export/pdf',
+  requireAny('reports.view.team', 'reports.view.all'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const from = req.query.from ? String(req.query.from) : undefined;
+    const to = req.query.to ? String(req.query.to) : undefined;
+    const locationId = req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined;
+    const pdfBuffer = await DailyReportService.exportPdf(user, { from, to, locationId });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="BSC_HRMS_EOD_Reports_${Date.now()}.pdf"`);
+    res.send(pdfBuffer);
+  }),
+);
+
 reportsRouter.get(
   '/',
   requireAny('reports.view.own', 'reports.view.team', 'reports.view.all'),
@@ -32,6 +87,7 @@ reportsRouter.get(
     res.json(
       await DailyReportService.list(user, {
         employeeId: req.query.employeeId ? intParam(String(req.query.employeeId), 'employeeId') : undefined,
+        locationId: req.query.locationId ? intParam(String(req.query.locationId), 'locationId') : undefined,
         from: req.query.from ? String(req.query.from) : undefined,
         to: req.query.to ? String(req.query.to) : undefined,
         status: req.query.status ? String(req.query.status) : undefined,
@@ -52,6 +108,8 @@ reportsRouter.post(
         summary: z.string().min(10).max(8000),
         problems: z.string().max(4000).optional(),
         supportRequired: z.string().max(4000).optional(),
+        supportDeptId: z.number().int().positive().optional(),
+        supportManagerId: z.number().int().positive().optional(),
         tomorrowPlan: z.string().max(4000).optional(),
         workStart: z.string().max(8).optional(),
         workEnd: z.string().max(8).optional(),
@@ -89,6 +147,8 @@ reportsRouter.put(
         summary: z.string().min(10).max(8000).optional(),
         problems: z.string().max(4000).optional(),
         supportRequired: z.string().max(4000).optional(),
+        supportDeptId: z.number().int().positive().optional(),
+        supportManagerId: z.number().int().positive().optional(),
         tomorrowPlan: z.string().max(4000).optional(),
         workStart: z.string().max(8).optional(),
         workEnd: z.string().max(8).optional(),
