@@ -430,7 +430,7 @@ export class AttendanceService {
             input.workDate,
             toSqlTimestamp(input.checkInAt),
             toSqlTimestamp(input.checkOutAt),
-            input.reason,
+            input.reason?.trim() || 'Attendance correction requested',
         ]);
         await recordAudit({
             actorId: employeeId,

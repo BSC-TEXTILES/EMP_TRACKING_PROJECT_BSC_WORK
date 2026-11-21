@@ -566,7 +566,7 @@ export class AttendanceService {
 
   static async requestCorrection(
     employeeId: number,
-    input: { workDate: string; checkInAt?: string; checkOutAt?: string; reason: string; ip?: string; userAgent?: string },
+    input: { workDate: string; checkInAt?: string; checkOutAt?: string; reason?: string | null; ip?: string; userAgent?: string },
   ): Promise<number> {
     const attendance = await queryOne<{ id: number }>('SELECT id FROM attendance WHERE employee_id = ? AND work_date = ?', [
       employeeId,
@@ -581,7 +581,7 @@ export class AttendanceService {
         input.workDate,
         toSqlTimestamp(input.checkInAt),
         toSqlTimestamp(input.checkOutAt),
-        input.reason,
+        input.reason?.trim() || 'Attendance correction requested',
       ],
     );
     await recordAudit({

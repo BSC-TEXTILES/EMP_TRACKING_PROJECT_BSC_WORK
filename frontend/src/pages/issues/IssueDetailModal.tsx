@@ -98,14 +98,10 @@ export function IssueDetailModal({ issueId, open, onClose, onUpdated }: IssueDet
 
   const handleEscalateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!escalateReason.trim()) {
-      toast.error('Please specify a reason for escalation.');
-      return;
-    }
     setActionBusy(true);
     try {
       await api.post(`/issues/${issueId}/escalate`, {
-        reason: escalateReason.trim(),
+        reason: escalateReason.trim() || 'Escalation requested',
         targetEmployeeId: escalateTargetId ? Number(escalateTargetId) : undefined,
       });
       toast.success('Issue escalated successfully.');
@@ -147,14 +143,10 @@ export function IssueDetailModal({ issueId, open, onClose, onUpdated }: IssueDet
 
   const handleReopenSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reopenReason.trim()) {
-      toast.error('Please enter reason for reopening.');
-      return;
-    }
     setActionBusy(true);
     try {
       await api.post(`/issues/${issueId}/reopen`, {
-        reason: reopenReason.trim(),
+        reason: reopenReason.trim() || 'Issue reopened',
       });
       toast.success('Issue reopened.');
       setReopenModalOpen(false);
@@ -627,14 +619,13 @@ export function IssueDetailModal({ issueId, open, onClose, onUpdated }: IssueDet
           </div>
           <div>
             <label className="label text-xs font-bold uppercase tracking-wider text-ink-700">
-              Reason for Escalation <span className="text-red-500">*</span>
+              Reason for Escalation <span className="text-xs font-normal text-ink-400 capitalize">(Optional)</span>
             </label>
             <textarea
               className="input mt-1 min-h-[80px] text-sm"
               placeholder="Explain why this issue requires higher-level intervention or urgent store focus…"
               value={escalateReason}
               onChange={(e) => setEscalateReason(e.target.value)}
-              required
               rows={3}
             />
           </div>
@@ -681,14 +672,13 @@ export function IssueDetailModal({ issueId, open, onClose, onUpdated }: IssueDet
         <form onSubmit={handleReopenSubmit} className="space-y-3">
           <div>
             <label className="label text-xs font-bold uppercase tracking-wider text-ink-700">
-              Reason for Reopening <span className="text-red-500">*</span>
+              Reason for Reopening <span className="text-xs font-normal text-ink-400 capitalize">(Optional)</span>
             </label>
             <textarea
               className="input mt-1 min-h-[80px] text-sm"
               placeholder="Why is this issue unresolved or recurring?…"
               value={reopenReason}
               onChange={(e) => setReopenReason(e.target.value)}
-              required
               rows={3}
             />
           </div>

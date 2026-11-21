@@ -164,7 +164,7 @@ attendanceRouter.post(
         workDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         checkInAt: z.string().optional(),
         checkOutAt: z.string().optional(),
-        reason: z.string().min(10).max(2000),
+        reason: z.string().max(2000).optional().nullable(),
       }),
       req.body,
     );

@@ -128,7 +128,7 @@ export default function Attendance() {
         workDate: correctionForm.workDate,
         checkInAt: correctionForm.checkInAt ? new Date(correctionForm.checkInAt).toISOString() : undefined,
         checkOutAt: correctionForm.checkOutAt ? new Date(correctionForm.checkOutAt).toISOString() : undefined,
-        reason: correctionForm.reason,
+        reason: correctionForm.reason?.trim() || undefined,
       });
       toast.success('Correction request submitted for approval.');
       setCorrectionOpen(false);
@@ -399,14 +399,13 @@ export default function Attendance() {
               />
             </Field>
           </div>
-          <Field label="Reason" required>
+          <Field label="Reason" hint="Optional">
             <textarea
               className="input min-h-[90px]"
               value={correctionForm.reason}
               onChange={(event) => setCorrectionForm({ ...correctionForm, reason: event.target.value })}
-              placeholder="Explain why this correction is required"
-              minLength={10}
-              required
+              placeholder="Explain why this correction is required (optional)"
+              maxLength={2000}
             />
           </Field>
         </form>

@@ -1247,13 +1247,12 @@ export default function Employees() {
             </select>
           </Field>
 
-          <Field label="Reason for Transfer" required hint="Mandatory audit trail log">
+          <Field label="Reason for Transfer" hint="Optional">
             <textarea
               className="input min-h-[70px]"
-              placeholder="e.g. Relocation to Davanagere Store per branch requirement."
+              placeholder="e.g. Relocation to Davanagere Store per branch requirement (optional)."
               value={transferForm.reason}
               onChange={(e) => setTransferForm({ ...transferForm, reason: e.target.value })}
-              required
             />
           </Field>
         </form>

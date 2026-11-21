@@ -1029,13 +1029,12 @@ export default function Groups() {
             </select>
           </Field>
 
-          <Field label="Reason for Transfer" required hint="Mandatory audit trail reason">
+          <Field label="Reason for Transfer" hint="Optional">
             <textarea
               className="input min-h-[70px]"
-              placeholder="e.g. Relocating floor team to Belagavi new branch opening."
+              placeholder="e.g. Relocating floor team to Belagavi new branch opening (optional)."
               value={transferForm.reason}
               onChange={(e) => setTransferForm({ ...transferForm, reason: e.target.value })}
-              required
             />
           </Field>
         </form>
