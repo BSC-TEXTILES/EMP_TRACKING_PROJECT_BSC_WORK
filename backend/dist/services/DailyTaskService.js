@@ -1688,29 +1688,32 @@ export class DailyTaskService {
             throw ApiError.notFound('Employee not found or inactive.');
         const title = employee.designation_title ?? 'Store Manager';
         let templates = await query(`SELECT * FROM task_templates 
-       WHERE is_active = 1 AND designation_title = ?
-       ORDER BY task_order ASC`, [title, title]);
+       WHERE is_active = 1 AND (designation_title = ? OR designation_title LIKE ?)
+       ORDER BY task_order ASC`, [title, `%${title}%`]);
         if (templates.length === 0) {
-            // Fallback to all active templates
-            templates = await query('SELECT * FROM task_templates WHERE is_active = 1 ORDER BY task_order ASC');
+            // In-memory lookup for this specific role in MASTER_SOP_TEMPLATES
+            const matched = MASTER_SOP_TEMPLATES.filter((t) => t.designationTitle.toLowerCase() === title.toLowerCase() || title.toLowerCase().includes(t.designationTitle.toLowerCase()));
+            if (matched.length > 0) {
+                templates = matched.map((t, idx) => ({
+                    id: idx + 1,
+                    title: t.title,
+                    description: t.description,
+                    priority: t.priority,
+                    time_slot: t.timeSlot,
+                    requires_evidence: t.requiresEvidence,
+                    evidence_type: t.evidenceType,
+                    requires_metric: t.requiresMetric,
+                    metric_label: t.metricLabel,
+                    metric_unit: t.metricUnit,
+                    task_order: t.taskOrder,
+                }));
+            }
+            else {
+                // If employee has no role-specific SOP checklist defined, do not assign unrelated store tasks
+                return { created: 0, existing: 0 };
+            }
         }
-        let templatesToUse = templates;
-        if (templatesToUse.length === 0) {
-            // Direct in-memory fallback to MASTER_SOP_TEMPLATES so tasks are NEVER empty
-            templatesToUse = MASTER_SOP_TEMPLATES.map((t, idx) => ({
-                id: idx + 1,
-                title: t.title,
-                description: t.description,
-                priority: t.priority,
-                time_slot: t.timeSlot,
-                requires_evidence: t.requiresEvidence,
-                evidence_type: t.evidenceType,
-                requires_metric: t.requiresMetric,
-                metric_label: t.metricLabel,
-                metric_unit: t.metricUnit,
-                task_order: t.taskOrder,
-            }));
-        }
+        const templatesToUse = templates;
         const dateRow = await queryOne('SELECT CURDATE() AS cd');
         const todayStr = dateRow?.cd ? String(dateRow.cd).slice(0, 10) : new Date().toISOString().slice(0, 10);
         // Check if tasks were already generated today for this employee
@@ -1814,8 +1817,37 @@ export class DailyTaskService {
     /**
      * Generates SOP pre-assigned daily tasks for all employees in a specific store location (or all stores).
      */
+    /**
+     * Identifies incomplete tasks from previous working days and carries them forward into today's pending list,
+     * preserving original creation date, due date, assigned employee, and escalation history.
+     */
+    static async carryForwardPendingTasks(storeId) {
+        const todayStr = new Date().toISOString().slice(0, 10);
+        const pendingTasks = await query(`SELECT t.id, t.task_no, t.title, t.start_date, t.due_date, t.status, t.manager_id, ta.employee_id
+       FROM tasks t
+       JOIN task_assignments ta ON ta.task_id = t.id
+       JOIN employees e ON e.id = ta.employee_id
+       WHERE t.due_date < ? 
+         AND t.status IN ('assigned', 'accepted', 'in_progress', 'on_hold')
+         AND t.archived_at IS NULL
+         AND (? IS NULL OR e.location_id = ?)`, [todayStr, storeId ?? null, storeId ?? null]);
+        let carried = 0;
+        for (const task of pendingTasks) {
+            await transaction(async (conn) => {
+                await conn.query(`UPDATE tasks 
+           SET status = 'delayed',
+               remarks = CONCAT(COALESCE(remarks, ''), ' [Carried forward to ', ?, ' - Pending completion]')
+           WHERE id = ?`, [todayStr, task.id]);
+                await conn.query(`INSERT INTO task_comments (task_id, author_id, body)
+           VALUES (?, ?, ?)`, [task.id, task.manager_id || task.employee_id, `Task carried forward to ${todayStr}. Original due date: ${String(task.due_date).slice(0, 10)}.`]);
+            });
+            carried++;
+        }
+        return carried;
+    }
     static async generateDailyTasksForStore(locationId, actor, options) {
         await DailyTaskService.ensureTemplatesExist();
+        const carriedForward = await DailyTaskService.carryForwardPendingTasks(locationId);
         let sql = `SELECT id FROM employees WHERE status = 'active'`;
         const params = [];
         if (locationId) {
@@ -1836,7 +1868,7 @@ export class DailyTaskService {
                 console.warn(`[sop] Error generating tasks for employee ${emp.id}:`, err);
             }
         }
-        return { employeesCount: employees.length, createdTotal };
+        return { employeesCount: employees.length, createdTotal, carriedForward };
     }
     /**
      * Retrieves timeline checkpoints for an employee for a specific date.

@@ -130,6 +130,27 @@ export function startJobs(): void {
     });
   });
 
+  // Daily Master Operational SOP task generation at midnight for all store roles across BEL, DAV, and SHI
+  cron.schedule(
+    '5 0 * * *',
+    () => {
+      void runJob('daily_store_sop_generation', async () => {
+        const { DailyTaskService } = await import('../services/DailyTaskService.js');
+        const admin = await queryOne<{ id: number; email: string; role_slug: string }>(
+          `SELECT e.id, e.email, r.slug AS role_slug
+           FROM employees e JOIN roles r ON e.role_id = r.id
+           WHERE r.slug = 'super_admin' LIMIT 1`,
+        );
+        const actor = admin
+          ? { id: admin.id, email: admin.email, roleSlug: 'super_admin', roleLevel: 100 }
+          : { id: 1, email: 'renukaradhya@bsctextiles.in', roleSlug: 'super_admin', roleLevel: 100 };
+        const result = await DailyTaskService.generateDailyTasksForStore(null, actor as any, { force: false });
+        return `Generated ${result.createdTotal} SOP tasks across ${result.employeesCount} store employees (${result.carriedForward ?? 0} carried forward)`;
+      });
+    },
+    { timezone: config.timezone },
+  );
+
   cron.schedule('*/10 * * * *', () => {
     void runJob('attendance_autoclose', async () => {
       const closed = await AttendanceService.autoCloseStaleSessions(16);

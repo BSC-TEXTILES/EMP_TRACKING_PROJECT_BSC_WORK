@@ -285,11 +285,20 @@ async function ensureDatabaseReady() {
           created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
           PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
-                // Ensure Master SOP task templates are ready
+                // Ensure Master SOP task templates and daily store tasks are ready
                 try {
                     const { DailyTaskService } = await import('./services/DailyTaskService.js');
                     await DailyTaskService.ensureTemplatesExist();
                     console.log('[startup] Master SOP task templates verified.');
+                    const [adminRows] = await dbConn.query(`SELECT e.id, e.email, r.slug AS role_slug
+             FROM employees e JOIN roles r ON e.role_id = r.id
+             WHERE r.slug = 'super_admin' LIMIT 1`);
+                    if (adminRows.length > 0) {
+                        const admin = adminRows[0];
+                        const actor = { id: admin.id, email: admin.email, roleSlug: 'super_admin', roleLevel: 100 };
+                        const gen = await DailyTaskService.generateDailyTasksForStore(null, actor, { force: false });
+                        console.log(`[startup] Daily store SOPs verified: ${gen.createdTotal} new tasks created across ${gen.employeesCount} employee(s).`);
+                    }
                 }
                 catch (sopErr) {
                     console.warn('[startup] SOP templates initialization note:', sopErr);
