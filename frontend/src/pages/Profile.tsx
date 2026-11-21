@@ -300,9 +300,9 @@ export default function Profile() {
       <Modal open={passwordOpen} onClose={() => setPasswordOpen(false)} title="Change password" description="Minimum 10 characters with upper case, lower case, a number and a symbol."
         footer={<><button className="btn-secondary" onClick={() => setPasswordOpen(false)}>Cancel</button><button className="btn-primary" form="password-form" type="submit" disabled={busy}>{busy ? 'Updating…' : 'Update password'}</button></>}>
         <form id="password-form" onSubmit={changePassword} className="space-y-3">
-          <Field label="Current password" required><input type="password" className="input" value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} required /></Field>
-          <Field label="New password" required><input type="password" className="input" value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} minLength={10} required /></Field>
-          <Field label="Confirm new password" required><input type="password" className="input" value={passwords.confirm} onChange={(event) => setPasswords({ ...passwords, confirm: event.target.value })} minLength={10} required /></Field>
+          <Field label="Current password" required><input type="password" className="input" autoComplete="current-password" value={passwords.currentPassword} onChange={(event) => setPasswords({ ...passwords, currentPassword: event.target.value })} required /></Field>
+          <Field label="New password" required><input type="password" className="input" autoComplete="new-password" value={passwords.newPassword} onChange={(event) => setPasswords({ ...passwords, newPassword: event.target.value })} minLength={10} required /></Field>
+          <Field label="Confirm new password" required><input type="password" className="input" autoComplete="new-password" value={passwords.confirm} onChange={(event) => setPasswords({ ...passwords, confirm: event.target.value })} minLength={10} required /></Field>
         </form>
       </Modal>
     </div>

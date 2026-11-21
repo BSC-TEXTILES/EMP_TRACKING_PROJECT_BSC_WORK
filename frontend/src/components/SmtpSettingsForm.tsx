@@ -59,7 +59,9 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
           });
         })
         .catch((err) => {
-          setError(errorMessage(err));
+          const msg = errorMessage(err);
+          setError(msg);
+          console.error('[SmtpSettingsForm] Failed to load email config:', msg);
           setSettings(DEFAULT_SETTINGS);
         });
     }
@@ -95,7 +97,9 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
       setMessage('SMTP email settings saved successfully and live mail transport updated.');
       onSaved();
     } catch (err) {
-      setError(errorMessage(err));
+      const msg = errorMessage(err);
+      setError(msg);
+      console.error('[SmtpSettingsForm] Direct save failed:', msg, err);
     } finally {
       setSavingDirect(false);
     }
@@ -143,7 +147,9 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
               setVerification(result.verification);
               setMessage('The SMTP server accepted the test email. Check your inbox before confirming receipt.');
             } catch (err) {
-              setError(errorMessage(err));
+              const msg = errorMessage(err);
+              setError(msg);
+              console.error('[SmtpSettingsForm] Test configuration failed:', msg, err);
             } finally {
               setBusy(false);
             }
@@ -152,17 +158,18 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
           <fieldset disabled={busy || savingDirect} className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {([
-                ['host', 'SMTP hostname'],
-                ['user', 'SMTP username'],
-                ['fromName', 'Sender name'],
-                ['fromEmail', 'Sender email'],
-                ['replyTo', 'Reply-to email'],
-              ] as const).map(([key, label]) => (
+                ['host', 'SMTP hostname', 'off'],
+                ['user', 'SMTP username', 'off'],
+                ['fromName', 'Sender name', 'off'],
+                ['fromEmail', 'Sender email', 'email'],
+                ['replyTo', 'Reply-to email', 'email'],
+              ] as const).map(([key, label, autoComplete]) => (
                 <Field key={key} label={label} required>
                   <input
                     className="input"
                     required
                     type={key === 'fromEmail' || key === 'replyTo' ? 'email' : 'text'}
+                    autoComplete={autoComplete}
                     value={settings[key]}
                     onChange={(event) => changed({ ...settings, [key]: event.target.value })}
                   />
@@ -197,6 +204,7 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
                   className="input"
                   type="email"
                   required
+                  autoComplete="email"
                   value={to}
                   onChange={(event) => setTo(event.target.value)}
                 />
@@ -272,7 +280,9 @@ export function SmtpSettingsForm({ onSaved }: { onSaved: () => void }) {
                         setMessage('Verified email configuration saved. New messages use these settings.');
                         onSaved();
                       } catch (err) {
-                        setError(errorMessage(err));
+                        const msg = errorMessage(err);
+                        setError(msg);
+                        console.error('[SmtpSettingsForm] Verified save failed:', msg, err);
                       } finally {
                         setBusy(false);
                       }

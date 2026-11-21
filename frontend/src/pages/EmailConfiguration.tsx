@@ -209,6 +209,7 @@ export default function EmailConfiguration() {
                   type="email"
                   required
                   className="input"
+                  autoComplete="email"
                   placeholder="you@company.com"
                   value={testTo}
                   onChange={(event) => setTestTo(event.target.value)}

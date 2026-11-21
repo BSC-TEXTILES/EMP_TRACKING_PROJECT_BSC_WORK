@@ -32,18 +32,22 @@ emailSettingsRouter.get('/', (_req, res) => {
 });
 emailSettingsRouter.post('/test', rateLimit({ windowMs: 60000, max: 5, keyPrefix: 'smtp-config' }), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({
-        smtp: smtpInput.extend({ password: z.string().max(1000) }),
+        smtp: smtpInput.extend({ password: z.string().max(1000).optional() }),
         to: z.string().email().max(190), otp: z.object({
             expiryMinutes: z.number().int().min(1).max(30),
             resendCooldownSeconds: z.number().int().min(30).max(600), maxAttempts: z.number().int().min(1).max(10)
         })
     }), req.body);
     const input = { ...body.smtp };
-    if (!input.password && input.host === config.smtp.host && input.user === config.smtp.user)
+    // If password not provided, try to use current config password when host/user match
+    if (!input.password && input.host === config.smtp.host && input.user === config.smtp.user) {
         input.password = config.smtp.password;
+    }
     if (!input.password)
         throw ApiError.badRequest('Enter the SMTP password.');
-    const transport = smtpTransport(input);
+    // At this point input.password is guaranteed to be a string
+    const inputWithPassword = input;
+    const transport = smtpTransport(inputWithPassword);
     try {
         await transport.verify();
         const result = await transport.sendMail({
@@ -64,7 +68,7 @@ emailSettingsRouter.post('/test', rateLimit({ windowMs: 60000, max: 5, keyPrefix
         if (item.actor === actor)
             pending.delete(key);
     const verification = crypto.randomBytes(32).toString('hex');
-    pending.set(verification, { actor, expires: Date.now() + 600000, settings: { smtp: storedSmtp(input), otp: body.otp } });
+    pending.set(verification, { actor, expires: Date.now() + 600000, settings: { smtp: storedSmtp(inputWithPassword), otp: body.otp } });
     await recordAudit({ actorId: actor, action: 'email.configuration_tested', entityType: 'settings', after: { accepted: true } });
     res.json({ accepted: true, verification });
 }));

@@ -87,8 +87,9 @@ export default function Leave() {
   useDocumentTitle('Leave & holidays');
   const { has, user } = useAuth();
   const toast = useToast();
-  const [tab, setTab] = useState<'mine' | 'team' | 'all'>(() => {
+  const [tab, setTab] = useState<'mine' | 'team' | 'all' | 'live'>(() => {
     const requested = new URLSearchParams(window.location.search).get('tab');
+    if (requested === 'live') return 'live';
     if (requested === 'all' && has('leave.view.all')) return 'all';
     if (requested === 'team' && has('leave.view.team')) return 'team';
     return 'mine';
@@ -100,6 +101,8 @@ export default function Leave() {
   const [hrApproverId, setHrApproverId] = useState('');
   const [applyOpen, setApplyOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
+  const [viewingLeave, setViewingLeave] = useState<LeaveItem | null>(null);
+  const [liveLocation, setLiveLocation] = useState<string>('ALL');
   const [busy, setBusy] = useState(false);
 
   // ------------------------------------------------------------ application form
@@ -128,7 +131,8 @@ export default function Leave() {
 
   const load = async () => {
     try {
-      const result = await api.get<{ items: LeaveItem[] }>(`/leave?scope=${tab}`);
+      const scopeParam = tab === 'live' ? (has('leave.view.all') ? 'all' : (has('leave.view.team') ? 'team' : 'mine')) : tab;
+      const result = await api.get<{ items: LeaveItem[] }>(`/leave?scope=${scopeParam}`);
       setItems(result.items);
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -238,6 +242,25 @@ export default function Leave() {
     }
   };
 
+  const cancel = async (id: number) => {
+    if (!window.confirm('Cancel this request?')) return;
+    try {
+      await api.post(`/leave/${id}/cancel`);
+      await load();
+      if (viewingLeave?.id === id) setViewingLeave(null);
+      toast.success('Request cancelled.');
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
+
+  useEffect(() => {
+    if (viewingLeave && items) {
+      const fresh = items.find((it) => it.id === viewingLeave.id);
+      if (fresh) setViewingLeave(fresh);
+    }
+  }, [items]);
+
   const w = woSummary?.weeklyOffs;
   const optionButton = (value: RequestOption, icon: 'calendar' | 'clock', label: string, hint: string) => (
     <button
@@ -283,12 +306,109 @@ export default function Leave() {
               { value: 'mine', label: 'My requests' },
               ...(has('leave.view.team', 'leave.view.all') ? [{ value: 'team', label: 'Team requests' }] : []),
               ...(has('leave.view.all') ? [{ value: 'all', label: 'All requests' }] : []),
+              { value: 'live', label: '🟢 Live Store View' },
             ]}
             value={tab}
-            onChange={(value) => setTab(value as 'mine' | 'team' | 'all')}
+            onChange={(value) => setTab(value as 'mine' | 'team' | 'all' | 'live')}
           />
         </div>
-        {!items ? (
+        {tab === 'live' ? (
+          <div className="p-4 space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-ink-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-3 w-3 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-ink-900">Live Today: Employees On Leave / Weekly Off</h3>
+                  <p className="text-xs text-ink-500 font-medium">Real-time attendance & leave roster across retail stores ({formatDate(localToday())})</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-ink-600">Location:</span>
+                <select
+                  value={liveLocation}
+                  onChange={(e) => setLiveLocation(e.target.value)}
+                  className="rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-800 focus:outline-none"
+                >
+                  <option value="ALL">All Store Locations</option>
+                  <option value="BEL">BEL – Belagavi</option>
+                  <option value="DAV">DAV – Davanagere</option>
+                  <option value="SHI">SHI – Shivamogga</option>
+                  <option value="HUB-HQ">HUB-HQ – Head Office</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Live Today Roster */}
+            {(() => {
+              const todayStr = localToday();
+              const activeLeaves = (items ?? []).filter((l) => {
+                if (l.status !== 'approved') return false;
+                const isToday = todayStr >= l.startDate && todayStr <= l.endDate;
+                if (!isToday) return false;
+                if (liveLocation !== 'ALL') {
+                  const loc = (l.locationName ?? '').toUpperCase();
+                  if (liveLocation === 'BEL' && !loc.includes('BEL') && !loc.includes('BELAGAVI')) return false;
+                  if (liveLocation === 'DAV' && !loc.includes('DAV') && !loc.includes('DAVANAGERE')) return false;
+                  if (liveLocation === 'SHI' && !loc.includes('SHI') && !loc.includes('SHIVAMOGGA')) return false;
+                  if (liveLocation === 'HUB-HQ' && !loc.includes('HUB') && !loc.includes('HEAD OFFICE')) return false;
+                }
+                return true;
+              });
+
+              if (activeLeaves.length === 0) {
+                return (
+                  <EmptyState
+                    title="No Employees on Leave Today"
+                    description={liveLocation !== 'ALL' ? `No employees at ${liveLocation} are currently on leave or weekly off today.` : 'All active staff across all locations are scheduled for work today.'}
+                  />
+                );
+              }
+
+              return (
+                <div className="divide-y divide-ink-100 rounded-xl border border-ink-200 bg-white">
+                  {activeLeaves.map((leave) => (
+                    <div key={leave.id} className="flex flex-wrap items-center justify-between gap-3 p-3.5 hover:bg-ink-50/50 transition-colors">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700 font-bold text-xs">
+                          {leave.employeeName.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-bold text-ink-900">{leave.employeeName}</span>
+                            <span className="text-xs text-ink-400 font-mono">({leave.employeeCode})</span>
+                            <Badge tone="brand" className="text-[11px]">{leave.locationName ?? 'Store'}</Badge>
+                            <Badge tone="success" className="text-[11px] font-semibold">{requestTitle(leave)}</Badge>
+                            {leave.isHalfDay && (
+                              <Badge tone="info" className="text-[11px]">
+                                {leave.halfDaySlot === 'second_half' ? 'Afternoon Slot' : 'Morning Slot'}
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-ink-500 mt-0.5">
+                            Department: {leave.departmentName ?? 'Retail & Store Operations'} · Manager: {leave.managerName ?? 'Manager'} · HR: {leave.hrName ?? 'HR'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-xs hover:bg-ink-50 hover:border-brand-300 transition-colors"
+                          onClick={() => setViewingLeave(leave)}
+                        >
+                          <Icon name="eye" size={13} className="text-brand-600" />
+                          Live View
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        ) : !items ? (
           <div className="p-4"><Skeleton lines={5} /></div>
         ) : items.length === 0 ? (
           <EmptyState title="No requests" description="Weekly-off and leave applications in this scope will appear here." />
@@ -330,7 +450,15 @@ export default function Leave() {
                   {leave.documentFileId && <a href={fileUrl(leave.documentFileId, true)} className="mt-1 block text-xs text-brand-700 underline">Download supporting document</a>}
                   {leave.decisionNote && <p className="mt-1 text-xs text-ink-500">Decision note: {leave.decisionNote}</p>}
                 </div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-700 shadow-xs hover:bg-ink-50 hover:border-brand-300 transition-colors"
+                    onClick={() => setViewingLeave(leave)}
+                  >
+                    <Icon name="eye" size={13} className="text-brand-600" />
+                    Live View
+                  </button>
                   {leave.canApproveManager && (
                     <>
                       <button type="button" className="btn-primary btn-sm" onClick={() => void decide(leave.id, true, 'manager')}>Approve</button>
@@ -344,14 +472,13 @@ export default function Leave() {
                     </>
                   )}
                   {leave.canCancel && (
-                    <button type="button" className="btn-ghost btn-sm" onClick={async () => {
-                      if (!window.confirm('Cancel this request?')) return;
-                      try {
-                        await api.post(`/leave/${leave.id}/cancel`);
-                        await load();
-                        toast.success('Request cancelled.');
-                      } catch (caught) { toast.error(errorMessage(caught)); }
-                    }}>Cancel</button>
+                    <button
+                      type="button"
+                      className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
+                      onClick={() => void cancel(leave.id)}
+                    >
+                      Cancel
+                    </button>
                   )}
                 </div>
               </div>
@@ -540,6 +667,331 @@ export default function Leave() {
           </Field>
           <p className="text-xs text-ink-500">Requests are checked on the server for eligibility, duplicates, overlaps and available balance.</p>
         </form>
+      </Modal>
+
+      {/* LIVE LEAVE REQUEST VIEW MODAL */}
+      <Modal
+        open={Boolean(viewingLeave)}
+        onClose={() => setViewingLeave(null)}
+        title={viewingLeave ? `Live Request View · ${requestTitle(viewingLeave)}` : 'Live Request View'}
+        size="lg"
+        footer={
+          viewingLeave && (
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <div>
+                {viewingLeave.canCancel && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
+                    onClick={() => void cancel(viewingLeave.id)}
+                  >
+                    Cancel Request
+                  </button>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {viewingLeave.canApproveManager && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, true, 'manager');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      Manager Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, false, 'manager');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      Manager Reject
+                    </button>
+                  </>
+                )}
+                {viewingLeave.canApproveHr && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, true, 'hr');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      HR Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, false, 'hr');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      HR Reject
+                    </button>
+                  </>
+                )}
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setViewingLeave(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          )
+        }
+      >
+        {viewingLeave && (
+          <div className="space-y-4 text-ink-800">
+            {/* Live Telemetry Banner */}
+            <div className="relative overflow-hidden rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 via-indigo-50 to-emerald-50 p-4 shadow-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-3 w-3 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-base font-bold text-ink-900">{requestTitle(viewingLeave)}</span>
+                      <RequestStatus status={viewingLeave.status} />
+                      <Badge tone="neutral" className="font-semibold">{viewingLeave.days} day(s)</Badge>
+                      {viewingLeave.isHalfDay && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 text-blue-900 font-bold px-2 py-0.5 text-xs border border-blue-200">
+                          <Icon name="clock" size={12} />
+                          Half Day · {viewingLeave.halfDaySlot === 'second_half' ? SLOT_LABEL.second_half : SLOT_LABEL.first_half}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink-600 mt-1">
+                      Live status telemetry · Synced with HRMS attendance & roster engine
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-mono text-ink-500">Req #{viewingLeave.id}</span>
+                  <div className="text-xs font-semibold text-brand-700">
+                    {formatDate(viewingLeave.startDate)}
+                    {viewingLeave.startDate !== viewingLeave.endDate && ` → ${formatDate(viewingLeave.endDate)}`}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Live 4-Stage Approval & System Pipeline */}
+            <div className="rounded-xl border border-ink-200 bg-white p-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-ink-500 mb-3 flex items-center gap-1.5">
+                <Icon name="check" size={13} className="text-brand-600" />
+                Live Approval & Synchronization Pipeline
+              </h4>
+              <div className="grid gap-3 sm:grid-cols-4">
+                {/* Stage 1: Submitted */}
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-600 text-[10px] text-white">✓</span>
+                    1. Application
+                  </div>
+                  <p className="text-[11px] font-semibold text-emerald-950 mt-1">Submitted</p>
+                  <p className="text-[10px] text-ink-500 mt-0.5">
+                    {viewingLeave.createdAt ? formatDateTime(viewingLeave.createdAt) : 'Initial creation'}
+                  </p>
+                </div>
+
+                {/* Stage 2: Manager Review */}
+                {(() => {
+                  const isDone = Boolean(viewingLeave.managerActionAt) || viewingLeave.status === 'pending_hr' || viewingLeave.status === 'approved';
+                  const isCurrent = viewingLeave.status === 'pending_manager';
+                  return (
+                    <div className={cx(
+                      'rounded-lg border p-2.5',
+                      isDone ? 'border-emerald-200 bg-emerald-50/50' : isCurrent ? 'border-amber-300 bg-amber-50/60 ring-2 ring-amber-400/20' : 'border-ink-200 bg-ink-50/40'
+                    )}>
+                      <div className="flex items-center gap-1.5 text-xs font-bold">
+                        <span className={cx(
+                          'flex h-4 w-4 items-center justify-center rounded-full text-[10px]',
+                          isDone ? 'bg-emerald-600 text-white' : isCurrent ? 'bg-amber-500 text-white animate-pulse' : 'bg-ink-300 text-white'
+                        )}>
+                          {isDone ? '✓' : '2'}
+                        </span>
+                        <span className={isDone ? 'text-emerald-800' : isCurrent ? 'text-amber-800' : 'text-ink-600'}>2. Manager</span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-ink-900 mt-1 truncate" title={viewingLeave.managerName ?? 'Direct Manager'}>
+                        {viewingLeave.managerName ?? 'Direct Manager'}
+                      </p>
+                      <p className="text-[10px] text-ink-500 mt-0.5">
+                        {isDone ? (viewingLeave.managerActionAt ? formatDateTime(viewingLeave.managerActionAt) : 'Approved') : isCurrent ? 'Awaiting review' : 'Pending'}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Stage 3: HR Review */}
+                {(() => {
+                  const isDone = Boolean(viewingLeave.hrActionAt) || viewingLeave.status === 'approved';
+                  const isCurrent = viewingLeave.status === 'pending_hr';
+                  return (
+                    <div className={cx(
+                      'rounded-lg border p-2.5',
+                      isDone ? 'border-emerald-200 bg-emerald-50/50' : isCurrent ? 'border-amber-300 bg-amber-50/60 ring-2 ring-amber-400/20' : 'border-ink-200 bg-ink-50/40'
+                    )}>
+                      <div className="flex items-center gap-1.5 text-xs font-bold">
+                        <span className={cx(
+                          'flex h-4 w-4 items-center justify-center rounded-full text-[10px]',
+                          isDone ? 'bg-emerald-600 text-white' : isCurrent ? 'bg-amber-500 text-white animate-pulse' : 'bg-ink-300 text-white'
+                        )}>
+                          {isDone ? '✓' : '3'}
+                        </span>
+                        <span className={isDone ? 'text-emerald-800' : isCurrent ? 'text-amber-800' : 'text-ink-600'}>3. HR Final</span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-ink-900 mt-1 truncate" title={viewingLeave.hrName ?? 'HR Operations'}>
+                        {viewingLeave.hrName ?? 'HR Operations'}
+                      </p>
+                      <p className="text-[10px] text-ink-500 mt-0.5">
+                        {isDone ? (viewingLeave.hrActionAt ? formatDateTime(viewingLeave.hrActionAt) : 'Approved') : isCurrent ? 'Awaiting review' : 'Pending'}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Stage 4: Attendance Sync */}
+                {(() => {
+                  const isApproved = viewingLeave.status === 'approved';
+                  const isCancelled = viewingLeave.status === 'cancelled';
+                  const isRejected = viewingLeave.status === 'rejected';
+                  return (
+                    <div className={cx(
+                      'rounded-lg border p-2.5',
+                      isApproved ? 'border-emerald-200 bg-emerald-50/50' : isCancelled || isRejected ? 'border-red-200 bg-red-50/40' : 'border-ink-200 bg-ink-50/40'
+                    )}>
+                      <div className="flex items-center gap-1.5 text-xs font-bold">
+                        <span className={cx(
+                          'flex h-4 w-4 items-center justify-center rounded-full text-[10px]',
+                          isApproved ? 'bg-emerald-600 text-white' : isCancelled || isRejected ? 'bg-red-500 text-white' : 'bg-ink-300 text-white'
+                        )}>
+                          {isApproved ? '✓' : isCancelled || isRejected ? '✕' : '4'}
+                        </span>
+                        <span className={isApproved ? 'text-emerald-800' : isCancelled || isRejected ? 'text-red-700' : 'text-ink-600'}>4. Live Sync</span>
+                      </div>
+                      <p className="text-[11px] font-semibold text-ink-900 mt-1">
+                        {isApproved ? 'Attendance Synced' : isCancelled ? 'Cancelled' : isRejected ? 'Rejected' : 'Pending Approval'}
+                      </p>
+                      <p className="text-[10px] text-ink-500 mt-0.5">
+                        {isApproved ? 'Updated on roster' : isCancelled || isRejected ? 'Regular duty active' : 'Sync on completion'}
+                      </p>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Employee, Location & Schedule Info Grid */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-3.5 space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Applicant Details</span>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Employee Name:</span>
+                    <span className="font-bold text-ink-900">{viewingLeave.employeeName}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Employee ID / Code:</span>
+                    <span className="font-mono font-semibold text-ink-800">{viewingLeave.employeeCode}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Department:</span>
+                    <span className="font-medium text-ink-800">{viewingLeave.departmentName ?? 'General Operations'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Store / Location:</span>
+                    <span className="font-semibold text-brand-700">{viewingLeave.locationName ?? 'Not Assigned'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-3.5 space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Schedule & Leave Metrics</span>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Request Type:</span>
+                    <span className="font-bold text-ink-900">{requestTitle(viewingLeave)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Requested Period:</span>
+                    <span className="font-semibold text-ink-900">
+                      {formatDate(viewingLeave.startDate)}
+                      {viewingLeave.startDate !== viewingLeave.endDate && ` to ${formatDate(viewingLeave.endDate)}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Charged Duration:</span>
+                    <span className="font-bold text-ink-900">{viewingLeave.days} Day(s)</span>
+                  </div>
+                  {viewingLeave.isHalfDay && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-500">Shift Slot:</span>
+                      <span className="font-semibold text-blue-700">
+                        {viewingLeave.halfDaySlot === 'second_half' ? 'Second Half (Afternoon)' : 'First Half (Morning)'}
+                      </span>
+                    </div>
+                  )}
+                  {Boolean(viewingLeave.weeklyOffDays) && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-500">Weekly Offs Excluded:</span>
+                      <span className="font-semibold text-emerald-700">{viewingLeave.weeklyOffDays} Sunday(s) (Not Charged)</span>
+                    </div>
+                  )}
+                  {Boolean(viewingLeave.holidayDays) && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-500">Holidays Excluded:</span>
+                      <span className="font-semibold text-violet-700">{viewingLeave.holidayDays} Holiday(s) (Not Charged)</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Reason & Approver Remarks */}
+            <div className="rounded-xl border border-ink-200 bg-white p-3.5 space-y-3">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Reason / Notes</span>
+                <div className="mt-1 rounded-lg border border-ink-100 bg-ink-50/50 p-2.5 text-xs text-ink-800">
+                  {viewingLeave.reason ? viewingLeave.reason : <span className="italic text-ink-400">No reason provided (optional field)</span>}
+                </div>
+              </div>
+
+              {viewingLeave.decisionNote && (
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Approver Decision Note</span>
+                  <div className="mt-1 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5 text-xs text-amber-950 font-medium">
+                    {viewingLeave.decisionNote}
+                  </div>
+                </div>
+              )}
+
+              {viewingLeave.documentFileId && (
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Supporting Document</span>
+                  <div className="mt-1">
+                    <a
+                      href={fileUrl(viewingLeave.documentFileId, true)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
+                    >
+                      <Icon name="file" size={14} />
+                      Download Attached Document
+                    </a>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </Modal>
 
       <LeavePolicyModal open={policyOpen} onClose={() => setPolicyOpen(false)} />

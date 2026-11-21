@@ -1384,6 +1384,7 @@ function CreateEmployee({
               <input
                 type="email"
                 className="input"
+                autoComplete="email"
                 value={form.email}
                 onChange={(event) => setForm({ ...form, email: event.target.value })}
                 required
@@ -1557,6 +1558,7 @@ function CreateEmployee({
               <input
                 type="password"
                 className="input"
+                autoComplete="new-password"
                 value={form.password}
                 onChange={(event) => setForm({ ...form, password: event.target.value })}
                 minLength={10}

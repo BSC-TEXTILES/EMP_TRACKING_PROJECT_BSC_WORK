@@ -183,5 +183,5 @@ export function initErrorTracking(): void {
     });
   });
 
-  console.info('[ErrorTracker] Client error tracking initialized');
+  console.debug('[ErrorTracker] Client error tracking initialized');
 }
