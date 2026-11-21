@@ -24,12 +24,12 @@ function SortHeader({
 }) {
   const active = sort === column;
   return (
-    <th className={cx('whitespace-nowrap py-3 px-3.5 text-left text-xs font-bold uppercase tracking-wider text-ink-500', className)} aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+    <th className={cx('whitespace-nowrap py-3 px-3.5 text-left text-xs font-bold uppercase tracking-wider text-slate-900', className)} aria-sort={active ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
       <button
         type="button"
         onClick={() => onSort(column)}
         className={cx(
-          'inline-flex items-center gap-1.5 hover:text-ink-900 transition-colors',
+          'inline-flex items-center gap-1.5 font-bold text-slate-900 hover:text-brand-700 transition-colors',
           active && 'text-brand-700 font-extrabold',
         )}
       >
@@ -37,7 +37,7 @@ function SortHeader({
         <Icon
           name={active && dir === 'desc' ? 'chevronDown' : 'chevronUp'}
           size={13}
-          className={active ? 'text-brand-700' : 'text-ink-400'}
+          className={active ? 'text-brand-700' : 'text-slate-500'}
         />
       </button>
     </th>
@@ -74,20 +74,20 @@ export function TaskTable({
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[960px] text-left border-collapse">
-        <thead className="border-b border-ink-200 bg-ink-50/70 dark:bg-ink-900/40">
+        <thead className="border-b border-slate-300 bg-slate-100">
           <tr>
             <SortHeader label="Task ID & Title" column="title" {...headerProps} />
             <SortHeader label="SOP Slot" column="slot" {...headerProps} />
-            <th className="py-3 px-3.5 text-xs font-bold uppercase tracking-wider text-ink-500">Assigned To</th>
-            <th className="py-3 px-3.5 text-xs font-bold uppercase tracking-wider text-ink-500">Store</th>
+            <th className="py-3 px-3.5 text-xs font-bold uppercase tracking-wider text-slate-900">Assigned To</th>
+            <th className="py-3 px-3.5 text-xs font-bold uppercase tracking-wider text-slate-900">Store</th>
             <SortHeader label="Priority" column="priority" {...headerProps} />
             <SortHeader label="Status" column="status" {...headerProps} />
             <SortHeader label="Due Date" column="due" {...headerProps} />
             <SortHeader label="Progress" column="progress" className="w-36" {...headerProps} />
-            <th className="py-3 px-3.5 text-right text-xs font-bold uppercase tracking-wider text-ink-500">Actions</th>
+            <th className="py-3 px-3.5 text-right text-xs font-bold uppercase tracking-wider text-slate-900">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-ink-100 dark:divide-ink-800">
+        <tbody className="divide-y divide-slate-200">
           {items.map((task) => {
             const quick = nextAction(task, taskRole(task, userId, canApprove));
             const assignee = displayName(task.assigneeNames);
@@ -96,7 +96,7 @@ export function TaskTable({
             return (
               <tr
                 key={task.id}
-                className="group cursor-pointer transition-colors hover:bg-brand-50/30 dark:hover:bg-ink-800/40"
+                className="group cursor-pointer transition-colors bg-white hover:bg-blue-50/70"
                 onClick={() => onOpen(task)}
               >
                 {/* Title & Task No */}
@@ -104,18 +104,18 @@ export function TaskTable({
                   <p className="text-sm font-bold text-slate-900 group-hover:text-brand-700 transition-colors break-words" title={task.title}>
                     {task.title}
                   </p>
-                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                    <span className="font-mono text-[11px] font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                  <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600">
+                    <span className="font-mono text-[11px] font-bold text-slate-800 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-300">
                       {task.taskNo}
                     </span>
                     {task.requiresEvidence && (
-                      <span className={cx('inline-flex items-center gap-1 font-semibold text-[10px] rounded px-1.5 py-0.2', task.evidenceFileId ? 'bg-emerald-50 text-emerald-700' : 'bg-brand-50 text-brand-700')}>
+                      <span className={cx('inline-flex items-center gap-1 font-semibold text-[10px] rounded px-1.5 py-0.2', task.evidenceFileId ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-brand-50 text-brand-700 border border-brand-200')}>
                         <Icon name="camera" size={10} />
                         {task.evidenceFileId ? 'Proof attached' : 'Proof required'}
                       </span>
                     )}
                     {task.requiresMetric && (
-                      <span className="inline-flex items-center gap-1 font-semibold text-[10px] rounded bg-amber-50 px-1.5 py-0.2 text-amber-800">
+                      <span className="inline-flex items-center gap-1 font-semibold text-[10px] rounded bg-amber-50 px-1.5 py-0.2 text-amber-800 border border-amber-200">
                         <Icon name="chart" size={10} />
                         {task.metricLabel ?? 'Metric'}
                       </span>
@@ -124,14 +124,14 @@ export function TaskTable({
                 </td>
 
                 {/* SOP Slot */}
-                <td className="py-3.5 px-3.5 whitespace-nowrap text-xs font-semibold text-ink-700">
+                <td className="py-3.5 px-3.5 whitespace-nowrap text-xs font-bold text-slate-800">
                   {slotLabel(task.timeSlot) ?? '—'}
                 </td>
 
                 {/* Assignee */}
                 <td className="py-3.5 px-3.5 max-w-[180px]">
-                  <div className="flex items-center gap-1.5 truncate text-xs font-semibold text-ink-800" title={assignee}>
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[10px] text-ink-600 dark:bg-ink-800">
+                  <div className="flex items-center gap-1.5 truncate text-xs font-semibold text-slate-800" title={assignee}>
+                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] text-slate-700">
                       <Icon name="user" size={11} />
                     </span>
                     <span className="truncate">{assignee}</span>
@@ -141,12 +141,12 @@ export function TaskTable({
                 {/* Store Location */}
                 <td className="py-3.5 px-3.5 whitespace-nowrap">
                   {task.locationCodes ? (
-                    <span className="inline-flex items-center gap-1 rounded bg-brand-50 px-2 py-0.5 text-xs font-bold text-brand-700 dark:bg-brand-950/40 dark:text-brand-300">
+                    <span className="inline-flex items-center gap-1 rounded bg-blue-50 border border-blue-200 px-2 py-0.5 text-xs font-bold text-blue-800">
                       <Icon name="building" size={11} />
                       {task.locationCodes}
                     </span>
                   ) : (
-                    <span className="text-xs text-ink-400">—</span>
+                    <span className="text-xs text-slate-400">—</span>
                   )}
                 </td>
 
@@ -168,23 +168,23 @@ export function TaskTable({
                 </td>
 
                 {/* Due Date & Time */}
-                <td className={cx('py-3.5 px-3.5 whitespace-nowrap text-xs font-semibold', task.isOverdue ? 'text-rose-600' : 'text-ink-600')}>
+                <td className={cx('py-3.5 px-3.5 whitespace-nowrap text-xs font-bold', task.isOverdue ? 'text-rose-600' : 'text-slate-800')}>
                   {due ?? '—'}
                 </td>
 
                 {/* Progress */}
                 <td className="py-3.5 px-3.5 whitespace-nowrap">
                   <div className="flex items-center gap-2">
-                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-200">
                       <div
                         className={cx(
                           'h-full rounded-full transition-all duration-300',
-                          task.progress === 100 ? 'bg-emerald-500' : 'bg-brand-600',
+                          task.progress === 100 ? 'bg-emerald-600' : 'bg-brand-600',
                         )}
                         style={{ width: `${task.progress}%` }}
                       />
                     </div>
-                    <span className="w-8 text-right text-xs font-bold tabular-nums text-ink-600">
+                    <span className="w-8 text-right text-xs font-bold tabular-nums text-slate-800">
                       {task.progress}%
                     </span>
                   </div>
@@ -201,7 +201,7 @@ export function TaskTable({
                         type="button"
                         onClick={() => onEdit(task)}
                         title="Edit Task"
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-brand-50 hover:text-brand-700 transition-colors"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-brand-50 hover:text-brand-700 transition-colors"
                       >
                         <Icon name="edit" size={13} />
                       </button>
@@ -211,7 +211,7 @@ export function TaskTable({
                         type="button"
                         onClick={() => onDelete(task)}
                         title="Delete Task"
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition-colors"
                       >
                         <Icon name="trash" size={13} />
                       </button>
@@ -219,7 +219,7 @@ export function TaskTable({
                     <button
                       type="button"
                       onClick={() => onOpen(task)}
-                      className="inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-xs font-semibold text-ink-600 hover:bg-ink-100 hover:text-ink-900 transition-colors"
+                      className="inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 transition-colors border border-slate-200"
                     >
                       Details
                       <Icon name="chevronRight" size={13} />
