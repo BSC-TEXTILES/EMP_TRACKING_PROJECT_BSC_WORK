@@ -337,12 +337,6 @@ async function ensureDatabaseReady(): Promise<void> {
         } catch (hierErr) {
           console.warn('[startup] Reporting hierarchy check note:', hierErr);
         }
-        try {
-          const { DailyTaskService } = await import('./services/DailyTaskService.js');
-          await DailyTaskService.ensureTemplatesExist();
-        } catch (tplErr) {
-          console.warn('[startup] Master SOP task template check note:', tplErr);
-        }
         // Ensure email delivery and mailbox schema readiness
         try {
           const colCheckDeliveries = await queryOne<{ cnt: number | string }>(

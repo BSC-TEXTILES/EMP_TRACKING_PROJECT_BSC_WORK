@@ -15,15 +15,6 @@ tasksRouter.get('/stats', asyncHandler(async (req, res) => {
 tasksRouter.get('/', requireAny('tasks.view.own', 'tasks.view.team', 'tasks.view.all'), asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const view = req.query.view ?? 'mine';
-    // Auto-generate daily tasks for today so user never sees empty state in their daily SOP flow
-    if (view === 'mine') {
-        try {
-            await DailyTaskService.generateDailyTasksForEmployee(user.id, user);
-        }
-        catch {
-            // non-blocking
-        }
-    }
     const locationId = await requestedLocation(user, req.query.locationId);
     const result = await TaskService.list(user, {
         stage: req.query.stage ? String(req.query.stage) : undefined,

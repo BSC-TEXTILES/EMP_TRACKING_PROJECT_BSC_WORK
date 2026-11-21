@@ -26,15 +26,6 @@ tasksRouter.get(
     const user = currentUser(req);
     const view = (req.query.view as 'mine' | 'allocated' | 'all' | undefined) ?? 'mine';
 
-    // Auto-generate daily tasks for today so user never sees empty state in their daily SOP flow
-    if (view === 'mine') {
-      try {
-        await DailyTaskService.generateDailyTasksForEmployee(user.id, user);
-      } catch {
-        // non-blocking
-      }
-    }
-
     const locationId = await requestedLocation(user, req.query.locationId);
     const result = await TaskService.list(user, {
       stage: req.query.stage ? String(req.query.stage) : undefined,

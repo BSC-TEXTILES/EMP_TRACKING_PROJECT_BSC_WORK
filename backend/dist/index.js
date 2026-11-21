@@ -303,13 +303,6 @@ async function ensureDatabaseReady() {
                 catch (hierErr) {
                     console.warn('[startup] Reporting hierarchy check note:', hierErr);
                 }
-                try {
-                    const { DailyTaskService } = await import('./services/DailyTaskService.js');
-                    await DailyTaskService.ensureTemplatesExist();
-                }
-                catch (tplErr) {
-                    console.warn('[startup] Master SOP task template check note:', tplErr);
-                }
                 // Ensure email delivery and mailbox schema readiness
                 try {
                     const colCheckDeliveries = await queryOne("SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'email_deliveries' AND column_name = 'sender_id'");
