@@ -1051,7 +1051,12 @@ export class TaskService {
             await conn.query('DELETE FROM employee_daily_performance WHERE id > 0');
             await conn.query('DELETE FROM tasks WHERE id > 0');
             await conn.query('UPDATE tickets SET related_task_id = NULL WHERE related_task_id IS NOT NULL');
-            await conn.query('UPDATE module_activity_logs SET related_task_id = NULL WHERE related_task_id IS NOT NULL');
+            try {
+                await conn.query('UPDATE internal_module_activity SET related_task_id = NULL WHERE related_task_id IS NOT NULL');
+            }
+            catch {
+                // Table internal_module_activity might be absent in some database environments
+            }
             await conn.query('SET FOREIGN_KEY_CHECKS = 1');
         });
         await recordAudit({

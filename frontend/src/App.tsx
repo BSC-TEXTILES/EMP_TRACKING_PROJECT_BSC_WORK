@@ -98,6 +98,7 @@ export function App() {
   return (
     <Suspense fallback={<FullPageLoader />}>
       <ServiceWorkerBridge />
+      <PWAInstallPrompt />
       <Routes>
         <Route path="/setup" element={<Setup />} />
         <Route
@@ -105,8 +106,6 @@ export function App() {
           element={
             <GuestOnly>
               <Login />
-              {/* Install-app popup: shown on the sign-in page only. */}
-              <PWAInstallPrompt />
             </GuestOnly>
           }
         />
