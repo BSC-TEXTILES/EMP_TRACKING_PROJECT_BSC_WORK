@@ -74,12 +74,13 @@ leaveRouter.get('/preview', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const startDate = String(req.query.startDate ?? '');
     const endDate = String(req.query.endDate ?? startDate);
+    const isHalfDay = req.query.isHalfDay === 'true' || req.query.isHalfDay === '1';
     let code = null;
     if (req.query.leaveTypeId) {
         const types = await LeaveService.types();
         code = types.find((type) => Number(type.id) === Number(req.query.leaveTypeId))?.code ?? null;
     }
-    res.json(await LeaveService.dayBreakdown(user.id, startDate, endDate, code));
+    res.json(await LeaveService.dayBreakdown(user.id, startDate, endDate, code, isHalfDay));
 }));
 leaveRouter.get('/policy', asyncHandler(async (_req, res) => {
     res.json({ policy: await WeeklyOffService.policy() });
@@ -112,6 +113,8 @@ leaveRouter.post('/', requireAny('leave.apply'), asyncHandler(async (req, res) =
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         reason: z.string().min(10).max(2000),
         documentFileId: z.number().int().positive().nullable().optional(),
+        isHalfDay: z.boolean().optional(),
+        halfDaySlot: z.enum(['first_half', 'second_half']).optional(),
     }), req.body);
     const result = await LeaveService.apply(user.id, body, {
         ip: clientIp(req),

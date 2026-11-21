@@ -423,6 +423,8 @@ export interface LeaveItem {
   startDate: string;
   endDate: string;
   days: number;
+  isHalfDay?: boolean;
+  halfDaySlot?: 'first_half' | 'second_half' | null;
   /** Sundays inside the range that were not charged (null for requests made before this was tracked). */
   weeklyOffDays?: number | null;
   /** Public holidays inside the range that were not charged. */

@@ -107,24 +107,31 @@ export class LeaveService {
      * apply to the employee's location are never deducted from CL / SL / EL / CO.
      * Maternity leave is statutory and counted in calendar days.
      */
-    static async dayBreakdown(employeeId, startDate, endDate, leaveTypeCode) {
+    static async dayBreakdown(employeeId, startDate, endDate, leaveTypeCode, isHalfDay = false) {
         if (!isValidIsoDate(startDate) || !isValidIsoDate(endDate))
             throw ApiError.badRequest('Enter valid leave dates.');
         if (endDate < startDate)
             throw ApiError.badRequest('End date cannot be before the start date.');
+        if (isHalfDay && startDate !== endDate)
+            throw ApiError.badRequest('Half-day leave must start and end on the same date.');
         const holidays = await WeeklyOffService.employeeHolidays(employeeId, startDate, endDate);
         const split = chargeableDays(startDate, endDate, holidays.keys());
         const calendarCounted = leaveTypeCode === 'ML';
+        let chargedDays = calendarCounted ? split.calendarDays : split.charged.length;
+        if (isHalfDay) {
+            chargedDays = split.charged.length > 0 ? 0.5 : 0;
+        }
         return {
             startDate,
             endDate,
-            calendarDays: split.calendarDays,
-            chargedDays: calendarCounted ? split.calendarDays : split.charged.length,
+            calendarDays: isHalfDay ? 0.5 : split.calendarDays,
+            chargedDays,
             weeklyOffDays: calendarCounted ? 0 : split.weeklyOffs.length,
             holidayDays: calendarCounted ? 0 : split.publicHolidays.length,
             weeklyOffDates: split.weeklyOffs,
             holidays: split.publicHolidays.map((date) => ({ date, name: holidays.get(date) ?? 'Holiday' })),
             calendarCounted,
+            isHalfDay,
         };
     }
     static async apply(employeeId, input, context) {
@@ -151,18 +158,31 @@ export class LeaveService {
             throw ApiError.badRequest('Leave cannot be requested for past dates.');
         if (!input.reason?.trim())
             throw ApiError.badRequest('Provide a reason for the leave.');
+        const isHalfDay = Boolean(input.isHalfDay);
+        const halfDaySlot = isHalfDay ? (input.halfDaySlot ?? 'first_half') : null;
+        if (isHalfDay) {
+            if (input.startDate !== input.endDate)
+                throw ApiError.badRequest('Half-day leave must start and end on the same date.');
+            if (!['first_half', 'second_half'].includes(String(halfDaySlot))) {
+                throw ApiError.badRequest('Select whether the half-day leave is for the First Half or Second Half.');
+            }
+        }
         const typeCode = await queryOne('SELECT code FROM leave_types WHERE id = ?', [input.leaveTypeId]);
-        const breakdown = await LeaveService.dayBreakdown(employeeId, input.startDate, input.endDate, typeCode?.code);
+        const breakdown = await LeaveService.dayBreakdown(employeeId, input.startDate, input.endDate, typeCode?.code, isHalfDay);
         if (typeCode?.code !== 'ML' && breakdown.calendarDays > 60)
             throw ApiError.badRequest('Leave requests cannot exceed 60 consecutive days.');
         const days = breakdown.chargedDays;
         if (days <= 0) {
             throw ApiError.badRequest('The selected dates are all weekly offs (Sundays) or public holidays, so no leave is needed.');
         }
-        const overlap = await queryOne(`SELECT id FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
+        const overlap = await queryOne(`SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
        AND start_date <= ? AND end_date >= ?`, [employeeId, input.endDate, input.startDate]);
-        if (overlap)
-            throw ApiError.conflict('You already have a leave request overlapping these dates.');
+        if (overlap) {
+            const canCoexist = isHalfDay && Boolean(overlap.is_half_day) && overlap.half_day_slot && halfDaySlot && overlap.half_day_slot !== halfDaySlot;
+            if (!canCoexist) {
+                throw ApiError.conflict('You already have a leave request overlapping these dates.');
+            }
+        }
         const type = await queryOne('SELECT id, annual_quota, requires_document, name, code, is_paid FROM leave_types WHERE id = ? AND is_active = 1', [input.leaveTypeId]);
         if (!type)
             throw ApiError.badRequest('Select a valid leave type.');
@@ -189,19 +209,22 @@ export class LeaveService {
         const employee = await queryOne('SELECT manager_id, full_name FROM employees WHERE id = ?', [employeeId]);
         const result = await transaction(async (conn) => {
             await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [employeeId]);
-            const [overlaps] = await conn.query("SELECT id FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?", [employeeId, input.endDate, input.startDate]);
-            if (overlaps.length)
-                throw ApiError.conflict('You already have a leave request overlapping these dates.');
-            const [created] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?, ?, ?)`, [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, breakdown.weeklyOffDays, breakdown.holidayDays, input.reason.trim(), input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id]);
+            const [overlaps] = await conn.query("SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?", [employeeId, input.endDate, input.startDate]);
+            if (overlaps.length) {
+                const canCoexist = isHalfDay && Boolean(overlaps[0].is_half_day) && overlaps[0].half_day_slot && halfDaySlot && overlaps[0].half_day_slot !== halfDaySlot;
+                if (!canCoexist)
+                    throw ApiError.conflict('You already have a leave request overlapping these dates.');
+            }
+            const [created] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_manager', ?, ?, ?, ?, ?)`, [employeeId, input.leaveTypeId, input.startDate, input.endDate, days, breakdown.weeklyOffDays, breakdown.holidayDays, input.reason.trim(), input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, isHalfDay ? 1 : 0, halfDaySlot]);
             return created;
         });
         await recordAudit({
             actorId: employeeId,
-            action: 'leave.applied',
+            action: isHalfDay ? 'leave.applied_half_day' : 'leave.applied',
             entityType: 'leave_request',
             entityId: result.insertId,
-            after: { ...input, days, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays },
+            after: { ...input, days, isHalfDay, halfDaySlot, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays },
             ip: context.ip,
             userAgent: context.userAgent,
         });
@@ -283,6 +306,8 @@ export class LeaveService {
                 startDate: r.start_date,
                 endDate: r.end_date,
                 days: Number(r.days),
+                isHalfDay: Boolean(r.is_half_day),
+                halfDaySlot: r.half_day_slot ?? null,
                 weeklyOffDays: r.weekly_off_days === null || r.weekly_off_days === undefined ? null : Number(r.weekly_off_days),
                 holidayDays: r.holiday_days === null || r.holiday_days === undefined ? null : Number(r.holiday_days),
                 reason: r.reason,
@@ -367,7 +392,10 @@ export class LeaveService {
                ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, year, leave.leave_type_id, leave.days]);
                     }
                 });
-                await AttendanceService.markLeaveRange(Number(leave.employee_id), String(leave.start_date), String(leave.end_date));
+                await AttendanceService.markLeaveRange(Number(leave.employee_id), String(leave.start_date), String(leave.end_date), {
+                    isHalfDay: Boolean(leave.is_half_day),
+                    halfDaySlot: leave.half_day_slot,
+                });
             }
             else {
                 if (!input.note)

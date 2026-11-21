@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Badge, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { formatDate, formatDateTime, titleize } from '../lib/format';
+import { cx, formatDate, formatDateTime, titleize } from '../lib/format';
 import type { LeaveItem } from '../lib/types';
 import { useSocketEvent } from '../contexts/RealtimeContext';
 import { WeeklyOffPanel, useWeeklyOffSummary } from '../components/WeeklyOffPanel';
@@ -18,6 +18,7 @@ interface DayBreakdown {
   holidayDays: number;
   holidays: { date: string; name: string }[];
   calendarCounted: boolean;
+  isHalfDay?: boolean;
 }
 
 interface ApplicationContext {
@@ -74,7 +75,21 @@ export default function Leave() {
   const [routingError, setRoutingError] = useState('');
   const [hrApproverId, setHrApproverId] = useState('');
   const [applyOpen, setApplyOpen] = useState(false);
-  const [form, setForm] = useState({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
+  const [form, setForm] = useState<{
+    leaveTypeId: string;
+    startDate: string;
+    endDate: string;
+    reason: string;
+    isHalfDay: boolean;
+    halfDaySlot: 'first_half' | 'second_half';
+  }>({
+    leaveTypeId: '',
+    startDate: '',
+    endDate: '',
+    reason: '',
+    isHalfDay: false,
+    halfDaySlot: 'first_half',
+  });
   const [document, setDocument] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
@@ -131,9 +146,14 @@ export default function Leave() {
   useEffect(() => {
     setBreakdown(null);
     setBreakdownError('');
-    if (!applyOpen || !form.startDate || !form.endDate || form.endDate < form.startDate) return;
-    const params = new URLSearchParams({ startDate: form.startDate, endDate: form.endDate });
+    if (!applyOpen || !form.startDate || (!form.isHalfDay && (!form.endDate || form.endDate < form.startDate))) return;
+    const effectiveEnd = form.isHalfDay ? form.startDate : form.endDate;
+    const params = new URLSearchParams({ startDate: form.startDate, endDate: effectiveEnd });
     if (form.leaveTypeId) params.set('leaveTypeId', form.leaveTypeId);
+    if (form.isHalfDay) {
+      params.set('isHalfDay', 'true');
+      params.set('halfDaySlot', form.halfDaySlot);
+    }
     let cancelled = false;
     api
       .get<DayBreakdown>(`/leave/preview?${params.toString()}`)
@@ -142,7 +162,7 @@ export default function Leave() {
     return () => {
       cancelled = true;
     };
-  }, [applyOpen, form.startDate, form.endDate, form.leaveTypeId]);
+  }, [applyOpen, form.startDate, form.endDate, form.leaveTypeId, form.isHalfDay, form.halfDaySlot]);
 
   const loadRouting = async () => {
     setRouting(null); setRoutingError('');
@@ -161,17 +181,20 @@ export default function Leave() {
     try {
       let documentFileId: number | undefined;
       if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
+      const effectiveEnd = form.isHalfDay ? form.startDate : form.endDate;
       await api.post('/leave', {
         leaveTypeId: Number(form.leaveTypeId),
         hrApproverId: Number(hrApproverId),
         startDate: form.startDate,
-        endDate: form.endDate,
+        endDate: effectiveEnd,
         reason: form.reason,
         documentFileId,
+        isHalfDay: form.isHalfDay,
+        halfDaySlot: form.isHalfDay ? form.halfDaySlot : undefined,
       });
-      toast.success('Leave request submitted for approval.');
+      toast.success(form.isHalfDay ? 'Half-day leave request submitted for approval.' : 'Leave request submitted for approval.');
       setApplyOpen(false);
-      setForm({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
+      setForm({ leaveTypeId: '', startDate: '', endDate: '', reason: '', isHalfDay: false, halfDaySlot: 'first_half' });
       setDocument(null);
       await load();
       const refreshed = await api.get<{ balances: Balance[] }>('/leave/balances');
@@ -242,11 +265,23 @@ export default function Leave() {
                     <p className="text-sm font-medium text-ink-900">{leave.leaveType}</p>
                     <StatusBadge status={leave.status} />
                     <Badge tone="neutral">{leave.days} day(s)</Badge>
+                    {leave.isHalfDay && (
+                      <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 text-blue-900 font-bold px-2 py-0.5 text-xs border border-blue-200">
+                        <Icon name="clock" size={12} />
+                        Half Day · {leave.halfDaySlot === 'second_half' ? 'Second Half (Afternoon)' : 'First Half (Morning)'}
+                      </span>
+                    )}
                     {Boolean(leave.weeklyOffDays) && <Badge tone="success">{leave.weeklyOffDays} Sunday(s) not charged</Badge>}
                     {Boolean(leave.holidayDays) && <Badge tone="info">{leave.holidayDays} holiday(s) not charged</Badge>}
                     {tab !== 'mine' && <Badge tone="brand">{leave.employeeName}</Badge>}
                   </div>
-                  <p className="mt-1 text-xs text-ink-500">{formatDate(leave.startDate)} → {formatDate(leave.endDate)} · applied {formatDateTime(leave.createdAt)}</p>
+                  <p className="mt-1 text-xs text-ink-500">
+                    {leave.isHalfDay ? (
+                      <strong className="text-ink-800">{formatDate(leave.startDate)} · {leave.halfDaySlot === 'second_half' ? 'Second Half (Afternoon)' : 'First Half (Morning)'}</strong>
+                    ) : (
+                      <span>{formatDate(leave.startDate)} → {formatDate(leave.endDate)}</span>
+                    )} · applied {formatDateTime(leave.createdAt)}
+                  </p>
                   <p className="mt-1 text-sm text-ink-600">{leave.reason}</p>
                   <p className="mt-1 text-xs text-ink-500">Location: {leave.locationName ?? 'Not assigned'} · Manager: {leave.managerName ?? 'Not assigned'} · HR: {leave.hrName ?? 'Legacy request'}</p>
                   <p className="mt-1 text-xs text-brand-700">Submitted → Manager {leave.managerActionAt ? 'reviewed' : 'pending'} → HR {leave.hrActionAt ? 'reviewed' : 'pending'} → {titleize(leave.status)}</p>
@@ -328,11 +363,6 @@ export default function Leave() {
               required
             >
               <option value="">Select leave type</option>
-              {weeklyOff && (
-                <option value="" disabled>
-                  {`Weekly Off · Sundays (${weeklyOff.monthName}: ${weeklyOff.weeklyOffs.allocated} weekly offs · ${weeklyOff.weeklyOffs.taken} taken · ${weeklyOff.weeklyOffs.remaining} remaining · ${weeklyOff.weeklyOffs.worked} worked) · automatic, no need to apply`}
-                </option>
-              )}
               {types.map((type) => {
                 const balance = balances.find((item) => item.leaveTypeId === type.id);
                 let label = type.name;
@@ -358,6 +388,99 @@ export default function Leave() {
               })}
             </select>
           </Field>
+
+          {/* Leave Duration Toggle */}
+          <div className="space-y-1.5">
+            <label className="label text-xs font-bold text-ink-800">Leave Duration *</label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                className={cx(
+                  'flex items-center justify-center gap-2 rounded-lg border py-2.5 px-3 text-xs font-bold transition-all',
+                  !form.isHalfDay
+                    ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 shadow-xs'
+                    : 'border-ink-200 bg-white text-ink-700 hover:bg-ink-50',
+                )}
+                onClick={() => setForm((prev) => ({ ...prev, isHalfDay: false }))}
+              >
+                <Icon name="calendar" size={15} />
+                <span>Full Day (1.0 Day)</span>
+              </button>
+
+              <button
+                type="button"
+                className={cx(
+                  'flex items-center justify-center gap-2 rounded-lg border py-2.5 px-3 text-xs font-bold transition-all',
+                  form.isHalfDay
+                    ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 shadow-xs'
+                    : 'border-ink-200 bg-white text-ink-700 hover:bg-ink-50',
+                )}
+                onClick={() => setForm((prev) => ({ ...prev, isHalfDay: true, endDate: prev.startDate || prev.endDate }))}
+              >
+                <Icon name="clock" size={15} />
+                <span>Half Day (0.5 Day)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Half Day Session Selection - Both options must be there */}
+          {form.isHalfDay && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
+                  <Icon name="clock" size={14} className="text-blue-700" />
+                  <span>Half Day Session Option * (Select One)</span>
+                </label>
+                <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">0.5 Day Deduction</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <label
+                  className={cx(
+                    'flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-all',
+                    form.halfDaySlot === 'first_half'
+                      ? 'border-blue-600 bg-white text-blue-950 shadow-xs ring-2 ring-blue-500/30 font-semibold'
+                      : 'border-blue-200 bg-white/70 text-ink-700 hover:bg-white',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="halfDaySlot"
+                    value="first_half"
+                    checked={form.halfDaySlot === 'first_half'}
+                    onChange={() => setForm((prev) => ({ ...prev, halfDaySlot: 'first_half' }))}
+                    className="mt-0.5 text-brand-600 focus:ring-brand-500"
+                  />
+                  <div>
+                    <span className="block font-bold text-ink-900">First Half</span>
+                    <span className="text-[11px] text-ink-500">Morning Session</span>
+                  </div>
+                </label>
+
+                <label
+                  className={cx(
+                    'flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-all',
+                    form.halfDaySlot === 'second_half'
+                      ? 'border-blue-600 bg-white text-blue-950 shadow-xs ring-2 ring-blue-500/30 font-semibold'
+                      : 'border-blue-200 bg-white/70 text-ink-700 hover:bg-white',
+                  )}
+                >
+                  <input
+                    type="radio"
+                    name="halfDaySlot"
+                    value="second_half"
+                    checked={form.halfDaySlot === 'second_half'}
+                    onChange={() => setForm((prev) => ({ ...prev, halfDaySlot: 'second_half' }))}
+                    className="mt-0.5 text-brand-600 focus:ring-brand-500"
+                  />
+                  <div>
+                    <span className="block font-bold text-ink-900">Second Half</span>
+                    <span className="text-[11px] text-ink-500">Afternoon Session</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          )}
+
           {weeklyOff && (() => {
             const notTaken = weeklyOff.sundays.filter((sunday) => sunday.status === 'worked');
             const coSelected = selectedType?.code === 'CO';
@@ -404,14 +527,29 @@ export default function Leave() {
               </div>
             );
           })()}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Start date" required>
-              <input type="date" className="input" value={form.startDate} min={new Date().toISOString().slice(0, 10)} onChange={(event) => setForm({ ...form, startDate: event.target.value })} required />
+
+          {form.isHalfDay ? (
+            <Field label="Leave Date (Half Day) *" required hint="Single date · 0.5 day deduction">
+              <input
+                type="date"
+                className="input font-medium"
+                value={form.startDate}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value, endDate: event.target.value }))}
+                required
+              />
             </Field>
-            <Field label="End date" required>
-              <input type="date" className="input" value={form.endDate} min={form.startDate || new Date().toISOString().slice(0, 10)} onChange={(event) => setForm({ ...form, endDate: event.target.value })} required />
-            </Field>
-          </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Start date" required>
+                <input type="date" className="input" value={form.startDate} min={new Date().toISOString().slice(0, 10)} onChange={(event) => setForm((prev) => ({ ...prev, startDate: event.target.value }))} required />
+              </Field>
+              <Field label="End date" required>
+                <input type="date" className="input" value={form.endDate} min={form.startDate || new Date().toISOString().slice(0, 10)} onChange={(event) => setForm((prev) => ({ ...prev, endDate: event.target.value }))} required />
+              </Field>
+            </div>
+          )}
+
           <Field label="Reason" required>
             <textarea className="input min-h-[80px]" value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} minLength={10} required />
           </Field>
@@ -430,6 +568,10 @@ export default function Leave() {
             <div className={breakdown.chargedDays > 0 ? 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700' : 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'}>
               {breakdown.calendarCounted ? (
                 <p><strong>{breakdown.chargedDays}</strong> calendar day(s) (maternity leave is counted in calendar days).</p>
+              ) : form.isHalfDay ? (
+                <p className="font-semibold text-blue-950">
+                  <strong>0.5 day</strong> will be deducted from your {selectedType?.name ?? 'leave'} balance ({form.halfDaySlot === 'second_half' ? 'Second Half · Afternoon Session' : 'First Half · Morning Session'}).
+                </p>
               ) : breakdown.chargedDays > 0 ? (
                 <p>
                   <strong>{breakdown.chargedDays}</strong> day(s) will be deducted from your balance

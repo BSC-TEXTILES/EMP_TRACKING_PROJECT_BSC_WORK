@@ -553,20 +553,24 @@ export class AttendanceService {
         return rows.length;
     }
     /** Marks approved leave days so dashboards and KPI attendance stay accurate. */
-    static async markLeaveRange(employeeId, startDate, endDate) {
+    static async markLeaveRange(employeeId, startDate, endDate, halfDayOptions) {
         const start = String(startDate).slice(0, 10);
         const end = String(endDate).slice(0, 10);
         // Sundays and public holidays inside a leave range stay weekly offs / holidays:
         // they are not leave days and were not charged to the balance.
         const holidays = await WeeklyOffService.employeeHolidays(employeeId, start, end);
         const total = daysBetween(start, end);
+        const isHalf = Boolean(halfDayOptions?.isHalfDay);
+        const slotText = halfDayOptions?.halfDaySlot === 'second_half' ? 'Second Half' : 'First Half';
+        const status = isHalf ? 'half_day' : 'on_leave';
+        const note = isHalf ? `Approved half-day leave (${slotText})` : 'Approved leave';
         for (let i = 0; i <= total; i += 1) {
             const date = addDays(start, i);
             if (isWeeklyOff(date) || holidays.has(date))
                 continue;
             await execute(`INSERT INTO attendance (employee_id, work_date, status, notes)
-         VALUES (?, ?, 'on_leave', 'Approved leave')
-         ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, 'on_leave', status)`, [employeeId, date]);
+         VALUES (?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = VALUES(notes)`, [employeeId, date, status, note]);
         }
     }
     /** Hours actually worked across a range, used by KPI and reporting. */
