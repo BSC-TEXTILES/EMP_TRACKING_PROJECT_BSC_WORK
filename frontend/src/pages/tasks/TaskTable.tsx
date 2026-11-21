@@ -141,7 +141,18 @@ export function TaskTable({
                 {/* Store Location */}
                 <td className="py-3.5 px-3.5 whitespace-nowrap">
                   {task.locationCodes ? (
-                    <span className="inline-flex items-center gap-1 rounded bg-blue-50 border border-blue-200 px-2 py-0.5 text-xs font-bold text-blue-800">
+                    <span
+                      className={cx(
+                        'inline-flex items-center gap-1.5 rounded-md px-2.5 py-0.5 text-xs font-extrabold border shadow-2xs',
+                        task.locationCodes.includes('BEL')
+                          ? 'bg-blue-50 text-blue-900 border-blue-300'
+                          : task.locationCodes.includes('DAV')
+                            ? 'bg-purple-50 text-purple-900 border-purple-300'
+                            : task.locationCodes.includes('SHI')
+                              ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                              : 'bg-slate-100 text-slate-800 border-slate-300',
+                      )}
+                    >
                       <Icon name="building" size={11} />
                       {task.locationCodes}
                     </span>

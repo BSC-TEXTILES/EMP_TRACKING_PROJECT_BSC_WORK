@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, Pagination, SectionHeader, Skeleton, StatCard, StatusBadge, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { formatDate, formatDateTime, minutesToHours, titleize } from '../lib/format';
+import { cx, formatDate, formatDateTime, minutesToHours, titleize } from '../lib/format';
 import type { EmployeeRow } from '../lib/types';
 
 interface EmployeeDetail extends EmployeeRow {
@@ -59,7 +59,7 @@ export default function Employees() {
   const [modalTab, setModalTab] = useState<'overview' | 'edit' | 'performance'>('overview');
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
-  const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', groupId: '', teamLeaderId: '', employmentType: '' });
+  const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', groupId: '', teamLeaderId: '', employmentType: '', additionalLocationIds: [] as number[] });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '', employeeCode: '' });
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -259,6 +259,7 @@ export default function Employees() {
         groupId: result.groupId ? String(result.groupId) : '',
         teamLeaderId: result.teamLeaderId ? String(result.teamLeaderId) : '',
         employmentType: result.employmentType,
+        additionalLocationIds: (result as any).additionalLocationIds ?? [],
       });
       setEditForm({
         fullName: result.fullName,
@@ -377,9 +378,16 @@ export default function Employees() {
                       </td>
                       <td>
                         <div className="flex flex-col gap-0.5">
-                          <span className="inline-flex items-center gap-1 font-mono font-bold text-xs text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 w-fit">
+                          <span className={cx(
+                            'inline-flex items-center gap-1 font-mono font-extrabold text-xs px-2.5 py-0.5 rounded-md border w-fit shadow-2xs',
+                            employee.locationCode === 'BEL' ? 'bg-blue-50 text-blue-900 border-blue-300' :
+                            employee.locationCode === 'DAV' ? 'bg-purple-50 text-purple-900 border-purple-300' :
+                            employee.locationCode === 'SHI' ? 'bg-emerald-50 text-emerald-900 border-emerald-300' :
+                            employee.locationCode === 'ALL' ? 'bg-amber-100 text-amber-900 border-amber-300 font-black' :
+                            'bg-slate-100 text-slate-800 border-slate-300'
+                          )}>
                             <Icon name="building" size={11} />
-                            {employee.locationCode || employee.locationName || 'Unassigned'}
+                            {employee.locationCode === 'ALL' ? 'ALL 3 STORES' : (employee.locationCode || employee.locationName || 'Unassigned')}
                           </span>
                           <span className="text-xs text-ink-600 font-medium truncate max-w-[140px]">
                             {employee.groupName || <span className="text-ink-400 italic">No group</span>}
@@ -748,6 +756,7 @@ export default function Employees() {
                         groupId: orgForm.groupId ? Number(orgForm.groupId) : null,
                         teamLeaderId: orgForm.teamLeaderId ? Number(orgForm.teamLeaderId) : null,
                         employmentType: orgForm.employmentType || undefined,
+                        additionalLocationIds: orgForm.additionalLocationIds,
                       });
                       toast.success('Organisational assignment and role updated.');
                       await openDetail(detail.id, 'edit');
@@ -760,7 +769,7 @@ export default function Employees() {
                     </div>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <Field label="Role">
-                        <select className="input" value={orgForm.roleId} onChange={(event) => setOrgForm({ ...orgForm, roleId: event.target.value })}>
+                        <select className="input font-semibold" value={orgForm.roleId} onChange={(event) => setOrgForm({ ...orgForm, roleId: event.target.value })}>
                           {assignableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
                         </select>
                       </Field>
@@ -784,10 +793,29 @@ export default function Employees() {
                             .map((employee) => <option key={employee.id} value={employee.id}>{employee.fullName}</option>)}
                         </select>
                       </Field>
-                      <Field label="Location">
-                        <select className="input" value={orgForm.locationId} onChange={(event) => setOrgForm({ ...orgForm, locationId: event.target.value })}>
-                          <option value="">None</option>
-                          {structure?.locations.map((location) => <option key={location.id} value={location.id}>{location.name}</option>)}
+                      <Field label="Primary Location">
+                        <select
+                          className="input font-bold text-slate-800"
+                          value={orgForm.locationId}
+                          onChange={(event) => {
+                            const nextLoc = event.target.value;
+                            const allLoc = structure?.locations.find((l) => l.code === 'ALL' && String(l.id) === nextLoc);
+                            if (allLoc) {
+                              const allStoreIds = (structure?.locations ?? []).map((l) => l.id);
+                              setOrgForm({ ...orgForm, locationId: nextLoc, additionalLocationIds: allStoreIds });
+                            } else {
+                              setOrgForm({ ...orgForm, locationId: nextLoc });
+                            }
+                          }}
+                        >
+                          <option value="">None / Unassigned</option>
+                          {structure?.locations.map((location) => (
+                            <option key={location.id} value={location.id}>
+                              {location.code === 'ALL'
+                                ? '🌐 All Locations (BEL, DAV, SHI & HQ)'
+                                : `${location.code} · ${location.name}`}
+                            </option>
+                          ))}
                         </select>
                       </Field>
                       <Field label="Employment type">
@@ -795,9 +823,69 @@ export default function Employees() {
                           {['full_time', 'part_time', 'contract', 'intern', 'probation'].map((value) => <option key={value} value={value}>{titleize(value)}</option>)}
                         </select>
                       </Field>
+
+                      {/* Multi-Location & Store Access Matrix */}
+                      <div className="col-span-full rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                              <Icon name="building" size={14} className="text-brand-700" />
+                              Store Location Access Permissions (All 3 Stores)
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              Select which store locations this employee has access to view, supervise, or track tasks in.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn-secondary btn-xs font-bold text-brand-700 border-brand-300 hover:bg-brand-50"
+                            onClick={() => {
+                              const storeIds = (structure?.locations ?? []).map((l) => l.id);
+                              const allSelected = storeIds.length > 0 && storeIds.every((id) => orgForm.additionalLocationIds.includes(id));
+                              setOrgForm({
+                                ...orgForm,
+                                additionalLocationIds: allSelected ? [] : storeIds,
+                              });
+                            }}
+                          >
+                            {(structure?.locations ?? []).every((l) => orgForm.additionalLocationIds.includes(l.id))
+                              ? 'Deselect All Stores'
+                              : 'Grant Access to All 3 Stores'}
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2 pt-0.5">
+                          {(structure?.locations ?? []).map((loc) => {
+                            const isSelected = orgForm.additionalLocationIds.includes(loc.id) || String(orgForm.locationId) === String(loc.id);
+                            return (
+                              <label
+                                key={loc.id}
+                                className={cx(
+                                  'inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold cursor-pointer transition-all',
+                                  isSelected
+                                    ? 'bg-blue-50/90 border-blue-400 text-blue-950 shadow-2xs'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50',
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const next = e.target.checked
+                                      ? [...orgForm.additionalLocationIds, loc.id]
+                                      : orgForm.additionalLocationIds.filter((id) => id !== loc.id);
+                                    setOrgForm({ ...orgForm, additionalLocationIds: next });
+                                  }}
+                                />
+                                <span>{loc.code === 'ALL' ? '🌐 All Locations' : `${loc.code} · ${loc.name}`}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                     <div className="flex justify-end pt-1">
-                      <button type="submit" className="btn-primary btn-sm">Save assignment & role</button>
+                      <button type="submit" className="btn-primary btn-sm font-bold">Save assignment & role</button>
                     </div>
                   </form>
                 )}

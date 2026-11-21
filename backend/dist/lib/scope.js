@@ -1,4 +1,4 @@
-import { query } from '../db/index.js';
+import { query, queryOne } from '../db/index.js';
 import { ApiError } from './http.js';
 /** All employee ids in the reporting subtree rooted at the given manager (inclusive). */
 export async function subtreeIds(rootId) {
@@ -78,6 +78,11 @@ export function idsFilterSql(ids, column) {
 export async function allowedLocationIds(user) {
     if (user.permissions.includes('locations.view.all'))
         return null;
+    if (user.locationId) {
+        const loc = await queryOne('SELECT code FROM locations WHERE id = ?', [user.locationId]);
+        if (loc?.code === 'ALL')
+            return null;
+    }
     const rows = await query(`SELECT location_id FROM employee_locations WHERE employee_id = ?
      UNION SELECT location_id FROM location_hr_assignments WHERE employee_id = ?`, [user.id, user.id]);
     const ids = new Set(rows.map((row) => Number(row.location_id)));
@@ -122,6 +127,9 @@ export async function requestedLocation(user, raw) {
     const id = Number(raw);
     if (!Number.isInteger(id) || id <= 0)
         throw ApiError.badRequest('Invalid location filter.');
+    const loc = await queryOne('SELECT code FROM locations WHERE id = ?', [id]);
+    if (loc?.code === 'ALL')
+        return null;
     const allowed = await allowedLocationIds(user);
     if (allowed !== null && !allowed.includes(id))
         throw ApiError.forbidden('You do not have access to that location.');

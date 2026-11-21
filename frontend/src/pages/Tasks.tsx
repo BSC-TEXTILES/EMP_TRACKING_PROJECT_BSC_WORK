@@ -436,12 +436,12 @@ export default function Tasks() {
                   <Icon name="building" size={15} className="text-ink-400" />
                   <span className="sr-only">Store</span>
                   <select
-                    className="h-8 rounded-md border border-ink-200 bg-surface px-2 text-sm font-medium text-ink-800 focus:outline-none focus:ring-2 focus:ring-brand-500/30"
+                    className="h-8 rounded-md border border-slate-300 bg-surface px-2 text-sm font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-brand-500/30 shadow-2xs"
                     value={locationId}
                     onChange={(event) => updateParams((next) => (event.target.value ? next.set('location', event.target.value) : next.delete('location')))}
                   >
-                    <option value="">All my stores ({locations.map((location) => location.code).join(', ')})</option>
-                    {locations.map((location) => (
+                    <option value="">🌐 All Stores (BEL, DAV, SHI & HQ)</option>
+                    {locations.filter((loc) => loc.code !== 'ALL').map((location) => (
                       <option key={location.id} value={location.id}>
                         {location.code} · {location.name}
                       </option>

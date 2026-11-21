@@ -127,6 +127,7 @@ employeesRouter.patch('/:id/org-assignment', requireAny('employees.manage'), asy
         groupId: idSchema,
         teamLeaderId: idSchema,
         employmentType: z.string().max(32).optional(),
+        additionalLocationIds: z.array(z.number().int().positive()).optional(),
     }), req.body);
     await EmployeeService.updateOrgAssignment(id, user, body);
     res.json({ ok: true });

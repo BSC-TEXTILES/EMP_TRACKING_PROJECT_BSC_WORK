@@ -21,7 +21,7 @@ import { PresenceService, type PresenceEntry } from './PresenceService.js';
 import type { AuthUser } from './AuthService.js';
 
 export const ROOT_ROLE_SLUG = 'super_admin';
-export const COMPANY_LOCATION_CODES = ['BEL', 'DAV', 'SHI', 'HQ'] as const;
+export const COMPANY_LOCATION_CODES = ['ALL', 'BEL', 'DAV', 'SHI', 'HQ'] as const;
 const DEFAULT_LOCATION_CODE = 'HQ';
 const MODULE_FRESH_MS = 10 * 60_000;
 const MAX_RANGE_DAYS = 93;

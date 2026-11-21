@@ -202,6 +202,7 @@ employeesRouter.patch(
         groupId: idSchema,
         teamLeaderId: idSchema,
         employmentType: z.string().max(32).optional(),
+        additionalLocationIds: z.array(z.number().int().positive()).optional(),
       }),
       req.body,
     );

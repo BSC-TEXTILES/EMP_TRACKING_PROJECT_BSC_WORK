@@ -170,7 +170,7 @@ export class EmployeeService {
        WHERE e.id = ? AND ${scope.clause}`, [employeeId, ...scope.params]);
         if (!row)
             throw ApiError.notFound('Employee not found or outside your access scope');
-        const [taskStats, attendanceStats, ticketStats, kpi, reports] = await Promise.all([
+        const [taskStats, attendanceStats, ticketStats, kpi, reports, addlLocRows] = await Promise.all([
             queryOne(`SELECT COUNT(*) AS total, SUM(t.status = 'completed') AS completed,
                 SUM(t.status IN ('assigned','accepted','in_progress','on_hold','pending_approval')) AS active,
                 SUM(t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')) AS overdue
@@ -183,6 +183,9 @@ export class EmployeeService {
             queryOne(`SELECT period, total_score, category, status FROM employee_kpi_records WHERE employee_id = ? ORDER BY period DESC LIMIT 1`, [employeeId]),
             queryOne(`SELECT COUNT(*) AS submitted, SUM(status = 'approved') AS approved
          FROM daily_work_reports WHERE employee_id = ? AND report_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')`, [employeeId]),
+            query(`SELECT el.location_id, l.code, l.name
+         FROM employee_locations el JOIN locations l ON el.location_id = l.id
+         WHERE el.employee_id = ?`, [employeeId]),
         ]);
         return {
             id: Number(row.id),
@@ -206,6 +209,8 @@ export class EmployeeService {
             locationId: row.location_id ? Number(row.location_id) : null,
             locationName: row.location_name,
             locationCode: row.location_code ?? null,
+            additionalLocationIds: (addlLocRows ?? []).map((r) => Number(r.location_id)),
+            additionalLocations: (addlLocRows ?? []).map((r) => ({ id: Number(r.location_id), code: r.code, name: r.name })),
             groupId: row.group_id ? Number(row.group_id) : null,
             groupName: row.group_name ?? null,
             groupCode: row.group_code ?? null,
@@ -335,7 +340,10 @@ export class EmployeeService {
         if (input.locationId !== undefined && input.locationId !== null) {
             const allowed = await allowedLocationIds(actor);
             if (allowed !== null && !allowed.includes(Number(input.locationId))) {
-                throw ApiError.forbidden('You cannot assign an employee to an unauthorized location.');
+                const loc = await queryOne('SELECT code FROM locations WHERE id = ?', [input.locationId]);
+                if (loc?.code !== 'ALL') {
+                    throw ApiError.forbidden('You cannot assign an employee to an unauthorized location.');
+                }
             }
         }
         const effectiveLocationId = input.locationId ?? target.location_id;
@@ -380,6 +388,25 @@ export class EmployeeService {
             }
             else {
                 await execute('DELETE FROM employee_group_members WHERE employee_id = ?', [employeeId]);
+            }
+        }
+        // Save accessible store locations in employee_locations
+        if (input.additionalLocationIds !== undefined) {
+            await execute('DELETE FROM employee_locations WHERE employee_id = ?', [employeeId]);
+            for (const locId of input.additionalLocationIds) {
+                if (locId) {
+                    await execute('INSERT INTO employee_locations (employee_id, location_id, granted_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE granted_by = VALUES(granted_by)', [employeeId, locId, actor.id]);
+                }
+            }
+        }
+        else if (input.locationId) {
+            const loc = await queryOne('SELECT code FROM locations WHERE id = ?', [input.locationId]);
+            if (loc?.code === 'ALL') {
+                const storeLocs = await query('SELECT id FROM locations WHERE code IN (\'BEL\', \'DAV\', \'SHI\', \'HQ\')');
+                await execute('DELETE FROM employee_locations WHERE employee_id = ?', [employeeId]);
+                for (const sl of storeLocs) {
+                    await execute('INSERT INTO employee_locations (employee_id, location_id, granted_by) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE granted_by = VALUES(granted_by)', [employeeId, sl.id, actor.id]);
+                }
             }
         }
         await recordAudit({
@@ -661,11 +688,11 @@ export class EmployeeService {
     static async getUserAllowedLocations(user) {
         const allowed = await allowedLocationIds(user);
         if (allowed === null) {
-            return query("SELECT id, code, name, city FROM locations WHERE is_active = 1 AND code IN ('BEL', 'DAV', 'SHI', 'HQ') ORDER BY FIELD(code, 'HQ', 'BEL', 'DAV', 'SHI')");
+            return query("SELECT id, code, name, city FROM locations WHERE is_active = 1 AND code IN ('ALL', 'BEL', 'DAV', 'SHI', 'HQ') ORDER BY FIELD(code, 'ALL', 'HQ', 'BEL', 'DAV', 'SHI')");
         }
         if (allowed.length === 0)
             return [];
-        return query(`SELECT id, code, name, city FROM locations WHERE is_active = 1 AND id IN (${allowed.join(',')}) ORDER BY FIELD(code, 'HQ', 'BEL', 'DAV', 'SHI')`);
+        return query(`SELECT id, code, name, city FROM locations WHERE is_active = 1 AND id IN (${allowed.join(',')}) ORDER BY FIELD(code, 'ALL', 'HQ', 'BEL', 'DAV', 'SHI')`);
     }
     static async setStatus(employeeId, actor, status, reason) {
         if (!actor.permissions.includes('employees.manage'))

@@ -5,7 +5,7 @@ import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { PresenceService } from './PresenceService.js';
 export const ROOT_ROLE_SLUG = 'super_admin';
-export const COMPANY_LOCATION_CODES = ['BEL', 'DAV', 'SHI', 'HQ'];
+export const COMPANY_LOCATION_CODES = ['ALL', 'BEL', 'DAV', 'SHI', 'HQ'];
 const DEFAULT_LOCATION_CODE = 'HQ';
 const MODULE_FRESH_MS = 10 * 60_000;
 const MAX_RANGE_DAYS = 93;
