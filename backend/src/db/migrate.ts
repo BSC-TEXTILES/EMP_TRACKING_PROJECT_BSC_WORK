@@ -94,7 +94,7 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
       }
       const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
       // Retired cleanup scripts are never part of installation or upgrades.
-      if (['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql'].includes(file)) {
+      if (['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql', '040_clear_all_tasks_data.sql'].includes(file)) {
         console.log(`[migrate] skip retired destructive migration ${file}`);
         continue;
       }

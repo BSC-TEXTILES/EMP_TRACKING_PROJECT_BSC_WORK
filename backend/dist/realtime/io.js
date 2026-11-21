@@ -128,6 +128,9 @@ export function emitToEmployees(employeeIds, event, payload) {
 export function emitToEmployee(employeeId, event, payload) {
     emitToEmployees([employeeId], event, payload);
 }
+export function broadcastEvent(event, payload) {
+    io?.emit(event, payload);
+}
 export function emitToConversation(conversationId, event, payload) {
     io?.to(`conv:${conversationId}`).emit(event, payload);
 }

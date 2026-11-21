@@ -127,6 +127,8 @@ export default function Tasks() {
   const [editTask, setEditTask] = useState<TaskSummary | null>(null);
   const [deleteConfirmTask, setDeleteConfirmTask] = useState<TaskSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [purgeAllOpen, setPurgeAllOpen] = useState(false);
+  const [purgingAll, setPurgingAll] = useState(false);
 
   const pageSize = viewMode === 'flow' ? 60 : 20;
   const query = new URLSearchParams();
@@ -197,6 +199,25 @@ export default function Tasks() {
       setDetail(null);
     }
   });
+  useSocketEvent('tasks:purged', () => {
+    void reload();
+    setDetail(null);
+  });
+
+  const handlePurgeAll = async () => {
+    setPurgingAll(true);
+    try {
+      await api.post('/tasks/purge-all', {});
+      toast.success('All task data has been removed.');
+      setPurgeAllOpen(false);
+      setDetail(null);
+      void reload();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setPurgingAll(false);
+    }
+  };
 
   const handleDeleteTask = async () => {
     if (!deleteConfirmTask) return;
@@ -241,6 +262,14 @@ export default function Tasks() {
     })[action] ?? 'Task updated.';
 
   const runAction = async (taskId: number, action: string, payload: Record<string, unknown> = {}) => {
+    if (busy) return false;
+    if (action === 'hold' || action === 'reject' || (action === 'set_status' && payload.status === 'on_hold')) {
+      if (!payload.note && !payload.rejectionReason) {
+        const reason = window.prompt(action === 'reject' ? 'Reason for rejecting this task:' : 'Reason for putting this task on hold:');
+        if (!reason?.trim()) return false;
+        payload = { ...payload, note: reason.trim() };
+      }
+    }
     setBusy(true);
     try {
       await api.post(`/tasks/${taskId}/action`, { action, ...payload });
@@ -270,7 +299,7 @@ export default function Tasks() {
 
   const changeStatus = async (task: TaskSummary, nextStatus: string) => {
     if (nextStatus === task.status) return;
-    if (nextStatus === 'pending_approval' && !taskRole(task, user?.id, canApprove).isManager) {
+    if (nextStatus === 'pending_approval') {
       openSubmit(task);
       return;
     }
@@ -418,6 +447,17 @@ export default function Tasks() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {(user?.roleSlug === 'super_admin' || user?.roleSlug === 'admin' || (user?.roleLevel ?? 0) >= 40) && (
+              <button
+                type="button"
+                className="btn-secondary h-10 text-rose-600 hover:bg-rose-50 border-rose-200 inline-flex items-center gap-1.5"
+                onClick={() => setPurgeAllOpen(true)}
+                title="Remove all task records and reset to zero"
+              >
+                <Icon name="trash" size={16} />
+                Clear all tasks
+              </button>
+            )}
             <button type="button" className="btn-secondary h-10" disabled={generatingDaily} onClick={() => void handleGenerate()} title="Assign today's SOP tasks for your role (existing tasks are never duplicated)">
               <Icon name="refresh" size={16} className={generatingDaily ? 'animate-spin' : ''} />
               {generatingDaily ? 'Generating…' : "Generate today's tasks"}
@@ -751,6 +791,7 @@ export default function Tasks() {
                 {role.isAssignee && ['accepted', 'overdue'].includes(detail.status) && (
                   <button className="btn-primary btn-sm" disabled={busy} onClick={() => void runAction(detail.id, 'start')}><Icon name="play" size={14} /> Start work</button>
                 )}
+                {role.isAssignee && ['assigned', 'not_started', 'accepted'].includes(detail.status) && (<button className="btn-secondary btn-sm" disabled={busy} onClick={() => void runAction(detail.id, 'reject')}>Reject task</button>)}
                 {role.isAssignee && detail.status === 'on_hold' && (
                   <button className="btn-primary btn-sm" disabled={busy} onClick={() => void runAction(detail.id, 'resume')}><Icon name="play" size={14} /> Resume</button>
                 )}
@@ -1275,6 +1316,13 @@ export default function Tasks() {
         onClose={() => setDeleteConfirmTask(null)}
         onConfirm={handleDeleteTask}
       />
+
+      <PurgeAllTasksModal
+        open={purgeAllOpen}
+        busy={purgingAll}
+        onClose={() => setPurgeAllOpen(false)}
+        onConfirm={handlePurgeAll}
+      />
     </div>
   );
 }
@@ -1501,6 +1549,44 @@ function DeleteTaskModal({
             disabled={busy}
           >
             {busy ? 'Deleting…' : 'Delete Task'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PurgeAllTasksModal({
+  open,
+  busy,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Modal open={open} onClose={onClose} title="Purge All Tasks Data" size="sm">
+      <div className="space-y-3">
+        <p className="text-sm text-ink-700">
+          Are you sure you want to remove <strong>all task data</strong> from the project?
+        </p>
+        <p className="text-xs text-rose-600 font-medium">
+          This will permanently delete all task records, assignments, comments, attachments, time logs, and daily SOP checkpoints. The task list will be completely reset to 0. This action cannot be undone.
+        </p>
+        <div className="flex justify-end gap-2 pt-3 border-t border-ink-100">
+          <button type="button" className="btn-secondary btn-sm" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-primary btn-sm bg-rose-600 hover:bg-rose-700 text-white"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? 'Purging…' : 'Purge All Tasks'}
           </button>
         </div>
       </div>

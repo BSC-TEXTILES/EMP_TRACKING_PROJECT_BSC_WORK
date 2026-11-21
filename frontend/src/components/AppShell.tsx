@@ -751,7 +751,7 @@ export function AppShell() {
               </ErrorBoundary>
             </PullToRefresh>
           ) : (
-            <ErrorBoundary>
+            <ErrorBoundary key={location.pathname}>
               <Outlet />
             </ErrorBoundary>
           )}

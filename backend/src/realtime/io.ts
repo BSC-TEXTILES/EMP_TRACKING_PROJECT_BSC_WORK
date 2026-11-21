@@ -144,6 +144,10 @@ export function emitToEmployee(employeeId: number, event: string, payload: unkno
   emitToEmployees([employeeId], event, payload);
 }
 
+export function broadcastEvent(event: string, payload: unknown): void {
+  io?.emit(event, payload);
+}
+
 export function emitToConversation(conversationId: number, event: string, payload: unknown): void {
   io?.to(`conv:${conversationId}`).emit(event, payload);
 }

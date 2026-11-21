@@ -57,6 +57,12 @@ tasksRouter.post(
     const user = currentUser(req);
     const body = parseBody(
       z.object({
+        timeSlot: z.enum(['morning', 'operations', 'evening', 'closing']).optional(),
+        requiresEvidence: z.boolean().optional(),
+        evidenceType: z.string().max(80).nullable().optional(),
+        requiresMetric: z.boolean().optional(),
+        metricLabel: z.string().max(120).nullable().optional(),
+        metricUnit: z.string().max(40).nullable().optional(),
         title: z.string().min(3).max(200),
         description: z.string().max(8000).optional(),
         category: z.string().max(64).optional(),
@@ -99,13 +105,8 @@ tasksRouter.post(
     );
     const targetEmployeeId = body.employeeId ?? user.id;
     if (targetEmployeeId !== user.id) await assertEmployeeAccess(user, targetEmployeeId, 'tasks');
-    try {
-      const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user, { force: body.force });
-      res.json(result);
-    } catch (err: any) {
-      console.warn('[daily/generate] note:', err?.message || err);
-      res.json({ created: 0, existing: 0, error: err?.message });
-    }
+    const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user, { force: body.force });
+    res.json(result);
   }),
 );
 
@@ -306,6 +307,18 @@ tasksRouter.put(
       userAgent: req.get('user-agent') ?? undefined,
     });
     res.json(updated);
+  }),
+);
+
+tasksRouter.post(
+  '/purge-all',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const result = await TaskService.purgeAllTasks(user, {
+      ip: clientIp(req),
+      userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(result);
   }),
 );
 

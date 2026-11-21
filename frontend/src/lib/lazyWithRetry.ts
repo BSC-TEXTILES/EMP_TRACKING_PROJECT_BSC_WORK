@@ -39,10 +39,12 @@ export function lazyWithRetry<T extends ComponentType<any>>(
           if (isChunkMismatch) {
             const lastReload = parseInt(sessionStorage.getItem(key) || '0', 10);
             const now = Date.now();
-            // Don't loop infinitely: reload at most once every 20 seconds per route
-            if (now - lastReload > 20000) {
+            // Don't loop infinitely: reload at most once every 10 seconds per route
+            if (now - lastReload > 10000) {
               sessionStorage.setItem(key, String(now));
-              window.location.reload();
+              const url = new URL(window.location.href);
+              url.searchParams.set('_v', String(now));
+              window.location.replace(url.toString());
               // Return unresolved promise while browser reloads to prevent ErrorBoundary flash
               return new Promise<{ default: T }>(() => {});
             }

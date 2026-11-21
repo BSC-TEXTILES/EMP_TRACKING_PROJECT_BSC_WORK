@@ -190,6 +190,10 @@ export class TaskService {
       if (!project) throw ApiError.badRequest('Select a valid project.');
     }
 
+    for (const fileId of input.attachmentIds ?? []) {
+      const file = await queryOne<{ id: number }>("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status = 'clean'", [fileId, actor.id]);
+      if (!file) throw ApiError.forbidden('Task references must be clean files uploaded by you.');
+    }
     const created = await transaction(async (conn) => {
       const seq = await nextSequence(conn, 'task_no_seq');
       const taskNo = `TSK-${String(seq).padStart(5, '0')}`;
@@ -221,7 +225,11 @@ export class TaskService {
       );
       const taskId = Number((result as { insertId: number }).insertId);
 
-      for (const assignee of input.assigneeIds) {
+      await conn.query(
+        'UPDATE tasks SET time_slot = ?, requires_evidence = ?, evidence_type = ?, requires_metric = ?, metric_label = ?, metric_unit = ? WHERE id = ?',
+        [input.timeSlot ?? null, input.requiresEvidence ? 1 : 0, input.evidenceType ?? null, input.requiresMetric ? 1 : 0, input.metricLabel ?? null, input.metricUnit ?? null, taskId],
+      );
+      for (const assignee of [...new Set(input.assigneeIds)]) {
         await conn.query(
           `INSERT INTO task_assignments (task_id, employee_id, assigned_by, status) VALUES (?, ?, ?, 'assigned')`,
           [taskId, assignee, actor.id],
@@ -630,6 +638,30 @@ export class TaskService {
     const isManager = Number(task.created_by) === user.id || Number(task.manager_id) === user.id || user.permissions.includes('tasks.approve');
     const isAssignee = Boolean(assignment);
     const before = { status: task.status, progress: Number(task.progress) };
+    const transitions: Record<string, string[]> = {
+      accept: ['assigned', 'not_started', 'rejected', 'overdue'],
+      start: ['assigned', 'not_started', 'accepted', 'overdue'],
+      hold: ['accepted', 'in_progress', 'overdue'],
+      resume: ['on_hold'],
+      submit: ['accepted', 'in_progress', 'on_hold', 'overdue'],
+      approve: ['pending_approval'], verify: ['pending_approval'],
+      reject: ['assigned', 'not_started', 'accepted', 'in_progress', 'overdue', 'pending_approval'],
+      progress: ['assigned', 'not_started', 'accepted', 'in_progress', 'overdue'],
+    };
+    if (transitions[action] && !transitions[action].includes(task.status)) {
+      throw ApiError.conflict(`Cannot ${action} a task while it is ${task.status}.`);
+    }
+    if ((action === 'hold' || (action === 'set_status' && payload.status === 'on_hold')) && !payload.note?.trim()) {
+      throw ApiError.badRequest('Provide a reason for putting this task on hold.');
+    }
+    if (payload.evidenceFileId) {
+      const file = await queryOne<{ id: number }>("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status = 'clean'", [payload.evidenceFileId, user.id]);
+      if (!file) throw ApiError.forbidden('Completion proof must be a clean file uploaded by you.');
+    }
+    if (action === 'submit' && Number(task.requires_metric) === 1 && !Number.isFinite(payload.metricValue)) {
+      throw ApiError.badRequest('Enter the required completion metric.');
+    }
+
 
     const closeOpenLog = async (conn: PoolConnection, employeeId: number) => {
       await conn.query(
@@ -782,7 +814,7 @@ export class TaskService {
         });
         const assignees = await query<{ employee_id: number }>('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
         await NotificationService.notify({
-          employeeIds: assignees.map((a) => Number(a.employee_id)),
+          employeeIds: [...new Set([...assignees.map((a) => Number(a.employee_id)), Number(task.created_by)])],
           type: 'task_update',
           title: 'Task verified & approved',
           body: `Your work on "${task.title}" was verified and approved.`,
@@ -793,7 +825,7 @@ export class TaskService {
         break;
       }
       case 'reject': {
-        if (!isManager) throw ApiError.forbidden('Only the allocating manager or supervisor can reject this task.');
+        if (!isManager && !isAssignee) throw ApiError.forbidden('Only an assignee or authorized manager can reject this task.');
         const reason = (payload.rejectionReason || payload.note || '').trim();
         if (reason.length < 3) throw ApiError.badRequest('A rejection reason must be provided.');
         await transaction(async (conn) => {
@@ -810,7 +842,7 @@ export class TaskService {
         });
         const assignees = await query<{ employee_id: number }>('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
         await NotificationService.notify({
-          employeeIds: assignees.map((a) => Number(a.employee_id)),
+          employeeIds: [...new Set([...assignees.map((a) => Number(a.employee_id)), Number(task.created_by)])],
           type: 'task_update',
           title: 'Task rejected - correction needed',
           body: `"${task.title}" was rejected: ${reason}`,
@@ -857,7 +889,7 @@ export class TaskService {
         await execute('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [taskId, user.id, payload.note]);
         const assignees = await query<{ employee_id: number }>('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
         await NotificationService.notify({
-          employeeIds: assignees.map((a) => Number(a.employee_id)),
+          employeeIds: [...new Set([...assignees.map((a) => Number(a.employee_id)), Number(task.created_by)])],
           type: 'task_update',
           title: 'Changes requested',
           body: `"${task.title}" needs revision: ${payload.note}`,
@@ -912,7 +944,7 @@ export class TaskService {
         await execute("UPDATE tasks SET status = 'cancelled' WHERE id = ?", [taskId]);
         const assignees = await query<{ employee_id: number }>('SELECT employee_id FROM task_assignments WHERE task_id = ?', [taskId]);
         await NotificationService.notify({
-          employeeIds: assignees.map((a) => Number(a.employee_id)),
+          employeeIds: [...new Set([...assignees.map((a) => Number(a.employee_id)), Number(task.created_by)])],
           type: 'task_update',
           title: 'Task cancelled',
           body: `"${task.title}" was cancelled.`,
@@ -943,49 +975,8 @@ export class TaskService {
         if (nextStatus === 'pending_approval' && !isManager) {
           throw ApiError.badRequest('Use "Submit for verification" so the completion note and proof are recorded.');
         }
-        await transaction(async (conn) => {
-          if (nextStatus === 'completed') {
-            await closeOpenLog(conn, user.id);
-            await conn.query(
-              "UPDATE tasks SET status = 'completed', verification_status = 'verified', progress = 100, completed_at = COALESCE(completed_at, NOW(3)), approved_at = NOW(3), approved_by = ? WHERE id = ?",
-              [user.id, taskId],
-            );
-            await conn.query("UPDATE task_assignments SET status = 'completed', completed_at = COALESCE(completed_at, NOW(3)) WHERE task_id = ?", [taskId]);
-          } else if (nextStatus === 'pending_approval') {
-            await closeOpenLog(conn, user.id);
-            await conn.query(
-              "UPDATE tasks SET status = 'pending_approval', submitted_at = NOW(3), progress = 100 WHERE id = ?",
-              [taskId],
-            );
-            if (isAssignee && assignment) {
-              await conn.query("UPDATE task_assignments SET status = 'pending_approval' WHERE id = ?", [assignment.id]);
-            }
-          } else if (nextStatus === 'in_progress') {
-            await conn.query("UPDATE tasks SET status = 'in_progress', progress = GREATEST(progress, 25) WHERE id = ?", [taskId]);
-            if (isAssignee && assignment) {
-              await conn.query("UPDATE task_assignments SET status = 'in_progress', started_at = COALESCE(started_at, NOW(3)) WHERE id = ?", [assignment.id]);
-            }
-          } else if (nextStatus === 'on_hold') {
-            await closeOpenLog(conn, user.id);
-            await conn.query("UPDATE tasks SET status = 'on_hold' WHERE id = ?", [taskId]);
-            if (isAssignee && assignment) {
-              await conn.query("UPDATE task_assignments SET status = 'on_hold' WHERE id = ?", [assignment.id]);
-            }
-          } else {
-            await conn.query("UPDATE tasks SET status = ? WHERE id = ?", [nextStatus, taskId]);
-            if (isAssignee && assignment) {
-              await conn.query("UPDATE task_assignments SET status = ? WHERE id = ?", [nextStatus, assignment.id]);
-            }
-          }
-          if (payload.note) {
-            await conn.query('INSERT INTO task_comments (task_id, author_id, body) VALUES (?, ?, ?)', [
-              taskId,
-              user.id,
-              payload.note,
-            ]);
-          }
-        });
-        break;
+        const mappedAction: Record<string, string> = { assigned: 'reopen', accepted: 'accept', in_progress: task.status === 'on_hold' ? 'resume' : 'start', on_hold: 'hold', pending_approval: 'submit', completed: 'approve', cancelled: 'cancel' };
+        return TaskService.applyAction(taskId, mappedAction[nextStatus] as typeof action, user, payload, context);
       }
       default:
         throw ApiError.badRequest('Unsupported task action');
@@ -1007,6 +998,9 @@ export class TaskService {
       userAgent: context.userAgent,
     });
 
+    if (isAssignee && !['accept', 'submit', 'reject'].includes(action)) {
+      await NotificationService.notify({ employeeIds: [...new Set([detail.createdBy, ...(detail.managerId ? [detail.managerId] : [])])].filter((id) => id !== user.id), type: 'task_update', title: 'Task status updated', body: `${user.fullName}: ${detail.title} — ${detail.status}`, link: `/tasks?task=${taskId}`, actorId: user.id });
+    }
     emitToEmployees([...detail.assigneeIds, detail.createdBy, ...(detail.managerId ? [detail.managerId] : [])].filter(Boolean), 'task:updated', {
       id: taskId,
       status: detail.status,
@@ -1297,6 +1291,44 @@ export class TaskService {
     emitToEmployees([Number(existing.created_by), actor.id].filter(Boolean), 'task:deleted', { id: taskId });
 
     return { success: true, id: taskId };
+  }
+
+  static async purgeAllTasks(
+    actor: AuthUser,
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    if (actor.roleSlug !== 'super_admin' && actor.roleSlug !== 'admin' && (actor.roleLevel ?? 0) < 40) {
+      throw new ApiError(403, 'Only administrators can clear all task records.');
+    }
+
+    await transaction(async (conn) => {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+      await conn.query('DELETE FROM task_time_logs WHERE id > 0');
+      await conn.query('DELETE FROM task_attachments WHERE id > 0');
+      await conn.query('DELETE FROM task_comments WHERE id > 0');
+      await conn.query('DELETE FROM task_subtasks WHERE id > 0');
+      await conn.query('DELETE FROM task_assignments WHERE task_id > 0');
+      await conn.query('DELETE FROM store_daily_checkpoints WHERE id > 0');
+      await conn.query('DELETE FROM employee_daily_performance WHERE id > 0');
+      await conn.query('DELETE FROM tasks WHERE id > 0');
+      await conn.query('UPDATE tickets SET related_task_id = NULL WHERE related_task_id IS NOT NULL');
+      await conn.query('UPDATE module_activity_logs SET related_task_id = NULL WHERE related_task_id IS NOT NULL');
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1');
+    });
+
+    await recordAudit({
+      actorId: actor.id,
+      action: 'task.purge_all',
+      entityType: 'tasks',
+      entityId: 0,
+      after: { actorEmail: actor.email, actorRole: actor.roleSlug },
+      ip: context.ip, userAgent: context.userAgent,
+    });
+
+    const { broadcastEvent } = await import('../realtime/io.js');
+    broadcastEvent('tasks:purged', { purgedBy: actor.id, at: new Date().toISOString() });
+
+    return { success: true, message: 'All task data has been removed from the database.' };
   }
 }
 

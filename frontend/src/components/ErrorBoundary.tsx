@@ -42,12 +42,14 @@ export class ErrorBoundary extends Component<Props, State> {
       const key = 'err_boundary_chunk_reload';
       const last = parseInt(sessionStorage.getItem(key) || '0', 10);
       const now = Date.now();
-      if (now - last > 15000) {
+      if (now - last > 10000) {
         sessionStorage.setItem(key, String(now));
         // Give smooth visual feedback and auto-refresh the latest app bundle
         this.reloadTimer = setTimeout(() => {
-          window.location.reload();
-        }, 500);
+          const url = new URL(window.location.href);
+          url.searchParams.set('_v', String(now));
+          window.location.replace(url.toString());
+        }, 300);
       }
     }
   }

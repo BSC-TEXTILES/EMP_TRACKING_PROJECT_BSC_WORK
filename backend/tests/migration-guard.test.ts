@@ -34,7 +34,7 @@ describe('migration safety guard', () => {
 
   it('accepts every additive migration (the opt-in data wipe 020 excepted)', () => {
     const dir = path.resolve(__dirname, '../../database/migrations');
-    for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.sql') && !['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql'].includes(name))) {
+    for (const file of fs.readdirSync(dir).filter((name) => name.endsWith('.sql') && !['020_clear_old_data.sql', '021_clear_all_legacy_data.sql', '026_keep_only_gagan_cb.sql', '040_clear_all_tasks_data.sql'].includes(name))) {
       expect(() => assertNonDestructive(file, fs.readFileSync(path.join(dir, file), 'utf8')), file).not.toThrow();
     }
   });

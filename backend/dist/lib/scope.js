@@ -49,7 +49,10 @@ export async function assertEmployeeAccess(user, targetId, module = 'employees')
 }
 /** Managers may allocate work only inside their authorised reporting structure. */
 export async function assertCanAllocateTo(user, targetId) {
-    if (user.permissions.includes('tasks.view.all'))
+    const locations = await locationEmployeeIds(user);
+    if (locations !== null && !locations.includes(targetId))
+        throw ApiError.forbidden('This employee is outside your assigned locations.');
+    if (user.permissions.includes('tasks.view.all') && user.permissions.includes('tasks.assign'))
         return;
     if (!user.permissions.includes('tasks.assign'))
         throw ApiError.forbidden('You cannot allocate tasks');

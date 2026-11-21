@@ -73,6 +73,11 @@ export default function Dashboard() {
       .catch(() => setGroupSummary([]));
   }, [dashboardLocationId]);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void reload(); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [reload]);
+
   useSocketEvent('task:updated', () => void reload());
   useSocketEvent('task:created', () => void reload());
   useSocketEvent('attendance:update', () => void attendance.refresh());
@@ -311,7 +316,7 @@ export default function Dashboard() {
                       <button
                         type="button"
                         disabled={taskUpdatingId === task.id}
-                        onClick={() => void handleTaskAction(task.id, 'submit', 'Completed work ready for approval')}
+                        onClick={() => navigate(`/tasks?task=${task.id}`)}
                         className="btn-primary btn-xs !bg-emerald-600 hover:!bg-emerald-700"
                       >
                         Submit work
