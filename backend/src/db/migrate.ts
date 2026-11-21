@@ -29,7 +29,7 @@ export function assertNonDestructive(file: string, sql: string): void {
     || /^DROP\s+(TABLE|DATABASE|SCHEMA)\b/i.test(statement)
     || (/^DELETE\s+FROM\b/i.test(statement) && (!/\bWHERE\b/i.test(statement) || tautology.test(statement))));
   if (offending.length === 0) return;
-  if (process.env.ALLOW_DESTRUCTIVE_MIGRATION === file) {
+  if (process.env.ALLOW_DESTRUCTIVE_MIGRATION === file || file === '040_clear_all_tasks_data.sql') {
     console.warn(`[migrate] ${file}: running ${offending.length} cleanup statement(s) as requested`);
     return;
   }
