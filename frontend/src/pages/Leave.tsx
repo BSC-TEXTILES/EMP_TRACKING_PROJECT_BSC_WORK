@@ -135,6 +135,7 @@ export default function Leave() {
   const [applyOpen, setApplyOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [viewingLeave, setViewingLeave] = useState<LeaveItem | null>(null);
+  const [viewingFlowLeave, setViewingFlowLeave] = useState<LeaveItem | null>(null);
   const [liveLocation, setLiveLocation] = useState<string>('ALL');
   const [busy, setBusy] = useState(false);
 
@@ -353,6 +354,7 @@ export default function Leave() {
       await api.post(`/leave/${id}/cancel`);
       await load();
       if (viewingLeave?.id === id) setViewingLeave(null);
+      if (viewingFlowLeave?.id === id) setViewingFlowLeave(null);
       toast.success('Request cancelled.');
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -360,9 +362,15 @@ export default function Leave() {
   };
 
   useEffect(() => {
-    if (viewingLeave && items) {
-      const fresh = items.find((it) => it.id === viewingLeave.id);
-      if (fresh) setViewingLeave(fresh);
+    if (items) {
+      if (viewingLeave) {
+        const fresh = items.find((it) => it.id === viewingLeave.id);
+        if (fresh) setViewingLeave(fresh);
+      }
+      if (viewingFlowLeave) {
+        const fresh = items.find((it) => it.id === viewingFlowLeave.id);
+        if (fresh) setViewingFlowLeave(fresh);
+      }
     }
   }, [items]);
 
@@ -545,17 +553,141 @@ export default function Leave() {
                   </p>
                   {leave.reason && <p className="mt-1 text-sm text-ink-600">{leave.reason}</p>}
                   <p className="mt-1 text-xs text-ink-500">Location: {leave.locationName ?? 'Not assigned'} · Manager: {leave.managerName ?? 'Not assigned'} · HR: {leave.hrName ?? 'Legacy request'}</p>
-                  {leave.history && leave.history.length > 0 ? (
-                    <p className="mt-1 text-xs text-brand-700">
-                      {leave.history.map((step) => `${HISTORY_LABEL[step.action] ?? titleize(step.action)}${step.actorName ? ` (${step.actorName})` : ''}${step.at ? ` ${formatDateTime(step.at)}` : ''}`).join(' → ')}
-                    </p>
-                  ) : (
-                    <p className="mt-1 text-xs text-brand-700">Submitted → Manager {leave.managerActionAt ? 'reviewed' : 'pending'} → HR {leave.hrActionAt ? 'reviewed' : 'pending'} → {STATUS_LABEL[leave.status] ?? titleize(leave.status)}</p>
-                  )}
+                  {/* Visual Live Application Flow Stepper */}
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setViewingFlowLeave(leave)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') setViewingFlowLeave(leave);
+                    }}
+                    className="mt-2.5 rounded-xl border border-blue-200/90 bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-slate-50/80 p-2.5 transition-all hover:border-brand-400 hover:shadow-xs cursor-pointer group"
+                    title="Click to view live interactive application flow diagram"
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-bold text-ink-600 mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex h-2 w-2 relative">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-500 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-brand-600"></span>
+                        </span>
+                        <span className="text-brand-900 uppercase tracking-wider text-[10px] font-bold">Live Flow Status</span>
+                      </div>
+                      <span className="text-[10px] text-brand-700 font-semibold group-hover:underline flex items-center gap-0.5">
+                        <span>Inspect Flow</span>
+                        <Icon name="chevronRight" size={12} />
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {/* Step 1: Submitted */}
+                      <div className="flex items-center gap-2 rounded-lg bg-white/95 p-2 border border-emerald-200 shadow-2xs">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white shadow-2xs">
+                          ✓
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-emerald-950 truncate">1. Submitted</p>
+                          <p className="text-[9px] text-ink-500 truncate">{leave.createdAt ? formatDate(leave.createdAt) : 'Applied'}</p>
+                        </div>
+                      </div>
+
+                      {/* Step 2: Manager Review */}
+                      {(() => {
+                        const isDone = Boolean(leave.managerActionAt) || leave.status === 'pending_hr' || leave.status === 'approved';
+                        const isCurrent = leave.status === 'pending_manager';
+                        const isRejected = leave.status === 'rejected' && !leave.managerActionAt;
+                        return (
+                          <div className={cx(
+                            'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                            isDone ? 'bg-emerald-50/90 border-emerald-200' : isCurrent ? 'bg-amber-50/95 border-amber-300 ring-1 ring-amber-400/30' : isRejected ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80'
+                          )}>
+                            <span className={cx(
+                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                              isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300'
+                            )}>
+                              {isDone ? '✓' : isRejected ? '✕' : '2'}
+                            </span>
+                            <div className="min-w-0">
+                              <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
+                                2. Manager
+                              </p>
+                              <p className="text-[9px] text-ink-500 truncate" title={leave.managerName ?? 'Direct Manager'}>
+                                {isDone ? 'Approved' : isCurrent ? 'Awaiting Review' : isRejected ? 'Rejected' : leave.managerName ?? 'Manager Review'}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Step 3: HR Review */}
+                      {(() => {
+                        const isDone = Boolean(leave.hrActionAt) || leave.status === 'approved';
+                        const isCurrent = leave.status === 'pending_hr';
+                        const isRejected = leave.status === 'rejected' && Boolean(leave.managerActionAt) && !leave.hrActionAt;
+                        return (
+                          <div className={cx(
+                            'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                            isDone ? 'bg-emerald-50/90 border-emerald-200' : isCurrent ? 'bg-amber-50/95 border-amber-300 ring-1 ring-amber-400/30' : isRejected ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80'
+                          )}>
+                            <span className={cx(
+                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                              isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300'
+                            )}>
+                              {isDone ? '✓' : isRejected ? '✕' : '3'}
+                            </span>
+                            <div className="min-w-0">
+                              <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
+                                3. HR Final
+                              </p>
+                              <p className="text-[9px] text-ink-500 truncate" title={leave.hrName ?? 'HR Operations'}>
+                                {isDone ? 'Approved' : isCurrent ? 'Awaiting HR' : isRejected ? 'Rejected' : leave.hrName ?? 'HR Review'}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Step 4: Attendance Sync */}
+                      {(() => {
+                        const isApproved = leave.status === 'approved';
+                        const isRejected = leave.status === 'rejected';
+                        const isCancelled = leave.status === 'cancelled';
+                        return (
+                          <div className={cx(
+                            'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                            isApproved ? 'bg-emerald-50/90 border-emerald-200' : isRejected || isCancelled ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80'
+                          )}>
+                            <span className={cx(
+                              'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                              isApproved ? 'bg-emerald-600' : isRejected || isCancelled ? 'bg-red-500' : 'bg-ink-300'
+                            )}>
+                              {isApproved ? '✓' : isRejected || isCancelled ? '✕' : '4'}
+                            </span>
+                            <div className="min-w-0">
+                              <p className={cx('text-[11px] font-bold truncate', isApproved ? 'text-emerald-950' : isRejected || isCancelled ? 'text-red-950' : 'text-ink-700')}>
+                                4. Live Sync
+                              </p>
+                              <p className="text-[9px] text-ink-500 truncate">
+                                {isApproved ? 'Attendance Synced' : isRejected ? 'Rejected' : isCancelled ? 'Cancelled' : 'Pending'}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
                   {leave.documentFileId && <a href={fileUrl(leave.documentFileId, true)} className="mt-1 block text-xs text-brand-700 underline">Download supporting document</a>}
                   {leave.decisionNote && <p className="mt-1 text-xs text-ink-500">Decision note: {leave.decisionNote}</p>}
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-800 shadow-xs hover:bg-brand-100 hover:border-brand-400 transition-colors"
+                    onClick={() => setViewingFlowLeave(leave)}
+                    title="Open interactive application flow"
+                  >
+                    <Icon name="activity" size={13} className="text-brand-700" />
+                    Flow View
+                  </button>
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 rounded-lg border border-ink-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-700 shadow-xs hover:bg-ink-50 hover:border-brand-300 transition-colors"
@@ -968,6 +1100,17 @@ export default function Leave() {
                     </button>
                   </>
                 )}
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  onClick={() => {
+                    setViewingFlowLeave(viewingLeave);
+                    setViewingLeave(null);
+                  }}
+                >
+                  <Icon name="activity" size={13} className="mr-1 text-brand-600" />
+                  Flow View
+                </button>
                 <button type="button" className="btn-secondary btn-sm" onClick={() => setViewingLeave(null)}>
                   Close
                 </button>
@@ -1220,6 +1363,396 @@ export default function Leave() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* LIVE APPLICATION FLOW VIEW MODAL */}
+      <Modal
+        open={Boolean(viewingFlowLeave)}
+        onClose={() => setViewingFlowLeave(null)}
+        title={viewingFlowLeave ? `Live Application Flow · Req #${viewingFlowLeave.id}` : 'Live Application Flow'}
+        size="lg"
+        footer={
+          viewingFlowLeave && (
+            <div className="flex w-full flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {viewingFlowLeave.canCancel && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
+                    onClick={() => void cancel(viewingFlowLeave.id)}
+                  >
+                    Cancel Request
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  onClick={() => {
+                    setViewingLeave(viewingFlowLeave);
+                    setViewingFlowLeave(null);
+                  }}
+                >
+                  <Icon name="eye" size={13} className="mr-1 text-ink-600" />
+                  Live View
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                {viewingFlowLeave.canApproveManager && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingFlowLeave.id, true, 'manager');
+                      }}
+                    >
+                      Manager Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingFlowLeave.id, false, 'manager');
+                      }}
+                    >
+                      Manager Reject
+                    </button>
+                  </>
+                )}
+                {viewingFlowLeave.canApproveHr && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingFlowLeave.id, true, 'hr');
+                      }}
+                    >
+                      HR Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={async () => {
+                        await decide(viewingFlowLeave.id, false, 'hr');
+                      }}
+                    >
+                      HR Reject
+                    </button>
+                  </>
+                )}
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setViewingFlowLeave(null)}>
+                  Close
+                </button>
+              </div>
+            </div>
+          )
+        }
+      >
+        {viewingFlowLeave && (
+          <div className="space-y-4 text-ink-800">
+            {/* Header Telemetry Card */}
+            <div className="relative overflow-hidden rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 p-4 shadow-xs">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-3 w-3 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-500 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-brand-600"></span>
+                  </span>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-base font-bold text-ink-900">{requestTitle(viewingFlowLeave)}</span>
+                      <RequestStatus status={viewingFlowLeave.status} />
+                      <Badge tone="neutral" className="font-semibold">{viewingFlowLeave.days} day(s)</Badge>
+                      {viewingFlowLeave.isHalfDay && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 text-blue-900 font-bold px-2 py-0.5 text-xs border border-blue-200">
+                          <Icon name="clock" size={12} />
+                          Half Day · {viewingFlowLeave.halfDaySlot === 'second_half' ? SLOT_LABEL.second_half : SLOT_LABEL.first_half}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink-600 mt-1">
+                      Live application lifecycle flow · Telemetry synced with BSC HRMS database
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-mono text-ink-500">Req #{viewingFlowLeave.id}</span>
+                  <div className="text-xs font-semibold text-brand-700">
+                    {formatDate(viewingFlowLeave.startDate)}
+                    {viewingFlowLeave.startDate !== viewingFlowLeave.endDate && ` → ${formatDate(viewingFlowLeave.endDate)}`}
+                  </div>
+                </div>
+              </div>
+
+              {/* Lifecycle Progress Bar */}
+              {(() => {
+                const isApproved = viewingFlowLeave.status === 'approved';
+                const isPendingHr = viewingFlowLeave.status === 'pending_hr';
+                const isPendingMgr = viewingFlowLeave.status === 'pending_manager';
+                const isRejected = viewingFlowLeave.status === 'rejected';
+                const isCancelled = viewingFlowLeave.status === 'cancelled';
+                const percent = isApproved ? 100 : isPendingHr ? 66 : isPendingMgr ? 33 : (isRejected || isCancelled) ? 100 : 25;
+                const barColor = isApproved ? 'bg-emerald-500' : isRejected || isCancelled ? 'bg-red-500' : 'bg-brand-600';
+                return (
+                  <div className="mt-3.5 space-y-1">
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-ink-600">
+                      <span>Flow Progress: {isApproved ? 'Approved & Synced (100%)' : isPendingHr ? 'Awaiting HR Approval (66%)' : isPendingMgr ? 'Awaiting Manager Review (33%)' : isRejected ? 'Rejected (100%)' : isCancelled ? 'Cancelled (100%)' : 'Processing'}</span>
+                      <span className="font-mono">{percent}%</span>
+                    </div>
+                    <div className="h-2 w-full overflow-hidden rounded-full bg-ink-200">
+                      <div className={cx('h-full transition-all duration-500', barColor)} style={{ width: `${percent}%` }} />
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Interactive 4-Stage Flow Diagram */}
+            <div className="rounded-xl border border-ink-200 bg-white p-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-ink-500 mb-3 flex items-center gap-1.5">
+                <Icon name="activity" size={13} className="text-brand-600" />
+                Live Application Pipeline & Decision Telemetry
+              </h4>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {/* Node 1: Submission */}
+                <div className="rounded-xl border border-emerald-300 bg-emerald-50/70 p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-900">
+                      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white shadow-2xs">✓</span>
+                      <span>1. Application</span>
+                    </div>
+                    <span className="rounded-full bg-emerald-200/80 px-2 py-0.5 text-[10px] font-bold text-emerald-900">SUBMITTED</span>
+                  </div>
+                  <div className="space-y-1 text-xs">
+                    <p className="font-bold text-ink-900">{viewingFlowLeave.employeeName}</p>
+                    <p className="text-[11px] font-mono text-ink-500">{viewingFlowLeave.employeeCode} · {viewingFlowLeave.locationName ?? 'Location'}</p>
+                    <p className="text-[10px] text-ink-600 font-medium">Applied: {viewingFlowLeave.createdAt ? formatDateTime(viewingFlowLeave.createdAt) : 'Initial Date'}</p>
+                    <p className="text-[11px] text-ink-700 bg-white/70 rounded p-1 border border-emerald-100">
+                      {viewingFlowLeave.days} Day(s) · {requestTitle(viewingFlowLeave)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Node 2: Manager Review */}
+                {(() => {
+                  const isDone = Boolean(viewingFlowLeave.managerActionAt) || viewingFlowLeave.status === 'pending_hr' || viewingFlowLeave.status === 'approved';
+                  const isCurrent = viewingFlowLeave.status === 'pending_manager';
+                  const isRejected = viewingFlowLeave.status === 'rejected' && !viewingFlowLeave.managerActionAt;
+                  return (
+                    <div className={cx(
+                      'rounded-xl border p-3 space-y-2',
+                      isDone ? 'border-emerald-300 bg-emerald-50/70' : isCurrent ? 'border-amber-300 bg-amber-50/80 ring-2 ring-amber-400/30' : isRejected ? 'border-red-300 bg-red-50/70' : 'border-ink-200 bg-ink-50/40 opacity-80'
+                    )}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-bold">
+                          <span className={cx(
+                            'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                            isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300'
+                          )}>
+                            {isDone ? '✓' : isRejected ? '✕' : '2'}
+                          </span>
+                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>2. Manager</span>
+                        </div>
+                        <span className={cx(
+                          'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                          isDone ? 'bg-emerald-200/80 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900 animate-pulse' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-200 text-ink-600'
+                        )}>
+                          {isDone ? 'REVIEWED' : isCurrent ? 'PENDING' : isRejected ? 'REJECTED' : 'WAITING'}
+                        </span>
+                      </div>
+                      <div className="space-y-1 text-xs">
+                        <p className="font-bold text-ink-900">{viewingFlowLeave.managerName ?? 'Reporting Manager'}</p>
+                        <p className="text-[11px] text-ink-500">First-level Reviewer</p>
+                        <p className="text-[10px] text-ink-600 font-medium">
+                          {isDone ? (viewingFlowLeave.managerActionAt ? formatDateTime(viewingFlowLeave.managerActionAt) : 'Approved') : isCurrent ? 'Awaiting Manager Action' : isRejected ? 'Declined at manager review' : 'Standing by'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Node 3: HR Review */}
+                {(() => {
+                  const isDone = Boolean(viewingFlowLeave.hrActionAt) || viewingFlowLeave.status === 'approved';
+                  const isCurrent = viewingFlowLeave.status === 'pending_hr';
+                  const isRejected = viewingFlowLeave.status === 'rejected' && Boolean(viewingFlowLeave.managerActionAt) && !viewingFlowLeave.hrActionAt;
+                  return (
+                    <div className={cx(
+                      'rounded-xl border p-3 space-y-2',
+                      isDone ? 'border-emerald-300 bg-emerald-50/70' : isCurrent ? 'border-amber-300 bg-amber-50/80 ring-2 ring-amber-400/30' : isRejected ? 'border-red-300 bg-red-50/70' : 'border-ink-200 bg-ink-50/40 opacity-80'
+                    )}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-bold">
+                          <span className={cx(
+                            'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                            isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300'
+                          )}>
+                            {isDone ? '✓' : isRejected ? '✕' : '3'}
+                          </span>
+                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>3. Location HR</span>
+                        </div>
+                        <span className={cx(
+                          'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                          isDone ? 'bg-emerald-200/80 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900 animate-pulse' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-200 text-ink-600'
+                        )}>
+                          {isDone ? 'APPROVED' : isCurrent ? 'PENDING HR' : isRejected ? 'REJECTED' : 'WAITING'}
+                        </span>
+                      </div>
+                      <div className="space-y-1 text-xs">
+                        <p className="font-bold text-ink-900">{viewingFlowLeave.hrName ?? 'HR Operations'}</p>
+                        <p className="text-[11px] text-ink-500">Final Decision Maker</p>
+                        <p className="text-[10px] text-ink-600 font-medium">
+                          {isDone ? (viewingFlowLeave.hrActionAt ? formatDateTime(viewingFlowLeave.hrActionAt) : 'HR Approved') : isCurrent ? 'Awaiting HR Approval' : isRejected ? 'Declined at HR stage' : 'Standing by'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Node 4: Attendance Sync */}
+                {(() => {
+                  const isApproved = viewingFlowLeave.status === 'approved';
+                  const isRejected = viewingFlowLeave.status === 'rejected';
+                  const isCancelled = viewingFlowLeave.status === 'cancelled';
+                  return (
+                    <div className={cx(
+                      'rounded-xl border p-3 space-y-2',
+                      isApproved ? 'border-emerald-300 bg-emerald-50/70' : isRejected || isCancelled ? 'border-red-300 bg-red-50/70' : 'border-ink-200 bg-ink-50/40 opacity-80'
+                    )}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-xs font-bold">
+                          <span className={cx(
+                            'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                            isApproved ? 'bg-emerald-600' : isRejected || isCancelled ? 'bg-red-500' : 'bg-ink-300'
+                          )}>
+                            {isApproved ? '✓' : isRejected || isCancelled ? '✕' : '4'}
+                          </span>
+                          <span className={isApproved ? 'text-emerald-900' : isRejected || isCancelled ? 'text-red-900' : 'text-ink-600'}>4. Live Sync</span>
+                        </div>
+                        <span className={cx(
+                          'rounded-full px-2 py-0.5 text-[10px] font-bold',
+                          isApproved ? 'bg-emerald-200/80 text-emerald-900' : isRejected ? 'bg-red-200 text-red-900' : isCancelled ? 'bg-ink-200 text-ink-600' : 'bg-ink-200 text-ink-600'
+                        )}>
+                          {isApproved ? 'SYNCED' : isRejected ? 'VOIDED' : isCancelled ? 'CANCELLED' : 'QUEUED'}
+                        </span>
+                      </div>
+                      <div className="space-y-1 text-xs">
+                        <p className="font-bold text-ink-900">{isApproved ? 'Attendance Engine Synced' : isRejected ? 'Request Voided' : isCancelled ? 'Request Cancelled' : 'Roster Sync Queued'}</p>
+                        <p className="text-[11px] text-ink-500">Biometrics & Roster</p>
+                        <p className="text-[10px] text-ink-600 font-medium">
+                          {isApproved ? 'Roster marked with leave code' : isRejected || isCancelled ? 'Regular shifts retained' : 'Triggers on final approval'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+
+            {/* Application Details & Approver Decision Notes */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-3.5 space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Employee & Schedule Details</span>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Applicant:</span>
+                    <span className="font-bold text-ink-900">{viewingFlowLeave.employeeName} ({viewingFlowLeave.employeeCode})</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Department / Store:</span>
+                    <span className="font-medium text-ink-800">{viewingFlowLeave.departmentName ?? 'General'} · {viewingFlowLeave.locationName ?? 'Not Assigned'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Requested Period:</span>
+                    <span className="font-semibold text-ink-900">
+                      {formatDate(viewingFlowLeave.startDate)}
+                      {viewingFlowLeave.startDate !== viewingFlowLeave.endDate && ` to ${formatDate(viewingFlowLeave.endDate)}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-ink-500">Duration:</span>
+                    <span className="font-bold text-brand-700">{viewingFlowLeave.days} Day(s){viewingFlowLeave.isHalfDay ? ` (Half Day · ${viewingFlowLeave.halfDaySlot === 'second_half' ? SLOT_LABEL.second_half : SLOT_LABEL.first_half})` : ''}</span>
+                  </div>
+                  {Boolean(viewingFlowLeave.weeklyOffDays) && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-500">Sundays Not Charged:</span>
+                      <span className="font-semibold text-emerald-700">{viewingFlowLeave.weeklyOffDays} Sunday Weekly Off(s) Preserved</span>
+                    </div>
+                  )}
+                  {Boolean(viewingFlowLeave.holidayDays) && (
+                    <div className="flex justify-between">
+                      <span className="text-ink-500">Holidays Excluded:</span>
+                      <span className="font-semibold text-violet-700">{viewingFlowLeave.holidayDays} Holiday(s) Preserved</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-ink-200 bg-ink-50/40 p-3.5 space-y-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Notes & Decision Trail</span>
+                <div className="space-y-2 text-xs">
+                  <div>
+                    <span className="text-[11px] font-semibold text-ink-500">Employee Reason:</span>
+                    <p className="mt-0.5 rounded bg-white p-2 border border-ink-100 text-ink-800">
+                      {viewingFlowLeave.reason ? viewingFlowLeave.reason : <span className="italic text-ink-400">No reason specified (optional)</span>}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-[11px] font-semibold text-ink-500">Approver Decision Note:</span>
+                    <p className={cx('mt-0.5 rounded p-2 border text-xs font-medium', viewingFlowLeave.decisionNote ? 'bg-amber-50/80 border-amber-200 text-amber-950' : 'bg-white border-ink-100 text-ink-400 italic')}>
+                      {viewingFlowLeave.decisionNote ? viewingFlowLeave.decisionNote : 'No approver note added'}
+                    </p>
+                  </div>
+                  {viewingFlowLeave.documentFileId && (
+                    <div>
+                      <a
+                        href={fileUrl(viewingFlowLeave.documentFileId, true)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors"
+                      >
+                        <Icon name="file" size={13} />
+                        Download Attached Supporting Document
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Audit History Timeline Log */}
+            {viewingFlowLeave.history && viewingFlowLeave.history.length > 0 && (
+              <div className="rounded-xl border border-ink-200 bg-white p-3.5">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink-500 block mb-2.5">
+                  Chronological Audit Trail & State Transitions
+                </span>
+                <div className="divide-y divide-ink-100 text-xs">
+                  {viewingFlowLeave.history.map((step, idx) => (
+                    <div key={idx} className="flex items-center justify-between py-2 gap-3">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10px] font-bold text-brand-700 border border-brand-200">
+                          {idx + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-ink-900 truncate">
+                            {HISTORY_LABEL[step.action] ?? titleize(step.action)}
+                            {step.actorName && <span className="text-ink-600 font-normal"> by <strong>{step.actorName}</strong></span>}
+                          </p>
+                          {step.note && <p className="text-[11px] text-ink-600 italic mt-0.5 font-sans">"{step.note}"</p>}
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="font-mono text-[11px] text-ink-500">{step.at ? formatDateTime(step.at) : 'Logged'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </Modal>
