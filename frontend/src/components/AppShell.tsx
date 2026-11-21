@@ -22,13 +22,13 @@ interface NavItem {
   badge?: number;
 }
 
-const AVAILABILITY_OPTIONS: { key: string; label: string; color: string; dot: string }[] = [
-  { key: 'active', label: 'Available', color: 'text-emerald-700 bg-emerald-50 border-emerald-200', dot: 'bg-emerald-500' },
-  { key: 'away', label: 'Away', color: 'text-amber-700 bg-amber-50 border-amber-200', dot: 'bg-amber-500' },
-  { key: 'dnd', label: 'Do Not Disturb', color: 'text-rose-700 bg-rose-50 border-rose-200', dot: 'bg-rose-500' },
-  { key: 'in_meeting', label: 'In a Meeting', color: 'text-purple-700 bg-purple-50 border-purple-200', dot: 'bg-purple-500' },
-  { key: 'on_break', label: 'On Break', color: 'text-blue-700 bg-blue-50 border-blue-200', dot: 'bg-blue-500' },
-  { key: 'inactive', label: 'Inactive', color: 'text-slate-700 bg-slate-50 border-slate-200', dot: 'bg-slate-400' },
+const AVAILABILITY_OPTIONS: { key: string; label: string; color: string; dot: string; desc: string }[] = [
+  { key: 'active', label: 'Available', color: 'text-emerald-700 bg-emerald-50 border-emerald-200', dot: 'bg-emerald-500', desc: 'Ready for tasks & calls' },
+  { key: 'away', label: 'Away', color: 'text-amber-700 bg-amber-50 border-amber-200', dot: 'bg-amber-500', desc: 'Stepped away temporarily' },
+  { key: 'dnd', label: 'Do Not Disturb', color: 'text-rose-700 bg-rose-50 border-rose-200', dot: 'bg-rose-500', desc: 'Mute alerts & calls' },
+  { key: 'in_meeting', label: 'In a Meeting', color: 'text-purple-700 bg-purple-50 border-purple-200', dot: 'bg-purple-500', desc: 'In a scheduled call/meeting' },
+  { key: 'on_break', label: 'On Break', color: 'text-blue-700 bg-blue-50 border-blue-200', dot: 'bg-blue-500', desc: 'Taking a shift break' },
+  { key: 'inactive', label: 'Inactive', color: 'text-slate-700 bg-slate-50 border-slate-200', dot: 'bg-slate-400', desc: 'Off duty / not working' },
 ];
 
 export function AppShell() {
@@ -73,7 +73,10 @@ export function AppShell() {
     if (user?.id) {
       api.get<{ presence: { status: string; label: string } }>('/presence/me')
         .then((res) => {
-          if (res?.presence?.status) setPresenceStatus(res.presence.status);
+          if (res?.presence?.status) {
+            const normalized = res.presence.status === 'inactive_today' ? 'inactive' : res.presence.status;
+            setPresenceStatus(normalized);
+          }
         })
         .catch(() => undefined);
     }
@@ -88,14 +91,15 @@ export function AppShell() {
   useSocketEvent('presence:status', (raw: unknown) => {
     const data = raw as { employeeId?: number; status?: string } | null | undefined;
     if (data && typeof data === 'object' && data.employeeId === user?.id && data.status) {
-      setPresenceStatus(data.status);
+      const normalized = data.status === 'inactive_today' ? 'inactive' : data.status;
+      setPresenceStatus(normalized);
     }
   });
 
   const updatePresence = async (statusKey: string) => {
     try {
-      await api.put('/presence/me', { status: statusKey });
       setPresenceStatus(statusKey);
+      await api.put('/presence/me', { status: statusKey });
       const opt = AVAILABILITY_OPTIONS.find((o) => o.key === statusKey);
       toast.success(`Availability status set to ${opt?.label ?? statusKey}`);
     } catch (err) {
@@ -126,7 +130,8 @@ export function AppShell() {
   };
 
   const currentPresence = useMemo(() => {
-    return AVAILABILITY_OPTIONS.find((o) => o.key === presenceStatus) ?? AVAILABILITY_OPTIONS[0];
+    const normalized = presenceStatus === 'inactive_today' ? 'inactive' : presenceStatus;
+    return AVAILABILITY_OPTIONS.find((o) => o.key === normalized) ?? AVAILABILITY_OPTIONS[0];
   }, [presenceStatus]);
 
   useEffect(() => {
@@ -683,18 +688,44 @@ export function AppShell() {
                         </div>
                       </Link>
 
-                      {/* Availability Selector */}
+                      {/* Availability Status Selector */}
                       <div className="mt-3 pt-2.5 border-t border-ink-200/60" onMouseDown={(e) => e.stopPropagation()}>
-                        <label className="text-[10px] font-bold text-ink-500 uppercase tracking-wider block mb-1">Set Availability Status</label>
-                        <select
-                          value={presenceStatus}
-                          onChange={(e) => void updatePresence(e.target.value)}
-                          className="input text-xs py-1.5 px-2 w-full font-medium cursor-pointer"
-                        >
-                          {AVAILABILITY_OPTIONS.map((opt) => (
-                            <option key={opt.key} value={opt.key}>{opt.label}</option>
-                          ))}
-                        </select>
+                        <div className="flex items-center justify-between mb-2">
+                          <label className="text-[10px] font-bold text-ink-500 uppercase tracking-wider">Set Availability Status</label>
+                          <span className={cx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold border', currentPresence.color)}>
+                            <span className={cx('h-1.5 w-1.5 rounded-full', currentPresence.dot)} />
+                            {currentPresence.label}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {AVAILABILITY_OPTIONS.map((opt) => {
+                            const isSelected = presenceStatus === opt.key || (presenceStatus === 'inactive_today' && opt.key === 'inactive');
+                            return (
+                              <button
+                                key={opt.key}
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  void updatePresence(opt.key);
+                                }}
+                                className={cx(
+                                  'flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-left transition-all cursor-pointer border',
+                                  isSelected
+                                    ? 'bg-ink-900 text-white font-bold border-ink-900 shadow-xs'
+                                    : 'bg-white text-ink-700 hover:bg-ink-50 border-ink-200/70 font-medium',
+                                )}
+                                title={opt.desc}
+                              >
+                                <span className={cx('h-2 w-2 rounded-full shrink-0', opt.dot)} />
+                                <span className="truncate flex-1">{opt.label}</span>
+                                {isSelected && (
+                                  <Icon name="check" size={13} className="shrink-0 text-white" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
 

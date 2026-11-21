@@ -6,7 +6,7 @@ import { WebhookService } from './WebhookService.js';
 /** A recent authenticated request counts as connected, so a dropped socket is not "offline". */
 const RECENT_SEEN_SECONDS = 150;
 export const PRESENCE_LABELS = {
-    active: 'Active',
+    active: 'Available',
     away: 'Away',
     dnd: 'Do Not Disturb',
     in_meeting: 'In a Meeting',
@@ -14,13 +14,13 @@ export const PRESENCE_LABELS = {
     on_leave: 'On Leave',
     offline: 'Offline',
     logged_out: 'Logged out',
-    inactive_today: 'Inactive Today – Employee has not logged in.',
+    inactive_today: 'Inactive',
 };
 const IDLE_SETTING = 'presence.idle_away_minutes';
 const DEFAULT_IDLE_MINUTES = 5;
 /** Connected = live socket, or an authenticated request in the last couple of minutes. */
 function connected(row) {
-    return isOnline(Number(row.id)) || (Number(row.has_session) === 1 && row.seen_seconds !== null && Number(row.seen_seconds) <= RECENT_SEEN_SECONDS);
+    return isOnline(Number(row.id)) || (Number(row.has_session) === 1 && (row.seen_seconds === null || Number(row.seen_seconds) <= RECENT_SEEN_SECONDS));
 }
 const lastKnown = new Map();
 let initialised = false;
@@ -111,7 +111,7 @@ export class PresenceService {
     }
     static async setManual(employeeId, status) {
         const manual = status === 'active' ? null : status;
-        await execute('UPDATE employees SET availability_status = ?, availability_set_at = NOW(3), last_active_at = IF(? IS NULL, NOW(3), last_active_at) WHERE id = ?', [manual, manual, employeeId]);
+        await execute('UPDATE employees SET availability_status = ?, availability_set_at = NOW(3), last_active_at = NOW(3), last_seen_at = NOW(3) WHERE id = ?', [manual, employeeId]);
         return PresenceService.refresh(employeeId, 'manual');
     }
     /** Records that real user activity happened. Returns the new effective status. */

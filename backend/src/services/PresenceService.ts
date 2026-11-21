@@ -29,7 +29,7 @@ const RECENT_SEEN_SECONDS = 150;
 export type ManualStatus = 'away' | 'dnd' | 'in_meeting' | 'on_break' | 'inactive' | 'on_leave';
 
 export const PRESENCE_LABELS: Record<PresenceStatus, string> = {
-  active: 'Active',
+  active: 'Available',
   away: 'Away',
   dnd: 'Do Not Disturb',
   in_meeting: 'In a Meeting',
@@ -37,7 +37,7 @@ export const PRESENCE_LABELS: Record<PresenceStatus, string> = {
   on_leave: 'On Leave',
   offline: 'Offline',
   logged_out: 'Logged out',
-  inactive_today: 'Inactive Today – Employee has not logged in.',
+  inactive_today: 'Inactive',
 };
 
 const IDLE_SETTING = 'presence.idle_away_minutes';
@@ -68,7 +68,7 @@ interface PresenceRow {
 
 /** Connected = live socket, or an authenticated request in the last couple of minutes. */
 function connected(row: PresenceRow): boolean {
-  return isOnline(Number(row.id)) || (Number(row.has_session) === 1 && row.seen_seconds !== null && Number(row.seen_seconds) <= RECENT_SEEN_SECONDS);
+  return isOnline(Number(row.id)) || (Number(row.has_session) === 1 && (row.seen_seconds === null || Number(row.seen_seconds) <= RECENT_SEEN_SECONDS));
 }
 
 const lastKnown = new Map<number, PresenceStatus>();
@@ -163,8 +163,8 @@ export class PresenceService {
   static async setManual(employeeId: number, status: 'active' | ManualStatus): Promise<PresenceEntry> {
     const manual = status === 'active' ? null : status;
     await execute(
-      'UPDATE employees SET availability_status = ?, availability_set_at = NOW(3), last_active_at = IF(? IS NULL, NOW(3), last_active_at) WHERE id = ?',
-      [manual, manual, employeeId],
+      'UPDATE employees SET availability_status = ?, availability_set_at = NOW(3), last_active_at = NOW(3), last_seen_at = NOW(3) WHERE id = ?',
+      [manual, employeeId],
     );
     return PresenceService.refresh(employeeId, 'manual');
   }
