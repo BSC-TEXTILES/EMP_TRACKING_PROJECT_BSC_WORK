@@ -298,6 +298,132 @@ export class DailyReportService {
     emitToEmployee(Number(report.employee_id), 'report:updated', { id: reportId, date: report.report_date });
   }
 
+  static async update(
+    reportId: number,
+    user: AuthUser,
+    input: {
+      summary?: string;
+      problems?: string;
+      supportRequired?: string;
+      tomorrowPlan?: string;
+      workStart?: string;
+      workEnd?: string;
+      totalMinutes?: number;
+      tasksCompleted?: number;
+      tasksInProgress?: number;
+      tasksPending?: number;
+      status?: 'submitted' | 'approved' | 'changes_requested';
+      reviewNote?: string;
+    },
+    context: { ip?: string; userAgent?: string } = {},
+  ) {
+    const report = await queryOne<{ id: number; employee_id: number; status: string; report_date: string; full_name: string }>(
+      `SELECT r.id, r.employee_id, r.status, r.report_date, e.full_name
+       FROM daily_work_reports r
+       JOIN employees e ON e.id = r.employee_id
+       WHERE r.id = ?`,
+      [reportId],
+    );
+    if (!report) throw ApiError.notFound('Report not found');
+
+    const isAuthor = Number(report.employee_id) === user.id;
+    const isReviewer = user.permissions.includes('reports.review') || user.permissions.includes('reports.view.all');
+    if (!isAuthor && !isReviewer) {
+      throw ApiError.forbidden('You do not have permission to edit this report');
+    }
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (input.summary !== undefined) {
+      if (input.summary.trim().length < 10) throw ApiError.badRequest('Work completed summary must be at least 10 characters.');
+      updates.push('summary = ?');
+      params.push(input.summary.trim());
+    }
+    if (input.problems !== undefined) {
+      updates.push('problems = ?');
+      params.push(input.problems.trim() || null);
+    }
+    if (input.supportRequired !== undefined) {
+      updates.push('support_required = ?');
+      params.push(input.supportRequired.trim() || null);
+    }
+    if (input.tomorrowPlan !== undefined) {
+      updates.push('tomorrow_plan = ?');
+      params.push(input.tomorrowPlan.trim() || null);
+    }
+    if (input.tasksCompleted !== undefined) {
+      updates.push('tasks_completed = ?');
+      params.push(input.tasksCompleted);
+    }
+    if (input.tasksInProgress !== undefined) {
+      updates.push('tasks_in_progress = ?');
+      params.push(input.tasksInProgress);
+    }
+    if (input.tasksPending !== undefined) {
+      updates.push('tasks_pending = ?');
+      params.push(input.tasksPending);
+    }
+    if (input.totalMinutes !== undefined) {
+      updates.push('total_minutes = ?');
+      params.push(input.totalMinutes);
+    }
+
+    // Status handling: allowed to update status directly
+    let newStatus = report.status;
+    if (input.status) {
+      newStatus = input.status;
+      updates.push('status = ?');
+      params.push(newStatus);
+      if (newStatus === 'approved' || newStatus === 'changes_requested') {
+        updates.push('reviewed_by = ?, reviewed_at = NOW(3)');
+        params.push(user.id);
+      } else if (newStatus === 'submitted') {
+        updates.push('submitted_at = NOW(3)');
+      }
+    } else if (isAuthor && report.status === 'changes_requested') {
+      newStatus = 'submitted';
+      updates.push("status = 'submitted', submitted_at = NOW(3)");
+    }
+
+    if (input.reviewNote !== undefined) {
+      updates.push('review_note = ?');
+      params.push(input.reviewNote.trim() || null);
+    }
+
+    if (updates.length > 0) {
+      params.push(reportId);
+      await execute(`UPDATE daily_work_reports SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    await recordAudit({
+      actorId: user.id,
+      action: 'daily_report.updated',
+      entityType: 'daily_work_report',
+      entityId: reportId,
+      before: { status: report.status },
+      after: { status: newStatus, ...input },
+      ip: context.ip,
+      userAgent: context.userAgent,
+    });
+
+    emitToEmployee(Number(report.employee_id), 'report:updated', { id: reportId, date: report.report_date });
+
+    if (newStatus !== report.status) {
+      await NotificationService.notify({
+        employeeIds: [Number(report.employee_id)],
+        type: 'daily_report',
+        title: `Daily report status: ${newStatus.replace('_', ' ')}`,
+        body: `Report for ${report.report_date} was updated to ${newStatus.replace('_', ' ')}.`,
+        link: '/reports',
+        priority: 'normal',
+        actorId: user.id,
+      });
+    }
+
+    return DailyReportService.detail(reportId, user);
+  }
+
   static async todayStatus(employeeId: number) {
     const row = await queryOne<{ id: number; status: string; submitted_at: string | null; summary: string }>(
       'SELECT id, status, submitted_at, summary FROM daily_work_reports WHERE employee_id = ? AND report_date = ?',

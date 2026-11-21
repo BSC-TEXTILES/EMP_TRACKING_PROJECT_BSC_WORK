@@ -5,6 +5,7 @@ import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Badge, Card, EmptyState, Field, Modal, PageHeader, Pagination, SectionHeader, Skeleton, StatusBadge, Tabs } from '../components/ui';
+import { Icon } from '../components/icons';
 import { formatDate, formatDateTime, minutesToHours } from '../lib/format';
 
 interface Report {
@@ -51,6 +52,19 @@ export default function DailyReports() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [open, setOpen] = useState<Report | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({
+    summary: '',
+    problems: '',
+    supportRequired: '',
+    tomorrowPlan: '',
+    tasksCompleted: 0,
+    tasksInProgress: 0,
+    tasksPending: 0,
+    status: 'submitted',
+    reviewNote: '',
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
   const [todayReport, setTodayReport] = useState<Report | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -133,9 +147,58 @@ export default function DailyReports() {
       await api.post(`/reports/${id}/review`, { approve, note: note || undefined });
       toast.success(approve ? 'Report approved.' : 'Correction requested.');
       setOpen(null);
+      setIsEditing(false);
       await load();
     } catch (caught) {
       toast.error(errorMessage(caught));
+    }
+  };
+
+  const startEditing = (report: Report) => {
+    setEditForm({
+      summary: report.summary,
+      problems: report.problems ?? '',
+      supportRequired: report.supportRequired ?? '',
+      tomorrowPlan: report.tomorrowPlan ?? '',
+      tasksCompleted: report.tasksCompleted,
+      tasksInProgress: report.tasksInProgress,
+      tasksPending: report.tasksPending,
+      status: report.status,
+      reviewNote: report.reviewNote ?? '',
+    });
+    setIsEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!open) return;
+    if (!editForm.summary.trim() || editForm.summary.trim().length < 10) {
+      toast.error('Work completed summary must be at least 10 characters.');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const updated = await api.put<Report>(`/reports/${open.id}`, {
+        summary: editForm.summary.trim(),
+        problems: editForm.problems.trim() || undefined,
+        supportRequired: editForm.supportRequired.trim() || undefined,
+        tomorrowPlan: editForm.tomorrowPlan.trim() || undefined,
+        tasksCompleted: Number(editForm.tasksCompleted),
+        tasksInProgress: Number(editForm.tasksInProgress),
+        tasksPending: Number(editForm.tasksPending),
+        status: editForm.status as 'submitted' | 'approved' | 'changes_requested',
+        reviewNote: editForm.reviewNote.trim() || undefined,
+      });
+      toast.success('Report and status updated successfully.');
+      setOpen(updated);
+      setIsEditing(false);
+      await load();
+      if (todayReport && todayReport.id === open.id) {
+        setTodayReport(updated);
+      }
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -272,77 +335,229 @@ export default function DailyReports() {
 
       <Modal
         open={Boolean(open)}
-        onClose={() => setOpen(null)}
-        title={open ? `Report · ${open.reportDate}` : ''}
+        onClose={() => {
+          setOpen(null);
+          setIsEditing(false);
+        }}
+        title={open ? (isEditing ? `Edit Report · ${open.reportDate}` : `Report · ${open.reportDate}`) : ''}
         description={open ? `${open.employeeName} · ${open.designationTitle ?? ''} · ${open.departmentName ?? ''}` : undefined}
         size="lg"
         footer={
-          open && has('reports.review') && open.status !== 'approved' && open.employeeId !== user?.id ? (
-            <>
-              <button type="button" className="btn-secondary" onClick={() => void review(open.id, false)}>
-                Request correction
-              </button>
-              <button type="button" className="btn-primary" onClick={() => void review(open.id, true)}>
-                Approve report
-              </button>
-            </>
-          ) : (
-            <button type="button" className="btn-secondary" onClick={() => setOpen(null)}>
-              Close
-            </button>
+          open && (
+            isEditing ? (
+              <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-ink-500 font-medium">
+                  Update work report details and status
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    disabled={savingEdit}
+                    onClick={() => setIsEditing(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm"
+                    disabled={savingEdit}
+                    onClick={() => void saveEdit()}
+                  >
+                    {savingEdit ? 'Saving…' : 'Save & Update Status'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                <div>
+                  {(open.employeeId === user?.id || has('reports.review', 'reports.view.all')) && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors shadow-xs"
+                      onClick={() => startEditing(open)}
+                    >
+                      <Icon name="edit" size={13} />
+                      Edit & Update Status
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {has('reports.review') && open.status !== 'approved' && open.employeeId !== user?.id && (
+                    <>
+                      <button type="button" className="btn-secondary btn-sm" onClick={() => void review(open.id, false)}>
+                        Request correction
+                      </button>
+                      <button type="button" className="btn-primary btn-sm" onClick={() => void review(open.id, true)}>
+                        Approve report
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm"
+                    onClick={() => {
+                      setOpen(null);
+                      setIsEditing(false);
+                    }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            )
           )
         }
       >
         {open && (
-          <div className="space-y-4 text-sm">
-            <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg bg-ink-50 p-2.5">
-                <p className="text-xs text-ink-500">Working hours</p>
-                <p className="font-semibold text-ink-900">{minutesToHours(open.totalMinutes)}</p>
+          isEditing ? (
+            <div className="space-y-4 text-sm">
+              <div className="rounded-xl border border-brand-200 bg-brand-50/70 p-3.5 space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Status" hint="Update report status directly">
+                    <select
+                      className="input font-semibold text-ink-900"
+                      value={editForm.status}
+                      onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
+                    >
+                      <option value="submitted">Submitted (Under Review)</option>
+                      <option value="approved">Approved</option>
+                      <option value="changes_requested">Changes Requested</option>
+                    </select>
+                  </Field>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <Field label="Completed">
+                      <input
+                        type="number"
+                        className="input font-bold"
+                        min={0}
+                        value={editForm.tasksCompleted}
+                        onChange={(e) => setEditForm({ ...editForm, tasksCompleted: Math.max(0, Number(e.target.value)) })}
+                      />
+                    </Field>
+                    <Field label="In Progress">
+                      <input
+                        type="number"
+                        className="input font-bold"
+                        min={0}
+                        value={editForm.tasksInProgress}
+                        onChange={(e) => setEditForm({ ...editForm, tasksInProgress: Math.max(0, Number(e.target.value)) })}
+                      />
+                    </Field>
+                    <Field label="Pending">
+                      <input
+                        type="number"
+                        className="input font-bold"
+                        min={0}
+                        value={editForm.tasksPending}
+                        onChange={(e) => setEditForm({ ...editForm, tasksPending: Math.max(0, Number(e.target.value)) })}
+                      />
+                    </Field>
+                  </div>
+                </div>
               </div>
-              <div className="rounded-lg bg-ink-50 p-2.5">
-                <p className="text-xs text-ink-500">Tasks</p>
-                <p className="font-semibold text-ink-900">
-                  {open.tasksCompleted} / {open.tasksInProgress} / {open.tasksPending}
-                </p>
+
+              <Field label="Work completed today" required hint="Minimum 10 characters">
+                <textarea
+                  className="input min-h-[110px]"
+                  value={editForm.summary}
+                  onChange={(e) => setEditForm({ ...editForm, summary: e.target.value })}
+                  placeholder="Summarise the work you completed, decisions made and outcomes delivered."
+                  required
+                />
+              </Field>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Problems encountered (optional)">
+                  <textarea
+                    className="input min-h-[75px]"
+                    value={editForm.problems}
+                    placeholder="Mention any technical or operational delays…"
+                    onChange={(e) => setEditForm({ ...editForm, problems: e.target.value })}
+                  />
+                </Field>
+                <Field label="Support required (optional)">
+                  <textarea
+                    className="input min-h-[75px]"
+                    value={editForm.supportRequired}
+                    placeholder="Mention responsible department or manager…"
+                    onChange={(e) => setEditForm({ ...editForm, supportRequired: e.target.value })}
+                  />
+                </Field>
               </div>
-              <div className="rounded-lg bg-ink-50 p-2.5">
-                <p className="text-xs text-ink-500">Status</p>
-                <StatusBadge status={open.status} />
-              </div>
+
+              <Field label="Tomorrow's plan (optional)">
+                <textarea
+                  className="input min-h-[75px]"
+                  value={editForm.tomorrowPlan}
+                  placeholder="Tasks and activities planned for next day…"
+                  onChange={(e) => setEditForm({ ...editForm, tomorrowPlan: e.target.value })}
+                />
+              </Field>
+
+              {(has('reports.review', 'reports.view.all') || Boolean(open.reviewNote)) && (
+                <Field label="Reviewer note / remarks (optional)">
+                  <textarea
+                    className="input min-h-[60px] bg-amber-50/50 border-amber-200"
+                    value={editForm.reviewNote}
+                    placeholder="Add feedback or reason for correction request…"
+                    onChange={(e) => setEditForm({ ...editForm, reviewNote: e.target.value })}
+                  />
+                </Field>
+              )}
             </div>
-            <section>
-              <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Work completed</p>
-              <p className="mt-1 whitespace-pre-line text-ink-700">{open.summary}</p>
-            </section>
-            {open.problems && (
+          ) : (
+            <div className="space-y-4 text-sm">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg bg-ink-50 p-2.5">
+                  <p className="text-xs text-ink-500">Working hours</p>
+                  <p className="font-semibold text-ink-900">{minutesToHours(open.totalMinutes)}</p>
+                </div>
+                <div className="rounded-lg bg-ink-50 p-2.5">
+                  <p className="text-xs text-ink-500">Tasks</p>
+                  <p className="font-semibold text-ink-900">
+                    {open.tasksCompleted} / {open.tasksInProgress} / {open.tasksPending}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-ink-50 p-2.5">
+                  <p className="text-xs text-ink-500">Status</p>
+                  <StatusBadge status={open.status} />
+                </div>
+              </div>
               <section>
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Problems encountered</p>
-                <p className="mt-1 whitespace-pre-line text-ink-700">{open.problems}</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Work completed</p>
+                <p className="mt-1 whitespace-pre-line text-ink-700">{open.summary}</p>
               </section>
-            )}
-            {open.supportRequired && (
-              <section>
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Support required</p>
-                <p className="mt-1 whitespace-pre-line text-ink-700">{open.supportRequired}</p>
-              </section>
-            )}
-            {open.tomorrowPlan && (
-              <section>
-                <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Tomorrow&apos;s plan</p>
-                <p className="mt-1 whitespace-pre-line text-ink-700">{open.tomorrowPlan}</p>
-              </section>
-            )}
-            {open.reviewNote && (
-              <section className="rounded-lg bg-amber-50 p-3">
-                <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Reviewer note</p>
-                <p className="mt-1 text-amber-800">{open.reviewNote}</p>
-              </section>
-            )}
-            <p className="text-xs text-ink-400">
-              Submitted {formatDateTime(open.submittedAt)} {open.reviewedAt ? `· reviewed ${formatDateTime(open.reviewedAt)}` : ''}
-            </p>
-          </div>
+              {open.problems && (
+                <section>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Problems encountered</p>
+                  <p className="mt-1 whitespace-pre-line text-ink-700">{open.problems}</p>
+                </section>
+              )}
+              {open.supportRequired && (
+                <section>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Support required</p>
+                  <p className="mt-1 whitespace-pre-line text-ink-700">{open.supportRequired}</p>
+                </section>
+              )}
+              {open.tomorrowPlan && (
+                <section>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-ink-400">Tomorrow&apos;s plan</p>
+                  <p className="mt-1 whitespace-pre-line text-ink-700">{open.tomorrowPlan}</p>
+                </section>
+              )}
+              {open.reviewNote && (
+                <section className="rounded-lg bg-amber-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Reviewer note</p>
+                  <p className="mt-1 text-amber-800">{open.reviewNote}</p>
+                </section>
+              )}
+              <p className="text-xs text-ink-400">
+                Submitted {formatDateTime(open.submittedAt)} {open.reviewedAt ? `· reviewed ${formatDateTime(open.reviewedAt)}` : ''}
+              </p>
+            </div>
+          )
         )}
       </Modal>
     </div>

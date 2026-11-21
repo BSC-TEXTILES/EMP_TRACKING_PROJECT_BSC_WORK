@@ -50,6 +50,29 @@ reportsRouter.get('/:id', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     res.json(await DailyReportService.detail(id, currentUser(req)));
 }));
+reportsRouter.put('/:id', asyncHandler(async (req, res) => {
+    const id = intParam(req.params.id);
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        summary: z.string().min(10).max(8000).optional(),
+        problems: z.string().max(4000).optional(),
+        supportRequired: z.string().max(4000).optional(),
+        tomorrowPlan: z.string().max(4000).optional(),
+        workStart: z.string().max(8).optional(),
+        workEnd: z.string().max(8).optional(),
+        totalMinutes: z.number().int().min(0).max(1440).optional(),
+        tasksCompleted: z.number().int().min(0).optional(),
+        tasksInProgress: z.number().int().min(0).optional(),
+        tasksPending: z.number().int().min(0).optional(),
+        status: z.enum(['submitted', 'approved', 'changes_requested']).optional(),
+        reviewNote: z.string().max(1000).optional(),
+    }), req.body);
+    const result = await DailyReportService.update(id, user, body, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(result);
+}));
 reportsRouter.post('/:id/review', requireAny('reports.review'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
