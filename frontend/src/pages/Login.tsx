@@ -13,8 +13,8 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const toast = useToast();
-  const [identifier, setIdentifier] = useState('renukaradhya@bsctextiles.in');
-  const [password, setPassword] = useState('Workforce@2026');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -150,64 +150,6 @@ export default function Login() {
               {submitting ? 'Signing in…' : 'Sign in securely'}
             </button>
           </form>
-
-          <div className="mt-6 rounded-lg border border-ink-200 bg-ink-50/60 p-4">
-            <div className="flex items-center justify-between pb-2 mb-2 border-b border-ink-200 text-xs">
-              <span className="font-semibold text-ink-800">Super Admin Profile</span>
-              <span className="text-ink-500">Renukaradhya M S</span>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 text-sm">
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold text-ink-700">Login ID / Email</span>
-                  <button
-                    type="button"
-                    className="text-[11px] text-brand-700 hover:underline"
-                    onClick={() => {
-                      navigator.clipboard.writeText('renukaradhya@bsctextiles.in');
-                      toast.success('Login ID copied to clipboard');
-                    }}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <input className="input font-mono text-xs bg-white" readOnly value="renukaradhya@bsctextiles.in" />
-                <p className="mt-1 text-[11px] text-ink-400 font-mono">Employee Code: EMP-2201</p>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-semibold text-ink-700">Password</span>
-                  <button
-                    type="button"
-                    className="text-[11px] text-brand-700 hover:underline"
-                    onClick={() => {
-                      navigator.clipboard.writeText('Workforce@2026');
-                      toast.success('Password copied to clipboard');
-                    }}
-                  >
-                    Copy
-                  </button>
-                </div>
-                <input className="input font-mono text-xs bg-white font-semibold text-brand-900" readOnly value="Workforce@2026" />
-                <p className="mt-1 text-[11px] text-emerald-700">Ready to authenticate</p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              className="btn-primary btn-sm mt-4 w-full justify-center text-xs font-semibold py-2"
-              onClick={() => {
-                setIdentifier('renukaradhya@bsctextiles.in');
-                setPassword('Workforce@2026');
-                toast.success('Super Admin credentials auto-filled. Click Sign In.');
-              }}
-            >
-              <Icon name="check" size={14} />
-              <span>Auto-Fill Super Admin Credentials</span>
-            </button>
-          </div>
 
           <p className="mt-6 text-center text-sm text-ink-500">
             New employee?{' '}
