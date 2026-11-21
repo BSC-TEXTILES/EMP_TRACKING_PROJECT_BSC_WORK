@@ -112,6 +112,11 @@ const DESIGNATIONS: { title: string; dept: string; level: number }[] = [
   { title: 'Visual Merchandiser', dept: 'RETAIL', level: 6 },
   { title: 'Customer Relationship Executive', dept: 'RETAIL', level: 6 },
   { title: 'Store Support Executive', dept: 'RETAIL', level: 3 },
+  { title: 'Section Supervisor', dept: 'RETAIL', level: 10 },
+  { title: 'Billing Supervisor', dept: 'RETAIL', level: 10 },
+  { title: 'Cashier Supervisor', dept: 'RETAIL', level: 10 },
+  { title: 'Warehouse Manager', dept: 'RETAIL', level: 13 },
+  { title: 'Warehouse Staff', dept: 'RETAIL', level: 4 },
   // Finance
   { title: 'Finance Manager', dept: 'FIN', level: 14 },
   { title: 'Accounts Executive', dept: 'FIN', level: 8 },
@@ -140,6 +145,45 @@ const EMPLOYEES: {
 }[] = [
   { code: 'EMP-1001', name: 'Renukaradhya', email: 'renukaradhya@bsctextiles.in', mobile: '9876543210', role: 'super_admin', dept: 'EXEC', designation: 'Managing Director', manager: null, location: 'BEL', status: 'active' },
   { code: 'EMP-1002', name: 'Chetan TK', email: 'chetan.tk@bsctextiles.in', mobile: '9876543211', role: 'hr_manager', dept: 'HR', designation: 'HR Manager', manager: 'EMP-1001', location: 'BEL', status: 'active' },
+
+  // Davanagere (DAV) - Store Hierarchy
+  { code: 'EMP-DAV-001', name: 'Ramesh Patil', email: 'ramesh.patil@bsctextiles.in', mobile: '9845011001', role: 'store_manager', dept: 'RETAIL', designation: 'Store Manager', manager: 'EMP-1001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-002', name: 'Suresh Kumar', email: 'suresh.kumar@bsctextiles.in', mobile: '9845011002', role: 'manager', dept: 'RETAIL', designation: 'Assistant Store Manager', manager: 'EMP-DAV-001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-003', name: 'Manjunath B', email: 'manjunath.b@bsctextiles.in', mobile: '9845011003', role: 'manager', dept: 'RETAIL', designation: 'Floor Manager', manager: 'EMP-DAV-002', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-004', name: 'Venkatesh N', email: 'venkatesh.n@bsctextiles.in', mobile: '9845011004', role: 'team_leader', dept: 'RETAIL', designation: 'Section Supervisor', manager: 'EMP-DAV-003', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-005', name: 'Rajesh Gowda', email: 'rajesh.gowda@bsctextiles.in', mobile: '9845011005', role: 'team_leader', dept: 'RETAIL', designation: 'Billing Supervisor', manager: 'EMP-DAV-001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-006', name: 'Anand Rao', email: 'anand.rao@bsctextiles.in', mobile: '9845011006', role: 'team_leader', dept: 'RETAIL', designation: 'Cashier Supervisor', manager: 'EMP-DAV-001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-007', name: 'Praveen K', email: 'praveen.k@bsctextiles.in', mobile: '9845011007', role: 'employee', dept: 'RETAIL', designation: 'Cashier', manager: 'EMP-DAV-006', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-008', name: 'Sneha Hegde', email: 'sneha.hegde@bsctextiles.in', mobile: '9845011008', role: 'manager', dept: 'OPS', designation: 'CRM Manager', manager: 'EMP-DAV-001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-009', name: 'Deepa K', email: 'deepa.k@bsctextiles.in', mobile: '9845011009', role: 'employee', dept: 'OPS', designation: 'CRM Executive', manager: 'EMP-DAV-008', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-010', name: 'Raghavendra T', email: 'raghavendra.t@bsctextiles.in', mobile: '9845011010', role: 'manager', dept: 'RETAIL', designation: 'Warehouse Manager', manager: 'EMP-DAV-001', location: 'DAV', status: 'active' },
+  { code: 'EMP-DAV-011', name: 'Naveen S', email: 'naveen.s@bsctextiles.in', mobile: '9845011011', role: 'employee', dept: 'RETAIL', designation: 'Warehouse Staff', manager: 'EMP-DAV-010', location: 'DAV', status: 'active' },
+
+  // Shivamogga (SHI) - Store Hierarchy
+  { code: 'EMP-SHI-001', name: 'Kiran Joshi', email: 'kiran.joshi@bsctextiles.in', mobile: '9845022001', role: 'store_manager', dept: 'RETAIL', designation: 'Store Manager', manager: 'EMP-1001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-002', name: 'Harish Naik', email: 'harish.naik@bsctextiles.in', mobile: '9845022002', role: 'manager', dept: 'RETAIL', designation: 'Assistant Store Manager', manager: 'EMP-SHI-001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-003', name: 'Santosh Bhat', email: 'santosh.bhat@bsctextiles.in', mobile: '9845022003', role: 'manager', dept: 'RETAIL', designation: 'Floor Manager', manager: 'EMP-SHI-002', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-004', name: 'Mallikarjun M', email: 'mallikarjun.m@bsctextiles.in', mobile: '9845022004', role: 'team_leader', dept: 'RETAIL', designation: 'Section Supervisor', manager: 'EMP-SHI-003', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-005', name: 'Vinay Kumar', email: 'vinay.kumar@bsctextiles.in', mobile: '9845022005', role: 'team_leader', dept: 'RETAIL', designation: 'Billing Supervisor', manager: 'EMP-SHI-001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-006', name: 'Prashanth D', email: 'prashanth.d@bsctextiles.in', mobile: '9845022006', role: 'team_leader', dept: 'RETAIL', designation: 'Cashier Supervisor', manager: 'EMP-SHI-001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-007', name: 'Mohan Rao', email: 'mohan.rao@bsctextiles.in', mobile: '9845022007', role: 'employee', dept: 'RETAIL', designation: 'Cashier', manager: 'EMP-SHI-006', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-008', name: 'Pooja Sharma', email: 'pooja.sharma@bsctextiles.in', mobile: '9845022008', role: 'manager', dept: 'OPS', designation: 'CRM Manager', manager: 'EMP-SHI-001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-009', name: 'Priya M', email: 'priya.m@bsctextiles.in', mobile: '9845022009', role: 'employee', dept: 'OPS', designation: 'CRM Executive', manager: 'EMP-SHI-008', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-010', name: 'Basavaraj K', email: 'basavaraj.k@bsctextiles.in', mobile: '9845022010', role: 'manager', dept: 'RETAIL', designation: 'Warehouse Manager', manager: 'EMP-SHI-001', location: 'SHI', status: 'active' },
+  { code: 'EMP-SHI-011', name: 'Manjunath K', email: 'manjunath.k@bsctextiles.in', mobile: '9845022011', role: 'employee', dept: 'RETAIL', designation: 'Warehouse Staff', manager: 'EMP-SHI-010', location: 'SHI', status: 'active' },
+
+  // Belagavi (BEL) - Store Hierarchy
+  { code: 'EMP-BEL-001', name: 'Shivanand Kulkarni', email: 'shivanand.kulkarni@bsctextiles.in', mobile: '9845033001', role: 'store_manager', dept: 'RETAIL', designation: 'Store Manager', manager: 'EMP-1001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-002', name: 'Sachin Desai', email: 'sachin.desai@bsctextiles.in', mobile: '9845033002', role: 'manager', dept: 'RETAIL', designation: 'Assistant Store Manager', manager: 'EMP-BEL-001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-003', name: 'Ganesh Patil', email: 'ganesh.patil@bsctextiles.in', mobile: '9845033003', role: 'manager', dept: 'RETAIL', designation: 'Floor Manager', manager: 'EMP-BEL-002', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-004', name: 'Vijay Shinde', email: 'vijay.shinde@bsctextiles.in', mobile: '9845033004', role: 'team_leader', dept: 'RETAIL', designation: 'Section Supervisor', manager: 'EMP-BEL-003', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-005', name: 'Nitin Jadhav', email: 'nitin.jadhav@bsctextiles.in', mobile: '9845033005', role: 'team_leader', dept: 'RETAIL', designation: 'Billing Supervisor', manager: 'EMP-BEL-001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-006', name: 'Chetan More', email: 'chetan.more@bsctextiles.in', mobile: '9845033006', role: 'team_leader', dept: 'RETAIL', designation: 'Cashier Supervisor', manager: 'EMP-BEL-001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-007', name: 'Rahul Chavan', email: 'rahul.chavan@bsctextiles.in', mobile: '9845033007', role: 'employee', dept: 'RETAIL', designation: 'Cashier', manager: 'EMP-BEL-006', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-008', name: 'Kavita Kadam', email: 'kavita.kadam@bsctextiles.in', mobile: '9845033008', role: 'manager', dept: 'OPS', designation: 'CRM Manager', manager: 'EMP-BEL-001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-009', name: 'Anjali Pawar', email: 'anjali.pawar@bsctextiles.in', mobile: '9845033009', role: 'employee', dept: 'OPS', designation: 'CRM Executive', manager: 'EMP-BEL-008', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-010', name: 'Prakash Gaikwad', email: 'prakash.gaikwad@bsctextiles.in', mobile: '9845033010', role: 'manager', dept: 'RETAIL', designation: 'Warehouse Manager', manager: 'EMP-BEL-001', location: 'BEL', status: 'active' },
+  { code: 'EMP-BEL-011', name: 'Rohit Mane', email: 'rohit.mane@bsctextiles.in', mobile: '9845033011', role: 'employee', dept: 'RETAIL', designation: 'Warehouse Staff', manager: 'EMP-BEL-010', location: 'BEL', status: 'active' },
 ];
 
 async function seedReferenceData(): Promise<void> {

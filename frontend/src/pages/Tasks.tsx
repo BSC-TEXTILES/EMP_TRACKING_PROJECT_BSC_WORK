@@ -105,6 +105,7 @@ export default function Tasks() {
   const [createOpen, setCreateOpen] = useState(params.get('create') === '1');
   const [busy, setBusy] = useState(false);
   const [generatingDaily, setGeneratingDaily] = useState(false);
+  const [generatingStore, setGeneratingStore] = useState(false);
 
   // Detail panel
   const [detail, setDetail] = useState<TaskSummary | null>(null);
@@ -322,6 +323,22 @@ export default function Tasks() {
     }
   };
 
+  const handleGenerateStore = async () => {
+    setGeneratingStore(true);
+    try {
+      const res = await api.post<{ employeesCount: number; createdTotal: number }>(
+        '/tasks/daily/generate-store',
+        { locationId: locationId ? Number(locationId) : null, force: true },
+      );
+      toast.success(`Generated SOP tasks for ${res.employeesCount} employee(s) (${res.createdTotal} new tasks created).`);
+      await reload();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setGeneratingStore(false);
+    }
+  };
+
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!submitTarget) return;
@@ -462,6 +479,18 @@ export default function Tasks() {
               <Icon name="refresh" size={16} className={generatingDaily ? 'animate-spin' : ''} />
               {generatingDaily ? 'Generating…' : "Generate today's tasks"}
             </button>
+            {canSeeTeam && (
+              <button
+                type="button"
+                className="btn-secondary h-10 border-brand-300 text-brand-700 hover:bg-brand-50 inline-flex items-center gap-1.5"
+                disabled={generatingStore}
+                onClick={() => void handleGenerateStore()}
+                title="Generate today's SOP tasks for all employees across the selected store"
+              >
+                <Icon name="users" size={16} className={generatingStore ? 'animate-spin' : ''} />
+                {generatingStore ? 'Assigning Store SOPs…' : 'Generate Store SOPs'}
+              </button>
+            )}
             <button type="button" className="btn-secondary h-10" onClick={() => downloadReport({ type: 'tasks', format: 'xlsx', locationId: locationId || undefined })}>
               <Icon name="download" size={16} />
               Export report

@@ -97,6 +97,7 @@ employeesRouter.get('/:id', asyncHandler(async (req, res) => {
 employeesRouter.patch('/:id', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
+    const canManageEmployees = user.permissions.includes('employees.manage');
     const body = parseBody(z.object({
         fullName: z.string().min(2).max(160).optional(),
         mobile: z.string().trim().regex(/^[0-9]{10}$/, 'Mobile number must be exactly 10 digits').optional(),
@@ -104,7 +105,12 @@ employeesRouter.patch('/:id', asyncHandler(async (req, res) => {
         emergencyContact: z.string().max(64).optional(),
         dateOfBirth: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         photoUrl: z.string().max(255).optional(),
+        employeeCode: canManageEmployees ? z.string().max(24).optional() : z.undefined(),
     }), req.body);
+    // Remove employeeCode from body if user doesn't have permission
+    if (!canManageEmployees) {
+        delete body.employeeCode;
+    }
     await EmployeeService.update(id, user, body);
     res.json({ ok: true });
 }));

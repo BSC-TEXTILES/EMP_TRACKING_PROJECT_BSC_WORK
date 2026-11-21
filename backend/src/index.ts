@@ -321,23 +321,13 @@ async function ensureDatabaseReady(): Promise<void> {
           PRIMARY KEY (id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
 
-        // Remove all task data as requested (wipe all task instances and timeline checkpoints)
+        // Ensure Master SOP task templates are ready
         try {
-          await execute(`SET FOREIGN_KEY_CHECKS = 0`);
-          await execute(`DELETE FROM task_time_logs WHERE id > 0`);
-          await execute(`DELETE FROM task_attachments WHERE id > 0`);
-          await execute(`DELETE FROM task_comments WHERE id > 0`);
-          await execute(`DELETE FROM task_subtasks WHERE id > 0`);
-          await execute(`DELETE FROM task_assignments WHERE task_id > 0`);
-          await execute(`DELETE FROM store_daily_checkpoints WHERE id > 0`);
-          await execute(`DELETE FROM employee_daily_performance WHERE id > 0`);
-          await execute(`DELETE FROM tasks WHERE id > 0`);
-          await execute(`UPDATE tickets SET related_task_id = NULL WHERE related_task_id IS NOT NULL`);
-          await execute(`UPDATE module_activity_logs SET related_task_id = NULL WHERE related_task_id IS NOT NULL`);
-          await execute(`SET FOREIGN_KEY_CHECKS = 1`);
-          console.log('[startup] Verified all task records purged.');
-        } catch (purgeErr) {
-          console.warn('[startup] Task purge check note:', purgeErr);
+          const { DailyTaskService } = await import('./services/DailyTaskService.js');
+          await DailyTaskService.ensureTemplatesExist();
+          console.log('[startup] Master SOP task templates verified.');
+        } catch (sopErr) {
+          console.warn('[startup] SOP templates initialization note:', sopErr);
         }
 
         try {

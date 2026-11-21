@@ -60,7 +60,7 @@ export default function Employees() {
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
   const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', groupId: '', teamLeaderId: '', employmentType: '' });
-  const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '' });
+  const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '', employeeCode: '' });
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -266,6 +266,7 @@ export default function Employees() {
         address: result.address ?? '',
         emergencyContact: result.emergencyContact ?? '',
         dateOfBirth: result.dateOfBirth ?? '',
+        employeeCode: result.employeeCode,
       });
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -652,6 +653,7 @@ export default function Employees() {
                   <div className="rounded-xl border border-ink-200 bg-white p-4">
                     <SectionHeader title="Contact & Personal Information" />
                     <dl className="mt-3 space-y-2 text-sm">
+                      <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Employee Number</dt><dd className="font-medium text-ink-800 font-mono">{detail.employeeCode}</dd></div>
                       <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Email ID</dt><dd className="font-medium text-ink-800">{detail.email}</dd></div>
                       <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Mobile No</dt><dd className="font-medium text-ink-800">{detail.mobile}</dd></div>
                       <div className="flex justify-between gap-2 py-1 border-b border-ink-100"><dt className="text-ink-500">Address</dt><dd className="font-medium text-ink-800">{detail.address || '—'}</dd></div>
@@ -689,13 +691,18 @@ export default function Employees() {
                 <form className="space-y-4 rounded-xl border border-ink-200 bg-white p-4 shadow-2xs" onSubmit={async (event) => {
                   event.preventDefault();
                   try {
-                    await api.patch(`/employees/${detail.id}`, {
+                    const payload: Record<string, unknown> = {
                       fullName: editForm.fullName,
                       mobile: editForm.mobile,
                       address: editForm.address || undefined,
                       emergencyContact: editForm.emergencyContact || undefined,
                       dateOfBirth: editForm.dateOfBirth || undefined,
-                    });
+                    };
+                    // Only include employeeCode if user has permission to manage employees
+                    if (has('employees.manage')) {
+                      payload.employeeCode = editForm.employeeCode;
+                    }
+                    await api.patch(`/employees/${detail.id}`, payload);
                     toast.success('Profile details updated successfully.');
                     await openDetail(detail.id, 'edit');
                     await load();
@@ -707,6 +714,17 @@ export default function Employees() {
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Full name" required><input className="input" value={editForm.fullName} onChange={(event) => setEditForm({ ...editForm, fullName: event.target.value })} required /></Field>
+                    <Field label={has('employees.manage') ? 'Employee Number *' : 'Employee Number'} required={has('employees.manage')}>
+                      <input
+                        className="input font-mono"
+                        value={editForm.employeeCode}
+                        onChange={(event) => setEditForm({ ...editForm, employeeCode: event.target.value.toUpperCase() })}
+                        placeholder="EMP-XXXX"
+                        readOnly={!has('employees.manage')}
+                        aria-readonly={!has('employees.manage')}
+                      />
+                      {!has('employees.manage') && <p className="mt-1 text-xs text-ink-400">Only administrators can modify the employee number</p>}
+                    </Field>
                     <Field label="Mobile (10 digits)" required><input className="input" type="tel" inputMode="numeric" maxLength={10} value={editForm.mobile} onChange={(event) => setEditForm({ ...editForm, mobile: event.target.value.replace(/\D/g, '').slice(0, 10) })} required /></Field>
                     <Field label="Address"><input className="input" value={editForm.address} onChange={(event) => setEditForm({ ...editForm, address: event.target.value })} placeholder="Residential or work address" /></Field>
                     <Field label="Emergency contact"><input className="input" value={editForm.emergencyContact} onChange={(event) => setEditForm({ ...editForm, emergencyContact: event.target.value })} placeholder="Contact name & phone" /></Field>

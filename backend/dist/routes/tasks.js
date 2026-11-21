@@ -83,6 +83,15 @@ tasksRouter.post('/daily/generate', asyncHandler(async (req, res) => {
     const result = await DailyTaskService.generateDailyTasksForEmployee(targetEmployeeId, user, { force: body.force });
     res.json(result);
 }));
+tasksRouter.post('/daily/generate-store', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        locationId: z.number().int().positive().nullable().optional(),
+        force: z.boolean().optional(),
+    }), req.body);
+    const result = await DailyTaskService.generateDailyTasksForStore(body.locationId ?? null, user, { force: body.force });
+    res.json(result);
+}));
 tasksRouter.get('/daily/dashboard', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const storeId = req.query.storeId ? intParam(String(req.query.storeId), 'storeId') : undefined;

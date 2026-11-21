@@ -367,6 +367,7 @@ export class EmployeeService {
       emergencyContact?: string;
       dateOfBirth?: string;
       photoUrl?: string;
+      employeeCode?: string;
     },
   ) {
     const target = await queryOne<Record<string, unknown>>('SELECT * FROM employees WHERE id = ?', [employeeId]);
@@ -375,6 +376,8 @@ export class EmployeeService {
     if (!isSelf && !actor.permissions.includes('employees.manage')) {
       throw ApiError.forbidden('You cannot edit this employee record.');
     }
+    // Only allow employees.manage to change employeeCode
+    const canManageEmployees = actor.permissions.includes('employees.manage');
     const fields: string[] = [];
     const params: unknown[] = [];
     if (input.fullName) {
@@ -402,6 +405,19 @@ export class EmployeeService {
     if (input.photoUrl !== undefined) {
       fields.push('photo_url = ?');
       params.push(input.photoUrl);
+    }
+    if (input.employeeCode !== undefined && canManageEmployees) {
+      const code = input.employeeCode.trim().toUpperCase();
+      if (!code) {
+        throw ApiError.badRequest('Employee number cannot be empty.');
+      }
+      if (!/^EMP-\d+$/.test(code)) {
+        throw ApiError.badRequest('Employee number must follow the format EMP-XXXX (e.g., EMP-2209).');
+      }
+      const duplicate = await queryOne<{ id: number }>('SELECT id FROM employees WHERE employee_code = ? AND id <> ?', [code, employeeId]);
+      if (duplicate) throw ApiError.conflict('That employee number is already assigned to another employee.');
+      fields.push('employee_code = ?');
+      params.push(code);
     }
     if (fields.length === 0) throw ApiError.badRequest('Nothing to update.');
     await execute(`UPDATE employees SET ${fields.join(', ')} WHERE id = ?`, [...params, employeeId]);
