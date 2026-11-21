@@ -419,8 +419,8 @@ export class EmployeeService {
       if (!code) {
         throw ApiError.badRequest('Employee number cannot be empty.');
       }
-      if (!/^EMP-\d+$/.test(code)) {
-        throw ApiError.badRequest('Employee number must follow the format EMP-XXXX (e.g., EMP-2209).');
+      if (!/^EMP(-[A-Z0-9]{2,5})?-\d{1,6}$/i.test(code)) {
+        throw ApiError.badRequest('Employee number must follow the format EMP-DVG-1604 (e.g. EMP-DVG-1604, EMP-BLG-1601, EMP-SMG-1601).');
       }
       const duplicate = await queryOne<{ id: number }>('SELECT id FROM employees WHERE employee_code = ? AND id <> ?', [code, employeeId]);
       if (duplicate) throw ApiError.conflict('That employee number is already assigned to another employee.');
@@ -683,15 +683,40 @@ export class EmployeeService {
       if (!grp) throw ApiError.badRequest('Selected group does not belong to the selected store location.');
     }
 
-    let code = input.employeeCode?.trim();
-    if (!code) {
-      const seq = await queryOne<{ setting_value: string }>("SELECT setting_value FROM system_settings WHERE setting_key = 'employee_code_seq'");
-      const next = Number(seq?.setting_value ?? 0) + 1;
-      await execute(
-        "INSERT INTO system_settings (setting_key, setting_value) VALUES ('employee_code_seq', ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)",
-        [String(next)],
+    let code = input.employeeCode?.trim().toUpperCase();
+    if (code) {
+      if (!/^EMP(-[A-Z0-9]{2,5})?-\d{1,6}$/i.test(code)) {
+        throw ApiError.badRequest('Employee number must follow the format EMP-DVG-1604 (e.g. EMP-DVG-1604, EMP-BLG-1601, EMP-SMG-1601).');
+      }
+      const duplicate = await queryOne<{ id: number }>('SELECT id FROM employees WHERE employee_code = ?', [code]);
+      if (duplicate) throw ApiError.conflict('That employee number is already assigned to another employee.');
+    } else {
+      let locCode = 'DVG';
+      if (input.locationId) {
+        const loc = await queryOne<{ code: string }>('SELECT code FROM locations WHERE id = ?', [input.locationId]);
+        if (loc) {
+          if (loc.code === 'DAV' || loc.code === 'DVG') locCode = 'DVG';
+          else if (loc.code === 'BEL' || loc.code === 'BLG') locCode = 'BLG';
+          else if (loc.code === 'SHI' || loc.code === 'SMG') locCode = 'SMG';
+          else if (loc.code === 'HQ') locCode = 'HQ';
+          else if (loc.code === 'ALL') locCode = 'DVG';
+          else locCode = loc.code.replace(/[^A-Z0-9]/g, '').slice(0, 4);
+        }
+      }
+      const maxRow = await queryOne<{ max_code: string }>(
+        'SELECT employee_code AS max_code FROM employees WHERE employee_code LIKE ? ORDER BY id DESC LIMIT 1',
+        [`EMP-${locCode}-%`],
       );
-      code = `EMP-${1000 + next}`;
+      let nextNum = 1601;
+      if (maxRow?.max_code) {
+        const parts = maxRow.max_code.split('-');
+        const parsed = parseInt(parts[parts.length - 1], 10);
+        if (!isNaN(parsed)) nextNum = Math.max(nextNum, parsed + 1);
+      }
+      while (await queryOne('SELECT id FROM employees WHERE employee_code = ?', [`EMP-${locCode}-${nextNum}`])) {
+        nextNum++;
+      }
+      code = `EMP-${locCode}-${nextNum}`;
     }
 
     const result = await execute(

@@ -94,7 +94,7 @@ export default function Login() {
           <form onSubmit={submit} className="mt-6 space-y-4">
             <div>
               <label className="label" htmlFor="identifier">
-                Employee ID, email or mobile
+                Employee Number *, email or mobile
               </label>
               <input
                 id="identifier"
@@ -102,7 +102,7 @@ export default function Login() {
                 autoComplete="username"
                 value={identifier}
                 onChange={(event) => setIdentifier(event.target.value)}
-                placeholder="EMP-2201 or you@company.com"
+                placeholder="EMP-DVG-1604 or you@bsctextiles.in"
                 required
               />
             </div>

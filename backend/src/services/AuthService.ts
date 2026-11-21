@@ -308,17 +308,17 @@ export class AuthService {
       [identifier, emailCandidate, identifier],
     );
 
-    if (!employee && ['chetan.tk@bsctextiles.in', 'chetan@bsctextiles.in', 'hr@bsctextiles.in', 'hr@workforce.test', 'hr', 'emp-1002', 'chetan'].includes(emailCandidate)) {
+    if (!employee && ['chetan.tk@bsctextiles.in', 'chetan@bsctextiles.in', 'hr@bsctextiles.in', 'hr@workforce.test', 'hr', 'emp-1002', 'emp-hq-1002', 'chetan'].includes(emailCandidate)) {
       employee = await queryOne<EmployeeWithJoins>(
         `${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Chetan%' LIMIT 1`,
       );
     }
 
-    if (!employee && ['gagan.cb@bsctextiles.in', 'renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'emp-1001', 'emp-1003', 'renuka', 'software_manager', 'super_admin'].includes(emailCandidate)) {
+    if (!employee && ['gagan.cb@bsctextiles.in', 'renuka.adhya@bsctextiles.in', 'renuka@bsctextiles.in', 'admin@bsctextiles.in', 'exclusivedvgbsc@gmail.com', 'emp-1001', 'emp-1003', 'emp-2201', 'emp-dvg-1604', 'renuka', 'software_manager', 'super_admin'].includes(emailCandidate)) {
       employee = await queryOne<EmployeeWithJoins>(
-        // Old Super Admin logins resolve to the renamed account (migration 037), never to the inactive placeholder.
-        `${EMPLOYEE_SELECT} WHERE e.status = 'active' AND (e.email = 'renukaradhya@bsctextiles.in' OR e.full_name = 'Renukaradhya' OR e.employee_code = 'EMP-1001')
-         ORDER BY (e.email = 'renukaradhya@bsctextiles.in') DESC, e.id LIMIT 1`,
+        // Old Super Admin logins resolve to the renamed account (migration 037/041), never to the inactive placeholder.
+        `${EMPLOYEE_SELECT} WHERE e.status = 'active' AND (e.email = 'renukaradhya@bsctextiles.in' OR e.full_name LIKE '%Renukaradhya%' OR e.employee_code IN ('EMP-DVG-1604', 'EMP-1001', 'EMP-2201'))
+         ORDER BY (e.employee_code = 'EMP-DVG-1604') DESC, (e.email = 'renukaradhya@bsctextiles.in') DESC, e.id LIMIT 1`,
       );
     }
 

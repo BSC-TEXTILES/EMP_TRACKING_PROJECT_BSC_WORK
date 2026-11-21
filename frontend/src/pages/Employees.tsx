@@ -722,12 +722,12 @@ export default function Employees() {
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Full name" required><input className="input" value={editForm.fullName} onChange={(event) => setEditForm({ ...editForm, fullName: event.target.value })} required /></Field>
-                    <Field label={has('employees.manage') ? 'Employee Number *' : 'Employee Number'} required={has('employees.manage')}>
+                    <Field label={has('employees.manage') ? 'Employee Number *' : 'Employee Number'} required={has('employees.manage')} hint="Format: EMP-DVG-1604">
                       <input
-                        className="input font-mono"
+                        className="input font-mono font-semibold"
                         value={editForm.employeeCode}
                         onChange={(event) => setEditForm({ ...editForm, employeeCode: event.target.value.toUpperCase() })}
-                        placeholder="EMP-XXXX"
+                        placeholder="EMP-DVG-1604"
                         readOnly={!has('employees.manage')}
                         aria-readonly={!has('employees.manage')}
                       />
@@ -1305,12 +1305,13 @@ function CreateEmployee({
                 required
               />
             </Field>
-            <Field label="Employee code">
+            <Field label="Employee Number *" required hint="Format: EMP-DVG-1604">
               <input
-                className="input"
+                className="input font-mono font-semibold"
                 value={form.employeeCode}
-                onChange={(event) => setForm({ ...form, employeeCode: event.target.value })}
-                placeholder="Auto"
+                onChange={(event) => setForm({ ...form, employeeCode: event.target.value.toUpperCase() })}
+                placeholder="EMP-DVG-1604"
+                required
               />
             </Field>
             <Field label="Email" required>
@@ -1339,7 +1340,23 @@ function CreateEmployee({
               <select
                 className="input font-medium"
                 value={form.locationId}
-                onChange={(event) => setForm({ ...form, locationId: event.target.value, groupId: '' })}
+                onChange={(event) => {
+                  const locId = event.target.value;
+                  const selectedLoc = allowedLocations.find((l) => String(l.id) === locId);
+                  let locPrefix = 'DVG';
+                  if (selectedLoc) {
+                    if (selectedLoc.code === 'DAV' || selectedLoc.code === 'DVG') locPrefix = 'DVG';
+                    else if (selectedLoc.code === 'BEL' || selectedLoc.code === 'BLG') locPrefix = 'BLG';
+                    else if (selectedLoc.code === 'SHI' || selectedLoc.code === 'SMG') locPrefix = 'SMG';
+                    else if (selectedLoc.code === 'HQ') locPrefix = 'HQ';
+                    else if (selectedLoc.code === 'ALL') locPrefix = 'DVG';
+                  }
+                  const current = form.employeeCode.trim();
+                  const newCode = (!current || /^EMP(-[A-Z0-9]+)?(-\d*)?$/i.test(current))
+                    ? `EMP-${locPrefix}-`
+                    : current;
+                  setForm({ ...form, locationId: locId, groupId: '', employeeCode: newCode });
+                }}
                 required
               >
                 <option value="">Select Location</option>

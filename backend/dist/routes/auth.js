@@ -31,12 +31,12 @@ authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
     const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1");
     const email = renuka?.email || 'renukaradhya@bsctextiles.in';
-    const name = renuka?.full_name || 'Renukaradhya';
-    const code = renuka?.employee_code || 'EMP-1001';
+    const name = renuka?.full_name || 'Renukaradhya M S';
+    const code = renuka?.employee_code || 'EMP-DVG-1604';
     const chetan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1");
     const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
     const hrName = chetan?.full_name || 'Chetan TK';
-    const hrCode = chetan?.employee_code || 'EMP-1002';
+    const hrCode = chetan?.employee_code || 'EMP-HQ-1002';
     res.json({
         enabled: true,
         environment: config.env,
