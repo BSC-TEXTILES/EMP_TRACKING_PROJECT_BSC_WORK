@@ -28,6 +28,10 @@ const Leave = lazyWithRetry(() => import('./pages/Leave'), 'leave');
 const Projects = lazyWithRetry(() => import('./pages/Projects'), 'projects');
 const Collections = lazyWithRetry(() => import('./pages/Collections'), 'collections');
 const Employees = lazyWithRetry(() => import('./pages/Employees'), 'employees');
+const HrDashboard = lazyWithRetry(() => import('./pages/hr/HrDashboard'), 'hr-dashboard');
+const HrPayroll = lazyWithRetry(() => import('./pages/hr/HrPayroll'), 'hr-payroll');
+const HrDocuments = lazyWithRetry(() => import('./pages/hr/HrDocuments'), 'hr-documents');
+const HrAnnouncements = lazyWithRetry(() => import('./pages/hr/HrAnnouncements'), 'hr-announcements');
 const Groups = lazyWithRetry(() => import('./pages/Groups'), 'groups');
 const OrganizationSettings = lazyWithRetry(() => import('./pages/OrganizationSettings'), 'org-settings');
 const Organization = lazyWithRetry(() => import('./pages/Organization'), 'organization');
@@ -153,6 +157,10 @@ export function App() {
           <Route path="collections" element={<Collections />} />
           <Route path="groups" element={<RequireAdmin><Groups /></RequireAdmin>} />
           <Route path="admin/employees" element={<RequireAdmin><Employees /></RequireAdmin>} />
+          <Route path="hr/dashboard" element={<RequireAdmin><HrDashboard /></RequireAdmin>} />
+          <Route path="hr/payroll" element={<RequireAdmin><HrPayroll /></RequireAdmin>} />
+          <Route path="hr/documents" element={<RequireAdmin><HrDocuments /></RequireAdmin>} />
+          <Route path="hr/announcements" element={<RequireAdmin><HrAnnouncements /></RequireAdmin>} />
           <Route path="organization" element={<RequireAdmin><Organization /></RequireAdmin>} />
           <Route path="admin/organization" element={<RequireAdmin><OrganizationSettings /></RequireAdmin>} />
           <Route path="admin/office-times" element={<RequireAdmin><OfficeTimesAdmin /></RequireAdmin>} />

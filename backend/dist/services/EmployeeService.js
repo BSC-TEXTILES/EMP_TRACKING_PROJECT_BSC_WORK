@@ -97,6 +97,7 @@ export class EmployeeService {
         const pageSize = Math.min(200, Math.max(5, filters.pageSize ?? 25));
         const where = clauses.join(' AND ');
         const rows = await query(`SELECT e.id, e.employee_code, e.full_name, e.email, e.mobile, e.photo_url, e.status, e.employment_type, e.joining_date,
+              e.exit_date, e.exit_reason, e.hr_representative_id, hr_rep.full_name AS hr_representative_name,
               e.department_id, e.manager_id, e.created_at,
               e.location_id, l.name AS location_name, l.code AS location_code,
               e.group_id, wg.name AS group_name, wg.code AS group_code,
@@ -111,6 +112,7 @@ export class EmployeeService {
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN employees m ON m.id = e.manager_id
+       LEFT JOIN employees hr_rep ON hr_rep.id = e.hr_representative_id
        LEFT JOIN locations l ON l.id = e.location_id
        LEFT JOIN workforce_groups wg ON wg.id = e.group_id
        LEFT JOIN employees tl ON tl.id = e.team_leader_id
@@ -130,6 +132,10 @@ export class EmployeeService {
                 status: r.status,
                 employmentType: r.employment_type,
                 joiningDate: r.joining_date,
+                exitDate: r.exit_date ?? null,
+                exitReason: r.exit_reason ?? null,
+                hrRepresentativeId: r.hr_representative_id ? Number(r.hr_representative_id) : null,
+                hrRepresentativeName: r.hr_representative_name ?? null,
                 departmentId: r.department_id ? Number(r.department_id) : null,
                 departmentName: r.department_name,
                 designationTitle: r.designation_title,
@@ -157,13 +163,15 @@ export class EmployeeService {
     static async detail(employeeId, user) {
         const scope = await employeeScope(user);
         const row = await queryOne(`SELECT e.*, d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
-              m.full_name AS manager_name, l.name AS location_name, l.code AS location_code,
+              m.full_name AS manager_name, hr_rep.full_name AS hr_representative_name,
+              l.name AS location_name, l.code AS location_code,
               wg.name AS group_name, wg.code AS group_code, tl.full_name AS team_leader_name
        FROM employees e
        JOIN roles r ON r.id = e.role_id
        LEFT JOIN departments d ON d.id = e.department_id
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN employees m ON m.id = e.manager_id
+       LEFT JOIN employees hr_rep ON hr_rep.id = e.hr_representative_id
        LEFT JOIN locations l ON l.id = e.location_id
        LEFT JOIN workforce_groups wg ON wg.id = e.group_id
        LEFT JOIN employees tl ON tl.id = e.team_leader_id
@@ -197,6 +205,10 @@ export class EmployeeService {
             status: row.status,
             employmentType: row.employment_type,
             joiningDate: row.joining_date,
+            exitDate: row.exit_date ?? null,
+            exitReason: row.exit_reason ?? null,
+            hrRepresentativeId: row.hr_representative_id ? Number(row.hr_representative_id) : null,
+            hrRepresentativeName: row.hr_representative_name ?? null,
             dateOfBirth: row.date_of_birth,
             address: row.address,
             emergencyContact: row.emergency_contact,
@@ -362,6 +374,10 @@ export class EmployeeService {
             ['location_id', input.locationId],
             ['group_id', input.groupId],
             ['team_leader_id', input.teamLeaderId],
+            ['hr_representative_id', input.hrRepresentativeId],
+            ['joining_date', input.joiningDate],
+            ['exit_date', input.exitDate],
+            ['exit_reason', input.exitReason],
             ['employment_type', input.employmentType],
         ]) {
             if (value !== undefined) {
@@ -546,8 +562,8 @@ export class EmployeeService {
             code = `EMP-${locCode}-${nextNum}`;
         }
         const result = await execute(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id,
-        location_id, group_id, team_leader_id, employment_type, status, joining_date, email_verified_at, mobile_verified_at, must_change_password)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3), 1)`, [
+        hr_representative_id, location_id, group_id, team_leader_id, employment_type, status, joining_date, email_verified_at, mobile_verified_at, must_change_password)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', COALESCE(?, CURDATE()), NOW(3), NOW(3), 1)`, [
             code,
             input.fullName.trim(),
             input.email.toLowerCase(),
@@ -557,10 +573,12 @@ export class EmployeeService {
             input.departmentId,
             input.designationId ?? null,
             input.managerId ?? null,
+            input.hrRepresentativeId ?? null,
             input.locationId ?? null,
             input.groupId ?? null,
             input.teamLeaderId ?? null,
             input.employmentType ?? 'full_time',
+            input.joiningDate ?? null,
         ]);
         if (input.groupId) {
             await execute('INSERT INTO employee_group_members (group_id, employee_id, role, assigned_by) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE role = VALUES(role)', [input.groupId, result.insertId, 'member', actor.id]);

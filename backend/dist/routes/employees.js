@@ -82,6 +82,8 @@ employeesRouter.post('/', requireAny('employees.manage'), asyncHandler(async (re
         locationId: z.number().int().positive().nullable().optional(),
         groupId: z.number().int().positive().nullable().optional(),
         teamLeaderId: z.number().int().positive().nullable().optional(),
+        hrRepresentativeId: z.number().int().positive().nullable().optional(),
+        joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
         employmentType: z.string().max(32).optional(),
         password: z.string().min(10).max(200),
     }), req.body);
@@ -126,6 +128,10 @@ employeesRouter.patch('/:id/org-assignment', requireAny('employees.manage'), asy
         locationId: idSchema,
         groupId: idSchema,
         teamLeaderId: idSchema,
+        hrRepresentativeId: idSchema,
+        joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        exitDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+        exitReason: z.string().max(255).nullable().optional(),
         employmentType: z.string().max(32).optional(),
         additionalLocationIds: z.array(z.number().int().positive()).optional(),
     }), req.body);

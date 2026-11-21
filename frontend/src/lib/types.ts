@@ -371,6 +371,10 @@ export interface EmployeeRow {
   status: string;
   employmentType: string;
   joiningDate: string | null;
+  exitDate?: string | null;
+  exitReason?: string | null;
+  hrRepresentativeId?: number | null;
+  hrRepresentativeName?: string | null;
   departmentId: number | null;
   departmentName: string | null;
   designationTitle: string | null;
@@ -438,6 +442,11 @@ export interface LeaveItem {
   canApproveManager: boolean;
   canApproveHr: boolean;
   canCancel: boolean;
+  /** 'weekly_off' and 'half_day' come from the dedicated applications; 'leave' is a historic / generic request. */
+  requestKind?: 'leave' | 'weekly_off' | 'half_day';
+  leaveTypeCode?: string;
+  /** Approval trail: submitted → manager decision → HR decision (or cancellation). */
+  history?: { action: string; fromStatus: string | null; toStatus: string; note: string | null; at: string | null; actorName: string | null }[];
 }
 
 export interface PickerEmployee {

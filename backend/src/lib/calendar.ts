@@ -32,9 +32,17 @@ export function weekdayOf(isoDate: string): number {
   return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
 }
 
-export function isWeeklyOff(isoDate: string): boolean {
-  return weekdayOf(isoDate) === WEEKLY_OFF_WEEKDAY;
+export function isWeeklyOff(isoDate: string, weekday: number = WEEKLY_OFF_WEEKDAY): boolean {
+  return weekdayOf(isoDate) === weekday;
 }
+
+/** Normalises an assigned weekly-off weekday (0 = Sunday … 6 = Saturday); anything invalid means Sunday. */
+export function normalizeWeekday(value: unknown): number {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 && n <= 6 ? n : WEEKLY_OFF_WEEKDAY;
+}
+
+export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function pad(value: number): string {
   return String(value).padStart(2, '0');
@@ -50,14 +58,35 @@ export function datesInMonth(year: number, month: number): string[] {
   return Array.from({ length: total }, (_, index) => isoDate(year, month, index + 1));
 }
 
-/** All Sundays of the given month, computed from the actual calendar. */
-export function sundaysInMonth(year: number, month: number): string[] {
+/** Every date of the month that falls on `weekday`, computed from the actual calendar. */
+export function weekdaysInMonth(year: number, month: number, weekday: number): string[] {
   const first = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
-  const firstSunday = 1 + ((7 - first + WEEKLY_OFF_WEEKDAY) % 7);
+  const firstMatch = 1 + ((7 - first + weekday) % 7);
   const total = daysInMonth(year, month);
   const result: string[] = [];
-  for (let day = firstSunday; day <= total; day += 7) result.push(isoDate(year, month, day));
+  for (let day = firstMatch; day <= total; day += 7) result.push(isoDate(year, month, day));
   return result;
+}
+
+/** All Sundays of the given month, computed from the actual calendar. */
+export function sundaysInMonth(year: number, month: number): string[] {
+  return weekdaysInMonth(year, month, WEEKLY_OFF_WEEKDAY);
+}
+
+/**
+ * Weekly-off dates an employee is eligible for in a month: every date on the assigned
+ * weekday that is on or after the joining date (and on or before the exit date, if any).
+ */
+export function eligibleWeeklyOffDates(
+  year: number,
+  month: number,
+  weekday: number,
+  joiningDate?: string | null,
+  exitDate?: string | null,
+): string[] {
+  return weekdaysInMonth(year, month, weekday).filter(
+    (date) => (!joiningDate || date >= joiningDate.slice(0, 10)) && (!exitDate || date <= exitDate.slice(0, 10)),
+  );
 }
 
 /** Inclusive list of dates between two ISO dates (empty when `end < start`). */
@@ -76,7 +105,7 @@ export function dateRange(start: string, end: string): string[] {
 
 /** Sundays inside an inclusive date range. */
 export function sundaysBetween(start: string, end: string): string[] {
-  return dateRange(start, end).filter(isWeeklyOff);
+  return dateRange(start, end).filter((date) => isWeeklyOff(date));
 }
 
 /**
@@ -84,13 +113,13 @@ export function sundaysBetween(start: string, end: string): string[] {
  * free because they are a weekly off (Sunday) or a public holiday. A public
  * holiday that falls on a Sunday is reported once, as a weekly off.
  */
-export function chargeableDays(start: string, end: string, holidayDates: Iterable<string>) {
+export function chargeableDays(start: string, end: string, holidayDates: Iterable<string>, weekday: number = WEEKLY_OFF_WEEKDAY) {
   const holidays = new Set(holidayDates);
   const charged: string[] = [];
   const weeklyOffs: string[] = [];
   const publicHolidays: string[] = [];
   for (const date of dateRange(start, end)) {
-    if (isWeeklyOff(date)) weeklyOffs.push(date);
+    if (isWeeklyOff(date, weekday)) weeklyOffs.push(date);
     else if (holidays.has(date)) publicHolidays.push(date);
     else charged.push(date);
   }

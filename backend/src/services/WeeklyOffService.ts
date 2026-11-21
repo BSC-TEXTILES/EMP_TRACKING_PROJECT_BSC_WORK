@@ -2,15 +2,18 @@ import { execute, query, queryOne } from '../db/index.js';
 import { getSettings, recordAudit, setSetting } from '../lib/audit.js';
 import {
   MONTH_NAMES,
+  WEEKDAY_NAMES,
   dateRange,
   datesInMonth,
   daysInMonth,
-  eligibleSundays,
+  eligibleWeeklyOffDates,
   isLeapYear,
   isWeeklyOff,
   isoDate,
+  normalizeWeekday,
   sundaysInMonth,
   weekdayOf,
+  weekdaysInMonth,
 } from '../lib/calendar.js';
 import { addDays, today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
@@ -20,12 +23,15 @@ import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
 
 /**
- * Calendar-based Sunday weekly offs and compensatory offs.
+ * Request-based weekly offs and compensatory offs.
  *
- * - Weekly offs are derived from the real calendar (lib/calendar.ts). A month with
- *   five Sundays gives five weekly offs, a month with four gives four. Nothing is
- *   stored per month, so HR never enters Sunday dates.
- * - Weekly offs are separate from CL/SL/EL: leave ranges never charge Sundays.
+ * - Each employee has an assigned weekly-off weekday (employees.weekly_off_day, Sunday by
+ *   default). Eligible dates are derived from the real calendar and the joining date, so a
+ *   month with five such weekdays allocates five weekly offs, one with four allocates four.
+ * - A weekly off counts as taken only once its request is approved by the manager and HR;
+ *   a pending request reserves its date. Balances are always recomputed from the database
+ *   and snapshotted per employee and month in weekly_off_allocations.
+ * - Weekly offs are separate from CL/SL/EL: leave ranges never charge weekly-off days.
  * - Working on a Sunday (or, if enabled, a public holiday) earns a comp-off credit,
  *   recorded once per employee per day (unique key) according to the leave policy.
  *
@@ -60,7 +66,7 @@ const DEFAULT_POLICY: LeavePolicy = {
   compOffExpiryDays: 90,
 };
 
-type SundayStatus = 'taken' | 'worked' | 'upcoming' | 'not_eligible';
+export type WeeklyOffDateStatus = 'taken' | 'pending' | 'available' | 'worked' | 'lapsed' | 'not_eligible';
 
 interface EmployeeRow {
   id: number;
@@ -69,6 +75,7 @@ interface EmployeeRow {
   joining_date: string | null;
   deactivated_at: string | null;
   location_id: number | null;
+  weekly_off_day: number | null;
   location_name: string | null;
   location_code: string | null;
   department_name: string | null;
@@ -206,7 +213,8 @@ export class WeeklyOffService {
     if (!policy.compOffEnabled) return;
 
     let source: 'sunday' | 'holiday' | null = null;
-    if (isWeeklyOff(date)) source = 'sunday';
+    // 'sunday' is the stored source name for "worked on the assigned weekly off".
+    if (isWeeklyOff(date, await WeeklyOffService.employeeWeekday(employeeId))) source = 'sunday';
     else if (policy.compOffOnHolidays && (await WeeklyOffService.employeeHolidays(employeeId, date, date)).has(date)) source = 'holiday';
 
     const existing = await queryOne<{ id: number; days: number; status: string }>(
@@ -224,7 +232,7 @@ export class WeeklyOffService {
     const days =
       minutes >= policy.compOffFullDayMinutes ? 1 : policy.compOffHalfDayMinutes > 0 && minutes >= policy.compOffHalfDayMinutes ? 0.5 : 0;
     const expiresOn = policy.compOffExpiryDays > 0 ? addDays(date, policy.compOffExpiryDays) : null;
-    const label = source === 'sunday' ? 'Sunday weekly off' : 'public holiday';
+    const label = source === 'sunday' ? 'weekly off' : 'public holiday';
 
     if (!existing) {
       if (days === 0) return;
@@ -270,9 +278,9 @@ export class WeeklyOffService {
   static async reconcileRecent(days = 7): Promise<number> {
     const from = addDays(today(), -days);
     const rows = await query<{ employee_id: number; work_date: string }>(
-      `SELECT a.employee_id, a.work_date FROM attendance a
+      `SELECT a.employee_id, a.work_date FROM attendance a JOIN employees e ON e.id = a.employee_id
        WHERE a.work_date >= ? AND a.check_in_at IS NOT NULL AND a.check_out_at IS NOT NULL
-         AND (DAYOFWEEK(a.work_date) = 1 OR EXISTS (SELECT 1 FROM holidays h WHERE h.holiday_date = a.work_date)
+         AND (DAYOFWEEK(a.work_date) = e.weekly_off_day + 1 OR EXISTS (SELECT 1 FROM holidays h WHERE h.holiday_date = a.work_date)
               OR EXISTS (SELECT 1 FROM comp_off_credits c WHERE c.employee_id = a.employee_id AND c.work_date = a.work_date))`,
       [from],
     );
@@ -318,11 +326,140 @@ export class WeeklyOffService {
     return lapsed;
   }
 
+
+  // ------------------------------------------------------ weekly-off balance
+
+  /** The employee's assigned weekly-off weekday (0 = Sunday … 6 = Saturday). */
+  static async employeeWeekday(employeeId: number): Promise<number> {
+    const row = await queryOne<{ weekly_off_day: number | null }>('SELECT weekly_off_day FROM employees WHERE id = ?', [employeeId]);
+    return normalizeWeekday(row?.weekly_off_day);
+  }
+
+  /** HR / Super Admin: change an employee's weekly-off weekday. Past approved requests are kept as history. */
+  static async setEmployeeWeekday(actor: AuthUser, employeeId: number, weekday: number): Promise<{ weekday: number; weekdayName: string }> {
+    if (!actor.permissions.includes('leave.manage')) throw ApiError.forbidden('Only HR or a Super Admin can change weekly-off days.');
+    if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) throw ApiError.badRequest('Select a weekday between Sunday and Saturday.');
+    const before = await WeeklyOffService.employeeWeekday(employeeId);
+    const result = await execute('UPDATE employees SET weekly_off_day = ? WHERE id = ?', [weekday, employeeId]);
+    if (!result.affectedRows) throw ApiError.notFound('Employee not found');
+    await recordAudit({ actorId: actor.id, action: 'leave.weekly_off_day_updated', entityType: 'employee', entityId: employeeId, before: { weekday: before }, after: { weekday } });
+    emitToEmployee(employeeId, 'leave:updated', { reason: 'weekly_off_day' });
+    getIO()?.emit('leave:policy', { reason: 'weekly_off_day', employeeId });
+    return { weekday, weekdayName: WEEKDAY_NAMES[weekday] };
+  }
+
+  /**
+   * The single source of truth for one employee's weekly offs in one month.
+   *
+   * - allocated = assigned-weekday dates in the month on/after joining (and on/before exit)
+   * - taken     = approved weekly-off requests (or attendance explicitly marked weekly_off) on those dates
+   * - pending   = weekly-off requests awaiting manager / HR approval (they reserve their date)
+   * - remaining = allocated − taken
+   * - available = allocated − taken − pending   (what can still be applied for)
+   *
+   * `run` lets the same calculation execute inside a locked transaction.
+   */
+  static async monthBalance(
+    employeeId: number,
+    year: number,
+    month: number,
+    run: <T>(sql: string, params: unknown[]) => Promise<T[]> = (sql, params) => query(sql, params),
+  ) {
+    assertYearMonth(year, month);
+    const [employee] = await run<{ joining_date: string | null; deactivated_at: string | null; weekly_off_day: number | null }>(
+      'SELECT joining_date, deactivated_at, weekly_off_day FROM employees WHERE id = ?',
+      [employeeId],
+    );
+    if (!employee) throw ApiError.notFound('Employee not found');
+    const weekday = normalizeWeekday(employee.weekly_off_day);
+    const joiningDate = employee.joining_date ? String(employee.joining_date).slice(0, 10) : null;
+    const exitDate = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
+    const start = isoDate(year, month, 1);
+    const end = isoDate(year, month, daysInMonth(year, month));
+    const allDates = weekdaysInMonth(year, month, weekday);
+    const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
+
+    const [requests, attendance] = await Promise.all([
+      run<{ id: number; start_date: string; status: string }>(
+        `SELECT id, start_date, status FROM leave_requests
+         WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')
+           AND start_date BETWEEN ? AND ?`,
+        [employeeId, start, end],
+      ),
+      run<{ work_date: string; status: string; check_in_at: string | null }>(
+        'SELECT work_date, status, check_in_at FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?',
+        [employeeId, start, end],
+      ),
+    ]);
+
+    const approved = new Map<string, number>();
+    const pending = new Map<string, number>();
+    for (const row of requests) {
+      const date = String(row.start_date).slice(0, 10);
+      (row.status === 'approved' ? approved : pending).set(date, Number(row.id));
+    }
+    const markedOff = new Set<string>();
+    const worked = new Set<string>();
+    for (const row of attendance) {
+      const date = String(row.work_date).slice(0, 10);
+      if (row.check_in_at) worked.add(date);
+      else if (row.status === 'weekly_off') markedOff.add(date);
+    }
+
+    const now = today();
+    const currentMonthStart = `${now.slice(0, 7)}-01`;
+    const eligibleSet = new Set(eligible);
+    const dates = allDates.map((date) => {
+      let status: WeeklyOffDateStatus;
+      if (!eligibleSet.has(date)) status = 'not_eligible';
+      else if (approved.has(date) || markedOff.has(date)) status = 'taken';
+      else if (pending.has(date)) status = 'pending';
+      else if (worked.has(date)) status = 'worked';
+      // Weekly offs of a closed month that were never applied for lapse; the current
+      // month can still be regularised (no check-in recorded on that date).
+      else if (date < currentMonthStart) status = 'lapsed';
+      else status = 'available';
+      return { date, day: Number(date.slice(8, 10)), status, requestId: approved.get(date) ?? pending.get(date) ?? null };
+    });
+
+    const allocated = eligible.length;
+    const taken = dates.filter((d) => d.status === 'taken').length;
+    const pendingCount = dates.filter((d) => d.status === 'pending').length;
+    return {
+      weekday,
+      weekdayName: WEEKDAY_NAMES[weekday],
+      joiningDate,
+      exitDate,
+      allDates,
+      eligible,
+      dates,
+      allocated,
+      taken,
+      pending: pendingCount,
+      remaining: Math.max(0, allocated - taken),
+      available: Math.max(0, allocated - taken - pendingCount),
+      worked: dates.filter((d) => d.status === 'worked').length,
+      notEligible: dates.filter((d) => d.status === 'not_eligible').length,
+    };
+  }
+
+  /** Stores the monthly allocation snapshot (employee × month) so HR reports read persisted figures. */
+  static async persistAllocation(employeeId: number, year: number, month: number, balance?: Awaited<ReturnType<typeof WeeklyOffService.monthBalance>>) {
+    const b = balance ?? (await WeeklyOffService.monthBalance(employeeId, year, month));
+    await execute(
+      `INSERT INTO weekly_off_allocations (employee_id, alloc_year, alloc_month, weekday, allocated, taken, pending, eligible_dates)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE weekday = VALUES(weekday), allocated = VALUES(allocated), taken = VALUES(taken),
+                               pending = VALUES(pending), eligible_dates = VALUES(eligible_dates)`,
+      [employeeId, year, month, b.weekday, b.allocated, b.taken, b.pending, JSON.stringify(b.eligible)],
+    ).catch((error) => console.error('[weekly-off] allocation snapshot failed', error));
+  }
+
   // ------------------------------------------------------------- summaries
 
   private static async employee(employeeId: number): Promise<EmployeeRow> {
     const row = await queryOne<EmployeeRow>(
-      `SELECT e.id, e.full_name, e.employee_code, e.joining_date, e.deactivated_at, e.location_id,
+      `SELECT e.id, e.full_name, e.employee_code, e.joining_date, e.deactivated_at, e.location_id, e.weekly_off_day,
               l.name AS location_name, l.code AS location_code, d.name AS department_name
        FROM employees e
        LEFT JOIN locations l ON l.id = e.location_id
@@ -334,7 +471,7 @@ export class WeeklyOffService {
     return row;
   }
 
-  /** Full month view for one employee: Sundays, weekly-off counters and a day-by-day calendar. */
+  /** Full month view for one employee: weekly-off counters, half-day counters and a read-only day calendar. */
   static async monthSummary(employeeId: number, year: number, month: number) {
     assertYearMonth(year, month);
     const employee = await WeeklyOffService.employee(employeeId);
@@ -342,7 +479,8 @@ export class WeeklyOffService {
     const end = isoDate(year, month, daysInMonth(year, month));
     const now = today();
 
-    const [holidays, attendanceRows, leaveRows, credits, policy] = await Promise.all([
+    const [balance, holidays, attendanceRows, leaveRows, credits, policy, halfDayRows, pendingRows] = await Promise.all([
+      WeeklyOffService.monthBalance(employeeId, year, month),
       WeeklyOffService.employeeHolidays(employeeId, start, end),
       query<{ work_date: string; status: string; check_in_at: string | null; total_minutes: number }>(
         'SELECT work_date, status, check_in_at, total_minutes FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?',
@@ -351,7 +489,8 @@ export class WeeklyOffService {
       query<{ start_date: string; end_date: string; type_name: string; code: string; status: string; is_half_day: number; half_day_slot: string | null }>(
         `SELECT l.start_date, l.end_date, t.name AS type_name, t.code, l.status, l.is_half_day, l.half_day_slot
          FROM leave_requests l JOIN leave_types t ON t.id = l.leave_type_id
-         WHERE l.employee_id = ? AND l.status IN ('approved','pending_manager','pending_hr') AND l.start_date <= ? AND l.end_date >= ?`,
+         WHERE l.employee_id = ? AND l.request_kind <> 'weekly_off' AND l.status IN ('approved','pending_manager','pending_hr')
+           AND l.start_date <= ? AND l.end_date >= ?`,
         [employeeId, end, start],
       ),
       query<{ work_date: string; days: number; status: string }>(
@@ -359,10 +498,23 @@ export class WeeklyOffService {
         [employeeId, start, end],
       ),
       WeeklyOffService.policy(),
+      query<{ total: number; deducted: number | null }>(
+        `SELECT COUNT(*) AS total, SUM(days) AS deducted FROM leave_requests
+         WHERE employee_id = ? AND is_half_day = 1 AND status = 'approved' AND start_date BETWEEN ? AND ?`,
+        [employeeId, start, end],
+      ),
+      query<{ request_kind: string; is_half_day: number; total: number }>(
+        `SELECT request_kind, is_half_day, COUNT(*) AS total FROM leave_requests
+         WHERE employee_id = ? AND status IN ('pending_manager','pending_hr') AND start_date BETWEEN ? AND ?
+         GROUP BY request_kind, is_half_day`,
+        [employeeId, start, end],
+      ),
     ]);
 
+    const weekday = balance.weekday;
     const attendance = new Map(attendanceRows.map((row) => [String(row.work_date).slice(0, 10), row]));
     const creditByDate = new Map(credits.map((row) => [String(row.work_date).slice(0, 10), row]));
+    const offByDate = new Map(balance.dates.map((entry) => [entry.date, entry]));
     const leaveByDate = new Map<string, { type: string; code: string; status: string; isHalfDay: boolean; halfDaySlot: string | null }>();
     for (const leave of leaveRows) {
       const from = String(leave.start_date).slice(0, 10) < start ? start : String(leave.start_date).slice(0, 10);
@@ -380,23 +532,13 @@ export class WeeklyOffService {
       }
     }
 
-    const joining = employee.joining_date ? String(employee.joining_date).slice(0, 10) : null;
-    const exit = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
-    const allSundays = sundaysInMonth(year, month);
-    // Active employees are entitled to all weekly offs in the month
-    const eligible = new Set(allSundays.filter((date) => !exit || date <= exit.slice(0, 10)));
-
-    const sundays = allSundays.map((date) => {
-      const row = attendance.get(date);
-      const worked = Boolean(row?.check_in_at);
-      const status: SundayStatus = !eligible.has(date) ? 'not_eligible' : worked ? 'worked' : date <= now ? 'taken' : 'upcoming';
-      const credit = creditByDate.get(date);
+    const weeklyOffDates = balance.dates.map((entry) => {
+      const row = attendance.get(entry.date);
+      const credit = creditByDate.get(entry.date);
       return {
-        date,
-        day: Number(date.slice(8, 10)),
-        status,
-        holidayName: holidays.get(date) ?? null,
-        workedMinutes: worked ? Number(row?.total_minutes ?? 0) : 0,
+        ...entry,
+        holidayName: holidays.get(entry.date) ?? null,
+        workedMinutes: row?.check_in_at ? Number(row?.total_minutes ?? 0) : 0,
         compOffDays: credit && credit.status !== 'revoked' ? Number(credit.days) : 0,
       };
     });
@@ -404,7 +546,8 @@ export class WeeklyOffService {
     const days = datesInMonth(year, month).map((date) => {
       const row = attendance.get(date);
       const leave = leaveByDate.get(date) ?? null;
-      const weeklyOff = isWeeklyOff(date);
+      const off = offByDate.get(date) ?? null;
+      const weeklyOff = isWeeklyOff(date, weekday);
       const holidayName = holidays.get(date) ?? null;
       const credit = creditByDate.get(date);
       const isHalfDay = Boolean(row?.status === 'half_day' || leave?.isHalfDay);
@@ -413,7 +556,10 @@ export class WeeklyOffService {
         day: Number(date.slice(8, 10)),
         weekday: weekdayOf(date),
         isWeeklyOff: weeklyOff,
-        isEligibleWeeklyOff: weeklyOff && eligible.has(date),
+        isEligibleWeeklyOff: weeklyOff && off?.status !== 'not_eligible',
+        weeklyOffStatus: off?.status ?? null,
+        // System-generated weekly-off cells can never be edited from the calendar.
+        readOnly: weeklyOff,
         holidayName,
         isToday: date === now,
         isFuture: date > now,
@@ -422,22 +568,24 @@ export class WeeklyOffService {
         workedMinutes: Number(row?.total_minutes ?? 0),
         isHalfDay,
         halfDaySlot: leave?.halfDaySlot ?? null,
-        // Leave never "consumes" a Sunday or holiday, so those days do not show the leave.
+        // Leave never "consumes" a weekly off or holiday, so those days do not show the leave.
         leave: leave && !weeklyOff && !holidayName ? leave : null,
         compOffDays: credit && credit.status !== 'revoked' ? Number(credit.days) : 0,
       };
     });
 
-    const count = (status: SundayStatus) => sundays.filter((item) => item.status === status).length;
-    const holidaysOnWorkdays = [...holidays.keys()].filter((date) => !isWeeklyOff(date)).length;
+    const holidaysOnWorkdays = [...holidays.keys()].filter((date) => !isWeeklyOff(date, weekday)).length;
     const compOff = await WeeklyOffService.compOffTotals(employeeId);
+    const pendingTotal = pendingRows.reduce((sum, row) => sum + Number(row.total), 0);
+    const pendingHalfDays = pendingRows.filter((row) => Number(row.is_half_day) === 1).reduce((sum, row) => sum + Number(row.total), 0);
+    await WeeklyOffService.persistAllocation(employeeId, year, month, balance);
 
     return {
       employee: {
         id: Number(employee.id),
         name: employee.full_name,
         code: employee.employee_code,
-        joiningDate: joining,
+        joiningDate: balance.joiningDate,
         locationId: employee.location_id ? Number(employee.location_id) : null,
         locationName: employee.location_name,
         locationCode: employee.location_code,
@@ -450,28 +598,40 @@ export class WeeklyOffService {
       isLeapYear: isLeapYear(year),
       firstWeekday: weekdayOf(start),
       today: now,
-      totalSundays: allSundays.length,
+      weeklyOffDay: weekday,
+      weeklyOffDayName: balance.weekdayName,
+      /** Number of assigned-weekday dates in the month (kept under its historic name). */
+      totalSundays: balance.allDates.length,
       weeklyOffs: {
-        allocated: eligible.size,
-        taken: count('taken'),
-        worked: count('worked'),
-        remaining: count('upcoming'),
-        notEligible: count('not_eligible'),
+        allocated: balance.allocated,
+        taken: balance.taken,
+        pending: balance.pending,
+        remaining: balance.remaining,
+        available: balance.available,
+        worked: balance.worked,
+        notEligible: balance.notEligible,
       },
-      publicHolidays: [...holidays.entries()].map(([date, name]) => ({ date, name, onWeeklyOff: isWeeklyOff(date) })),
-      workingDays: daysInMonth(year, month) - allSundays.length - holidaysOnWorkdays,
-      leaveDaysThisMonth: days.filter((day) => day.leave?.status === 'approved').length,
+      halfDays: {
+        taken: Number(halfDayRows[0]?.total ?? 0),
+        deducted: Number(halfDayRows[0]?.deducted ?? 0),
+        pending: pendingHalfDays,
+      },
+      pendingRequests: pendingTotal,
+      publicHolidays: [...holidays.entries()].map(([date, name]) => ({ date, name, onWeeklyOff: isWeeklyOff(date, weekday) })),
+      workingDays: daysInMonth(year, month) - balance.allDates.length - holidaysOnWorkdays,
+      leaveDaysThisMonth: days.filter((day) => day.leave?.status === 'approved').reduce((sum, day) => sum + (day.leave?.isHalfDay ? 0.5 : 1), 0),
       compOff: {
         earnedThisMonth: credits.filter((row) => row.status !== 'revoked').reduce((sum, row) => sum + Number(row.days), 0),
         ...compOff,
       },
       policy,
-      sundays,
+      /** Weekly-off dates of the month with their status (kept under its historic name). */
+      sundays: weeklyOffDates,
       days,
     };
   }
 
-  /** Employees whose weekly-off and leave details the user may see, with location scoping (BEL / DAV / SHI). */
+  /** Employees whose weekly-off and leave details the user may see, with location scoping (BEL / DAV / SHI / HQ). */
   private static async visibleEmployees(user: AuthUser, locationId: number | null): Promise<EmployeeRow[]> {
     let ids: number[] | null;
     if (user.permissions.includes('leave.view.all')) {
@@ -499,7 +659,7 @@ export class WeeklyOffService {
       params.push(locationId);
     }
     return query<EmployeeRow>(
-      `SELECT e.id, e.full_name, e.employee_code, e.joining_date, e.deactivated_at, e.location_id,
+      `SELECT e.id, e.full_name, e.employee_code, e.joining_date, e.deactivated_at, e.location_id, e.weekly_off_day,
               l.name AS location_name, l.code AS location_code, d.name AS department_name
        FROM employees e
        LEFT JOIN locations l ON l.id = e.location_id
@@ -511,28 +671,39 @@ export class WeeklyOffService {
     );
   }
 
-  /** Manager / HR view: weekly-off counters for every visible employee in a month. */
+  /** Manager / HR view: weekly-off and half-day counters for every visible employee in a month. */
   static async teamSummary(user: AuthUser, year: number, month: number, locationId: number | null) {
     assertYearMonth(year, month);
     const employees = await WeeklyOffService.visibleEmployees(user, locationId);
     const start = isoDate(year, month, 1);
     const end = isoDate(year, month, daysInMonth(year, month));
     const allSundays = sundaysInMonth(year, month);
-    const now = today();
-    if (employees.length === 0) {
-      return { year, month, monthName: MONTH_NAMES[month - 1], totalSundays: allSundays.length, sundays: allSundays, employees: [] };
-    }
+    const base = { year, month, monthName: MONTH_NAMES[month - 1], totalSundays: allSundays.length, sundays: allSundays };
+    if (employees.length === 0) return { ...base, employees: [] };
+
     const ids = employees.map((employee) => Number(employee.id));
     const placeholders = ids.map(() => '?').join(',');
-    const [worked, leaveDays, credits, coLedger] = await Promise.all([
-      query<{ employee_id: number; work_date: string }>(
-        `SELECT employee_id, work_date FROM attendance
-         WHERE employee_id IN (${placeholders}) AND work_date BETWEEN ? AND ? AND DAYOFWEEK(work_date) = 1 AND check_in_at IS NOT NULL`,
+    const [requests, attendance, leaveDays, halfDays, credits, coLedger] = await Promise.all([
+      query<{ employee_id: number; start_date: string; status: string }>(
+        `SELECT employee_id, start_date, status FROM leave_requests
+         WHERE employee_id IN (${placeholders}) AND request_kind = 'weekly_off'
+           AND status IN ('pending_manager','pending_hr','approved') AND start_date BETWEEN ? AND ?`,
+        [...ids, start, end],
+      ),
+      query<{ employee_id: number; work_date: string; status: string; check_in_at: string | null }>(
+        `SELECT employee_id, work_date, status, check_in_at FROM attendance
+         WHERE employee_id IN (${placeholders}) AND work_date BETWEEN ? AND ? AND (check_in_at IS NOT NULL OR status = 'weekly_off')`,
         [...ids, start, end],
       ),
       query<{ employee_id: number; total: number }>(
         `SELECT employee_id, COUNT(*) AS total FROM attendance
-         WHERE employee_id IN (${placeholders}) AND work_date BETWEEN ? AND ? AND status = 'on_leave' AND DAYOFWEEK(work_date) <> 1
+         WHERE employee_id IN (${placeholders}) AND work_date BETWEEN ? AND ? AND status = 'on_leave'
+         GROUP BY employee_id`,
+        [...ids, start, end],
+      ),
+      query<{ employee_id: number; total: number; deducted: number }>(
+        `SELECT employee_id, COUNT(*) AS total, SUM(days) AS deducted FROM leave_requests
+         WHERE employee_id IN (${placeholders}) AND is_half_day = 1 AND status = 'approved' AND start_date BETWEEN ? AND ?
          GROUP BY employee_id`,
         [...ids, start, end],
       ),
@@ -548,32 +719,40 @@ export class WeeklyOffService {
         ids,
       ),
     ]);
-    const workedSet = new Set(worked.map((row) => `${row.employee_id}:${String(row.work_date).slice(0, 10)}`));
+    const key = (id: number | string, date: string) => `${Number(id)}:${String(date).slice(0, 10)}`;
+    const approvedSet = new Set(requests.filter((r) => r.status === 'approved').map((r) => key(r.employee_id, r.start_date)));
+    const pendingSet = new Set(requests.filter((r) => r.status !== 'approved').map((r) => key(r.employee_id, r.start_date)));
+    const workedSet = new Set(attendance.filter((r) => r.check_in_at).map((r) => key(r.employee_id, r.work_date)));
+    const markedSet = new Set(attendance.filter((r) => !r.check_in_at && r.status === 'weekly_off').map((r) => key(r.employee_id, r.work_date)));
     const leaveMap = new Map(leaveDays.map((row) => [Number(row.employee_id), Number(row.total)]));
+    const halfMap = new Map(halfDays.map((row) => [Number(row.employee_id), row]));
     const earnedMap = new Map(credits.map((row) => [Number(row.employee_id), Number(row.earned ?? 0)]));
     const ledgerMap = new Map(coLedger.map((row) => [Number(row.employee_id), row]));
 
     return {
-      year,
-      month,
-      monthName: MONTH_NAMES[month - 1],
-      totalSundays: allSundays.length,
-      sundays: allSundays,
+      ...base,
       employees: employees.map((employee) => {
         const id = Number(employee.id);
-        const eligible = allSundays.filter(
-          (date) => !employee.deactivated_at || date <= String(employee.deactivated_at).slice(0, 10),
+        const weekday = normalizeWeekday(employee.weekly_off_day);
+        const eligible = eligibleWeeklyOffDates(
+          year,
+          month,
+          weekday,
+          employee.joining_date ? String(employee.joining_date) : null,
+          employee.deactivated_at ? String(employee.deactivated_at) : null,
         );
         let taken = 0;
+        let pending = 0;
         let workedCount = 0;
-        let remaining = 0;
         for (const date of eligible) {
-          if (workedSet.has(`${id}:${date}`)) workedCount += 1;
-          else if (date <= now) taken += 1;
-          else remaining += 1;
+          const k = key(id, date);
+          if (approvedSet.has(k) || markedSet.has(k)) taken += 1;
+          else if (pendingSet.has(k)) pending += 1;
+          else if (workedSet.has(k)) workedCount += 1;
         }
         const ledger = ledgerMap.get(id);
         const allocatedCo = (earnedMap.get(id) ?? 0) + Number(ledger?.manual ?? 0);
+        const half = halfMap.get(id);
         return {
           employeeId: id,
           name: employee.full_name,
@@ -581,10 +760,15 @@ export class WeeklyOffService {
           locationCode: employee.location_code,
           locationName: employee.location_name,
           departmentName: employee.department_name,
+          weeklyOffDay: weekday,
+          weeklyOffDayName: WEEKDAY_NAMES[weekday],
           allocated: eligible.length,
           taken,
+          pending,
           worked: workedCount,
-          remaining,
+          remaining: Math.max(0, eligible.length - taken),
+          halfDaysTaken: Number(half?.total ?? 0),
+          halfDayDeducted: Number(half?.deducted ?? 0),
           leaveDaysThisMonth: leaveMap.get(id) ?? 0,
           compOffAvailable: Math.max(0, allocatedCo - Number(ledger?.used ?? 0)),
         };

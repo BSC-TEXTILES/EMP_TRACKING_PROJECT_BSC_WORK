@@ -30,6 +30,7 @@ import { pushPublicRouter, pushRouter } from './push.js';
 import { groupsRouter } from './groups.js';
 import { hierarchyRouter } from './hierarchy.js';
 import { issuesRouter } from './issues.js';
+import { hrRouter } from './hr.js';
 import { asyncHandler } from '../lib/http.js';
 
 export const apiRouter = Router();
@@ -74,3 +75,4 @@ apiRouter.use('/admin/webhooks', webhooksRouter);
 apiRouter.use('/groups', groupsRouter);
 apiRouter.use('/hierarchy', hierarchyRouter);
 apiRouter.use('/issues', issuesRouter);
+apiRouter.use('/hr', hrRouter);

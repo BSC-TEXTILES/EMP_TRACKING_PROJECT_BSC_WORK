@@ -59,7 +59,21 @@ export default function Employees() {
   const [modalTab, setModalTab] = useState<'overview' | 'edit' | 'performance'>('overview');
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
-  const [orgForm, setOrgForm] = useState({ roleId: '', departmentId: '', designationId: '', managerId: '', locationId: '', groupId: '', teamLeaderId: '', employmentType: '', additionalLocationIds: [] as number[] });
+  const [orgForm, setOrgForm] = useState({
+    roleId: '',
+    departmentId: '',
+    designationId: '',
+    managerId: '',
+    hrRepresentativeId: '',
+    joiningDate: '',
+    locationId: '',
+    groupId: '',
+    teamLeaderId: '',
+    exitDate: '',
+    exitReason: '',
+    employmentType: '',
+    additionalLocationIds: [] as number[],
+  });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '', employeeCode: '' });
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -258,6 +272,10 @@ export default function Employees() {
         locationId: result.locationId ? String(result.locationId) : '',
         groupId: result.groupId ? String(result.groupId) : '',
         teamLeaderId: result.teamLeaderId ? String(result.teamLeaderId) : '',
+        hrRepresentativeId: (result as any).hrRepresentativeId ? String((result as any).hrRepresentativeId) : '',
+        joiningDate: result.joiningDate ?? '',
+        exitDate: (result as any).exitDate ?? '',
+        exitReason: (result as any).exitReason ?? '',
         employmentType: result.employmentType,
         additionalLocationIds: (result as any).additionalLocationIds ?? [],
       });
@@ -755,6 +773,10 @@ export default function Employees() {
                         locationId: orgForm.locationId ? Number(orgForm.locationId) : null,
                         groupId: orgForm.groupId ? Number(orgForm.groupId) : null,
                         teamLeaderId: orgForm.teamLeaderId ? Number(orgForm.teamLeaderId) : null,
+                        hrRepresentativeId: orgForm.hrRepresentativeId ? Number(orgForm.hrRepresentativeId) : null,
+                        joiningDate: orgForm.joiningDate || undefined,
+                        exitDate: orgForm.exitDate || undefined,
+                        exitReason: orgForm.exitReason || undefined,
                         employmentType: orgForm.employmentType || undefined,
                         additionalLocationIds: orgForm.additionalLocationIds,
                       });
@@ -823,6 +845,47 @@ export default function Employees() {
                           {['full_time', 'part_time', 'contract', 'intern', 'probation'].map((value) => <option key={value} value={value}>{titleize(value)}</option>)}
                         </select>
                       </Field>
+                      <Field label="HR Representative">
+                        <select className="input" value={orgForm.hrRepresentativeId} onChange={(event) => setOrgForm({ ...orgForm, hrRepresentativeId: event.target.value })}>
+                          <option value="">Select HR Representative</option>
+                          {(data?.items ?? [])
+                            .filter((e) => e.roleSlug?.includes('hr') || e.departmentName?.toLowerCase().includes('hr'))
+                            .map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.fullName} ({e.employeeCode})
+                              </option>
+                            ))}
+                        </select>
+                      </Field>
+                      <Field label="Joining Date">
+                        <input
+                          type="date"
+                          className="input"
+                          value={orgForm.joiningDate}
+                          onChange={(event) => setOrgForm({ ...orgForm, joiningDate: event.target.value })}
+                        />
+                      </Field>
+                      <Field label="Exit Date (if separated)">
+                        <input
+                          type="date"
+                          className="input"
+                          value={orgForm.exitDate}
+                          onChange={(event) => setOrgForm({ ...orgForm, exitDate: event.target.value })}
+                        />
+                      </Field>
+                      {orgForm.exitDate && (
+                        <div className="col-span-full">
+                          <Field label="Exit Reason">
+                            <input
+                              type="text"
+                              className="input"
+                              placeholder="Reason for resignation, retirement, or termination"
+                              value={orgForm.exitReason}
+                              onChange={(event) => setOrgForm({ ...orgForm, exitReason: event.target.value })}
+                            />
+                          </Field>
+                        </div>
+                      )}
 
                       {/* Multi-Location & Store Access Matrix */}
                       <div className="col-span-full rounded-xl border border-slate-200 bg-white p-3.5 space-y-2.5 shadow-2xs">
@@ -1227,6 +1290,8 @@ function CreateEmployee({
     departmentId: '',
     designationId: '',
     managerId: '',
+    hrRepresentativeId: '',
+    joiningDate: '',
     locationId: '',
     groupId: '',
     employmentType: 'full_time',
@@ -1257,6 +1322,8 @@ function CreateEmployee({
         departmentId: Number(form.departmentId),
         designationId: form.designationId ? Number(form.designationId) : null,
         managerId: form.managerId ? Number(form.managerId) : null,
+        hrRepresentativeId: form.hrRepresentativeId ? Number(form.hrRepresentativeId) : null,
+        joiningDate: form.joiningDate || undefined,
         locationId: form.locationId ? Number(form.locationId) : null,
         groupId: form.groupId ? Number(form.groupId) : null,
       });
@@ -1445,6 +1512,32 @@ function CreateEmployee({
                     </option>
                   ))}
               </select>
+            </Field>
+
+            <Field label="HR Representative">
+              <select
+                className="input"
+                value={form.hrRepresentativeId}
+                onChange={(event) => setForm({ ...form, hrRepresentativeId: event.target.value })}
+              >
+                <option value="">Select HR Representative (Optional)</option>
+                {employees
+                  .filter((e) => e.roleSlug?.includes('hr') || e.departmentName?.toLowerCase().includes('hr'))
+                  .map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.fullName} ({e.employeeCode})
+                    </option>
+                  ))}
+              </select>
+            </Field>
+
+            <Field label="Joining Date">
+              <input
+                type="date"
+                className="input"
+                value={form.joiningDate}
+                onChange={(event) => setForm({ ...form, joiningDate: event.target.value })}
+              />
             </Field>
 
             <Field label="Employment type">

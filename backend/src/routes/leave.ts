@@ -116,6 +116,68 @@ leaveRouter.get(
   }),
 );
 
+/** Weekly-off application: one assigned weekly-off date, reason optional. */
+leaveRouter.post(
+  '/weekly-off',
+  requireAny('leave.apply'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        reason: z.string().max(2000).nullable().optional(),
+        hrApproverId: z.number().int().positive().optional(),
+      }),
+      req.body,
+    );
+    const result = await LeaveService.applyWeeklyOff(currentUser(req).id, body, { ip: clientIp(req), userAgent: req.get('user-agent') ?? undefined });
+    res.status(201).json(result);
+  }),
+);
+
+/** Validates a half-day date / session and shows which balance is charged 0.5 day. */
+leaveRouter.get(
+  '/half-day/preview',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const date = String(req.query.date ?? '');
+    const slot = String(req.query.slot ?? 'first_half');
+    if (slot !== 'first_half' && slot !== 'second_half') throw ApiError.badRequest('Select First Half or Second Half.');
+    res.json(await LeaveService.halfDayPreview(currentUser(req).id, date, slot));
+  }),
+);
+
+/** Half-day leave: one date, First Half or Second Half, always 0.5 day. Reason and document optional. */
+leaveRouter.post(
+  '/half-day',
+  requireAny('leave.apply'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const body = parseBody(
+      z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        slot: z.enum(['first_half', 'second_half']),
+        reason: z.string().max(2000).nullable().optional(),
+        hrApproverId: z.number().int().positive().optional(),
+        documentFileId: z.number().int().positive().nullable().optional(),
+      }),
+      req.body,
+    );
+    const result = await LeaveService.applyHalfDay(currentUser(req).id, body, { ip: clientIp(req), userAgent: req.get('user-agent') ?? undefined });
+    res.status(201).json(result);
+  }),
+);
+
+/** HR / Super Admin: assign an employee's weekly-off weekday (0 = Sunday … 6 = Saturday). */
+leaveRouter.put(
+  '/weekly-off-day/:employeeId',
+  requireAny('leave.manage'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const employeeId = intParam(req.params.employeeId, 'employeeId');
+    await assertLeaveAccess(user, employeeId);
+    const body = parseBody(z.object({ weekday: z.number().int().min(0).max(6) }), req.body);
+    res.json(await WeeklyOffService.setEmployeeWeekday(user, employeeId, body.weekday));
+  }),
+);
+
 leaveRouter.get(
   '/policy',
   asyncHandler(async (_req, res) => {
@@ -168,7 +230,7 @@ leaveRouter.post(
         leaveTypeId: z.number().int().positive(),
         startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        reason: z.string().min(10).max(2000),
+        reason: z.string().max(2000).nullable().optional(),
         documentFileId: z.number().int().positive().nullable().optional(),
         isHalfDay: z.boolean().optional(),
         halfDaySlot: z.enum(['first_half', 'second_half']).optional(),

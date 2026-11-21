@@ -143,6 +143,7 @@ export function AppShell() {
   useEffect(() => {
     if (!user) return;
     const modules: [RegExp, string][] = [
+      [/^\/hr/, 'HR Management'],
       [/^\/tasks/, 'Task Management'],
       [/^\/reports/, 'Daily Work Report'],
       [/^\/attendance/, 'Attendance'],
@@ -234,6 +235,14 @@ export function AppShell() {
     )
   );
 
+  const isHrOrAdmin = Boolean(
+    user && (
+      ['super_admin', 'admin', 'hr', 'hr_manager', 'hr_executive', 'payroll_admin'].includes(user.roleSlug) ||
+      (user.roleLevel ?? 0) >= 40 ||
+      canAny('employees.view.team', 'employees.view.all', 'employees.manage', 'admin.dashboard')
+    )
+  );
+
   const nav: { label: string; items: NavItem[] }[] = useMemo(
     () => [
       {
@@ -261,6 +270,22 @@ export function AppShell() {
           },
         ],
       },
+      ...(isHrOrAdmin
+        ? [
+            {
+              label: 'Human Resources',
+              items: [
+                { to: '/hr/dashboard', label: 'HR Dashboard', icon: 'dashboard', show: true },
+                { to: '/admin/employees', label: 'Employee Directory', icon: 'users', show: canAny('employees.view.team', 'employees.view.all') },
+                { to: '/attendance', label: 'Attendance Records', icon: 'clock', show: true },
+                { to: '/leave', label: 'Leave Approvals', icon: 'leave', show: true },
+                { to: '/hr/payroll', label: 'Salary & Payroll', icon: 'wallet', show: canAny('employees.manage', 'org.manage', 'admin.dashboard') },
+                { to: '/hr/documents', label: 'Employee Documents', icon: 'file', show: canAny('employees.manage', 'employees.view.all') },
+                { to: '/hr/announcements', label: 'HR Announcements', icon: 'bell', show: true },
+              ],
+            },
+          ]
+        : []),
       ...(isAdministrative
         ? [
             {
@@ -273,18 +298,11 @@ export function AppShell() {
                   show: canAny('groups.view.own', 'groups.view.all', 'groups.manage', 'employees.view.team', 'employees.view.all'),
                 },
                 {
-                  to: '/admin/employees',
-                  label: 'Employees',
-                  icon: 'users',
-                  show: canAny('employees.view.team', 'employees.view.all'),
-                },
-                {
                   to: '/organization',
                   label: 'Organisation',
                   icon: 'org',
                   show: canAny('org.manage', 'locations.manage', 'hierarchy.view.all', 'employees.view.all'),
                 },
-                { to: '/admin/organization', label: 'Organization data', icon: 'building', show: has('org.manage') },
                 {
                   to: '/admin/office-times',
                   label: 'Office times',
@@ -315,7 +333,7 @@ export function AppShell() {
           ]
         : []),
     ],
-    [has, canAny, user, isAdministrative],
+    [has, canAny, user, isAdministrative, isHrOrAdmin],
   );
 
   const activeTitle = useMemo(() => {
