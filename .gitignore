@@ -16,6 +16,7 @@ frontend/.env
 # Desktop agent runtime state (encrypted queue and device tokens)
 agent-data/
 monitor-device.json
+tmp/
 
 backend/.env.*
 !backend/.env.example
