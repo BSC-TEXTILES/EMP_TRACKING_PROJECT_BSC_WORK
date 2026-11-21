@@ -120,8 +120,8 @@ export function TeamWeeklyOffs() {
                   </td>
                   <td className="text-ink-600">{row.locationCode ?? '—'}</td>
                   <td className="text-right font-semibold text-ink-800">{row.allocated}</td>
-                  <td className="text-right text-emerald-700">{row.taken}</td>
-                  <td className="text-right text-sky-700">{row.remaining}</td>
+                  <td className="text-right font-semibold text-red-700">{row.taken}</td>
+                  <td className="text-right font-semibold text-emerald-700">{row.remaining}</td>
                   <td className="text-right text-amber-700">{row.worked}</td>
                   <td className="text-right text-ink-600">{row.leaveDaysThisMonth}</td>
                   <td className="text-right text-ink-600">{row.compOffAvailable}</td>

@@ -116,7 +116,8 @@ export default function Calendar() {
     const weeklyOff = isWeeklyOffDay(day);
     // Sundays and holidays inside a leave range are not leave days (they are not charged).
     const leave = weeklyOff || holiday ? [] : leaves.filter((item) => item.status === 'approved' && item.startDate <= day && item.endDate >= day);
-    return { dayTasks, dayMeetings, holiday, leave, weeklyOff };
+    const isHalfDay = leave.some((l) => (l as any).isHalfDay || (l as any).is_half_day || l.days === 0.5);
+    return { dayTasks, dayMeetings, holiday, leave, weeklyOff, isHalfDay };
   };
 
   const weekDays = view === 'week' ? days.slice(days.indexOf(selected) - new Date(`${selected}T00:00:00`).getDay(), days.indexOf(selected) - new Date(`${selected}T00:00:00`).getDay() + 7) : [];
@@ -212,13 +213,13 @@ export default function Calendar() {
         ) : view === 'month' ? (
           <div className="p-3">
             <div className="grid grid-cols-7 pb-1 text-center text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
-                <span key={day}>{day}</span>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day, idx) => (
+                <span key={day} className={idx === 0 ? 'text-red-600 font-bold' : undefined}>{day}</span>
               ))}
             </div>
             <div className="grid grid-cols-7 gap-1">
               {days.map((day) => {
-                const { dayTasks, dayMeetings, holiday, leave, weeklyOff } = eventsFor(day);
+                const { dayTasks, dayMeetings, holiday, leave, weeklyOff, isHalfDay } = eventsFor(day);
                 const inMonth = day.slice(0, 7) === iso(cursor).slice(0, 7);
                 const isSelected = selected === day;
                 const isToday = day === iso(new Date());
@@ -234,7 +235,8 @@ export default function Calendar() {
                         ? 'border-brand-500 bg-brand-50/50 shadow-sm ring-2 ring-brand-400/40'
                         : 'border-ink-100 bg-white hover:border-brand-300 hover:shadow-xs hover:bg-slate-50/70',
                       !inMonth && 'opacity-40 bg-slate-50/30',
-                      weeklyOff && !holiday && 'bg-emerald-50/60',
+                      isHalfDay && 'bg-orange-50/70 border-orange-200',
+                      weeklyOff && !holiday && 'bg-red-50/60 border-red-200',
                       holiday && 'bg-violet-50/50',
                     )}
                   >
@@ -265,8 +267,13 @@ export default function Calendar() {
 
                     <div className="mt-1 space-y-0.5">
                       {weeklyOff && (
-                        <p className="truncate rounded bg-emerald-100/90 px-1 py-0.5 text-[10px] font-semibold text-emerald-800">
+                        <p className="truncate rounded bg-red-100 px-1 py-0.5 text-[10px] font-semibold text-red-800">
                           Weekly off
+                        </p>
+                      )}
+                      {isHalfDay && (
+                        <p className="truncate rounded bg-orange-100 px-1 py-0.5 text-[10px] font-semibold text-orange-800">
+                          Half day
                         </p>
                       )}
                       {holiday && (
@@ -314,7 +321,7 @@ export default function Calendar() {
         ) : view === 'week' ? (
           <div className="grid gap-2 p-3 sm:grid-cols-7">
             {weekDays.map((day) => {
-              const { dayTasks, dayMeetings, holiday, weeklyOff } = eventsFor(day);
+              const { dayTasks, dayMeetings, holiday, weeklyOff, isHalfDay } = eventsFor(day);
               const isSelected = selected === day;
               return (
                 <div
@@ -329,7 +336,8 @@ export default function Calendar() {
                     <p className="text-xs font-bold text-ink-800">{formatDate(day)}</p>
                     <span className="text-[10px] text-ink-400 font-semibold">{dayTasks.length + dayMeetings.length} items</span>
                   </div>
-                  {weeklyOff && <Badge tone="success" className="mt-1 mr-1">Weekly off</Badge>}
+                  {weeklyOff && <Badge tone="danger" className="mt-1 mr-1 bg-red-100 text-red-800 border-red-200">Weekly off</Badge>}
+                  {isHalfDay && <Badge tone="warning" className="mt-1 mr-1 bg-orange-100 text-orange-800 border-orange-200">Half day</Badge>}
                   {holiday && <Badge tone="brand" className="mt-1">{holiday.name}</Badge>}
                   <div className="mt-2 space-y-1">
                     {dayMeetings.map((meeting) => (
@@ -383,9 +391,15 @@ export default function Calendar() {
             ) : (
               <div className="mt-4 space-y-3">
                 {selectedEvents.weeklyOff && (
-                  <div className="flex items-center gap-2.5 rounded-xl bg-emerald-50 border border-emerald-200 p-3.5 text-sm text-emerald-800 font-semibold">
+                  <div className="flex items-center gap-2.5 rounded-xl bg-red-50 border border-red-200 p-3.5 text-sm text-red-800 font-semibold">
                     <Icon name="calendar" size={18} />
                     <span>Sunday weekly off</span>
+                  </div>
+                )}
+                {selectedEvents.isHalfDay && (
+                  <div className="flex items-center gap-2.5 rounded-xl bg-orange-50 border border-orange-200 p-3.5 text-sm text-orange-800 font-semibold">
+                    <Icon name="clock" size={18} />
+                    <span>Half day leave session</span>
                   </div>
                 )}
                 {selectedEvents.holiday && (
@@ -617,9 +631,15 @@ export default function Calendar() {
         <div className="space-y-4 py-1">
           {/* Top Status & Context Banners */}
           {selectedEvents.weeklyOff && (
-            <div className="flex items-center gap-2.5 rounded-xl bg-emerald-50 border border-emerald-200 p-3 text-xs text-emerald-800 font-semibold">
+            <div className="flex items-center gap-2.5 rounded-xl bg-red-50 border border-red-200 p-3 text-xs text-red-800 font-semibold">
               <Icon name="calendar" size={16} />
               <span>Sunday weekly off</span>
+            </div>
+          )}
+          {selectedEvents.isHalfDay && (
+            <div className="flex items-center gap-2.5 rounded-xl bg-orange-50 border border-orange-200 p-3 text-xs text-orange-800 font-semibold">
+              <Icon name="clock" size={16} />
+              <span>Half day leave session</span>
             </div>
           )}
           {selectedEvents.holiday && (

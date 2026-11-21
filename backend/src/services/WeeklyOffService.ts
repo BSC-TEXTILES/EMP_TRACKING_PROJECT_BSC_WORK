@@ -348,8 +348,8 @@ export class WeeklyOffService {
         'SELECT work_date, status, check_in_at, total_minutes FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?',
         [employeeId, start, end],
       ),
-      query<{ start_date: string; end_date: string; type_name: string; code: string; status: string }>(
-        `SELECT l.start_date, l.end_date, t.name AS type_name, t.code, l.status
+      query<{ start_date: string; end_date: string; type_name: string; code: string; status: string; is_half_day: number; half_day_slot: string | null }>(
+        `SELECT l.start_date, l.end_date, t.name AS type_name, t.code, l.status, l.is_half_day, l.half_day_slot
          FROM leave_requests l JOIN leave_types t ON t.id = l.leave_type_id
          WHERE l.employee_id = ? AND l.status IN ('approved','pending_manager','pending_hr') AND l.start_date <= ? AND l.end_date >= ?`,
         [employeeId, end, start],
@@ -363,19 +363,28 @@ export class WeeklyOffService {
 
     const attendance = new Map(attendanceRows.map((row) => [String(row.work_date).slice(0, 10), row]));
     const creditByDate = new Map(credits.map((row) => [String(row.work_date).slice(0, 10), row]));
-    const leaveByDate = new Map<string, { type: string; code: string; status: string }>();
+    const leaveByDate = new Map<string, { type: string; code: string; status: string; isHalfDay: boolean; halfDaySlot: string | null }>();
     for (const leave of leaveRows) {
       const from = String(leave.start_date).slice(0, 10) < start ? start : String(leave.start_date).slice(0, 10);
       const to = String(leave.end_date).slice(0, 10) > end ? end : String(leave.end_date).slice(0, 10);
       for (const date of dateRange(from, to)) {
-        if (!leaveByDate.has(date) || leave.status === 'approved') leaveByDate.set(date, { type: leave.type_name, code: leave.code, status: leave.status });
+        if (!leaveByDate.has(date) || leave.status === 'approved') {
+          leaveByDate.set(date, {
+            type: leave.type_name,
+            code: leave.code,
+            status: leave.status,
+            isHalfDay: Boolean(leave.is_half_day),
+            halfDaySlot: leave.half_day_slot ?? null,
+          });
+        }
       }
     }
 
     const joining = employee.joining_date ? String(employee.joining_date).slice(0, 10) : null;
     const exit = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
     const allSundays = sundaysInMonth(year, month);
-    const eligible = new Set(eligibleSundays(year, month, joining, exit));
+    // Active employees are entitled to all weekly offs in the month
+    const eligible = new Set(allSundays.filter((date) => !exit || date <= exit.slice(0, 10)));
 
     const sundays = allSundays.map((date) => {
       const row = attendance.get(date);
@@ -398,6 +407,7 @@ export class WeeklyOffService {
       const weeklyOff = isWeeklyOff(date);
       const holidayName = holidays.get(date) ?? null;
       const credit = creditByDate.get(date);
+      const isHalfDay = Boolean(row?.status === 'half_day' || leave?.isHalfDay);
       return {
         date,
         day: Number(date.slice(8, 10)),
@@ -410,6 +420,8 @@ export class WeeklyOffService {
         attendanceStatus: row ? row.status : null,
         worked: Boolean(row?.check_in_at),
         workedMinutes: Number(row?.total_minutes ?? 0),
+        isHalfDay,
+        halfDaySlot: leave?.halfDaySlot ?? null,
         // Leave never "consumes" a Sunday or holiday, so those days do not show the leave.
         leave: leave && !weeklyOff && !holidayName ? leave : null,
         compOffDays: credit && credit.status !== 'revoked' ? Number(credit.days) : 0,
@@ -549,11 +561,8 @@ export class WeeklyOffService {
       sundays: allSundays,
       employees: employees.map((employee) => {
         const id = Number(employee.id);
-        const eligible = eligibleSundays(
-          year,
-          month,
-          employee.joining_date ? String(employee.joining_date).slice(0, 10) : null,
-          employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null,
+        const eligible = allSundays.filter(
+          (date) => !employee.deactivated_at || date <= String(employee.deactivated_at).slice(0, 10),
         );
         let taken = 0;
         let workedCount = 0;

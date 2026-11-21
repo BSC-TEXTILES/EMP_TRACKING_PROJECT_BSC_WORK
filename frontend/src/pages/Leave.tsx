@@ -485,15 +485,15 @@ export default function Leave() {
             const notTaken = weeklyOff.sundays.filter((sunday) => sunday.status === 'worked');
             const coSelected = selectedType?.code === 'CO';
             return (
-              <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
-                <p className="font-semibold">
+              <div className="space-y-2 rounded-lg border border-red-200 bg-red-50/70 p-3 text-xs text-red-950">
+                <p className="font-semibold text-red-900">
                   Weekly offs · {weeklyOff.monthName} {weeklyOff.year}: {weeklyOff.totalSundays} Sundays
                 </p>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <span>Allocated: <strong>{weeklyOff.weeklyOffs.allocated}</strong></span>
-                  <span>Taken: <strong>{weeklyOff.weeklyOffs.taken}</strong></span>
-                  <span>Remaining: <strong>{weeklyOff.weeklyOffs.remaining}</strong></span>
-                  <span>Not taken (worked): <strong>{weeklyOff.weeklyOffs.worked}</strong></span>
+                  <span className="text-red-700">Taken: <strong>{weeklyOff.weeklyOffs.taken}</strong></span>
+                  <span className="text-emerald-700">Remaining: <strong>{weeklyOff.weeklyOffs.remaining}</strong></span>
+                  <span className="text-amber-800">Not taken (worked): <strong>{weeklyOff.weeklyOffs.worked}</strong></span>
                 </div>
                 {notTaken.length > 0 ? (
                   <div>

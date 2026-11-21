@@ -34,7 +34,9 @@ interface WeeklyOffDay {
   attendanceStatus: string | null;
   worked: boolean;
   workedMinutes: number;
-  leave: { type: string; code: string; status: string } | null;
+  isHalfDay?: boolean;
+  halfDaySlot?: string | null;
+  leave: { type: string; code: string; status: string; isHalfDay?: boolean; halfDaySlot?: string | null } | null;
   compOffDays: number;
 }
 
@@ -170,10 +172,15 @@ function Stat({ label, value, hint, tone }: { label: string; value: number | str
 }
 
 function dayClasses(day: WeeklyOffDay): string {
-  if (day.isWeeklyOff) {
+  // Half day: MUST BE ORANGE
+  if (day.isHalfDay || day.attendanceStatus === 'half_day' || (day.leave && (day.leave as any).isHalfDay) || day.leave?.code === 'HDL') {
+    return 'bg-orange-50 text-orange-800 ring-1 ring-orange-300 border-orange-200 font-semibold';
+  }
+  // Weekly off (Sunday): MUST BE RED
+  if (day.isWeeklyOff || day.attendanceStatus === 'weekly_off') {
     if (!day.isEligibleWeeklyOff) return 'bg-ink-50 text-ink-300';
-    if (day.worked) return 'bg-amber-50 text-amber-800 ring-1 ring-amber-200';
-    return 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200';
+    if (day.worked) return 'bg-amber-50 text-amber-800 ring-1 ring-amber-200 font-semibold';
+    return 'bg-red-50 text-red-700 ring-1 ring-red-300 border-red-200 font-semibold';
   }
   if (day.holidayName) return 'bg-violet-50 text-violet-800 ring-1 ring-violet-200';
   if (day.leave) return day.leave.status === 'approved' ? 'bg-sky-50 text-sky-800 ring-1 ring-sky-200' : 'bg-sky-50/50 text-sky-700 ring-1 ring-dashed ring-sky-200';
@@ -183,8 +190,12 @@ function dayClasses(day: WeeklyOffDay): string {
 }
 
 function dayLabel(day: WeeklyOffDay): string {
-  if (day.isWeeklyOff) {
-    if (!day.isEligibleWeeklyOff) return 'Before joining';
+  if (day.isHalfDay || day.attendanceStatus === 'half_day' || (day.leave && (day.leave as any).isHalfDay) || day.leave?.code === 'HDL') {
+    const slot = day.halfDaySlot === 'first_half' ? '1st Half' : day.halfDaySlot === 'second_half' ? '2nd Half' : '';
+    return slot ? `Half Day (${slot})` : 'Half Day';
+  }
+  if (day.isWeeklyOff || day.attendanceStatus === 'weekly_off') {
+    if (!day.isEligibleWeeklyOff) return 'Not eligible';
     if (day.worked) return day.compOffDays ? `Worked · +${day.compOffDays} CO` : 'Worked';
     return day.holidayName ? `Weekly off · ${day.holidayName}` : 'Weekly off';
   }
@@ -200,7 +211,7 @@ export function WeeklyOffCalendar({ summary }: { summary: WeeklyOffSummary }) {
     <div>
       <div className="grid grid-cols-7 gap-1 pb-1 text-center text-[10px] font-semibold uppercase tracking-wide text-ink-400 sm:text-[11px]">
         {WEEKDAYS.map((name, index) => (
-          <span key={name} className={index === 0 ? 'text-emerald-700' : undefined}>{name}</span>
+          <span key={name} className={index === 0 ? 'text-red-600 font-bold' : undefined}>{name}</span>
         ))}
       </div>
       <div className="grid grid-cols-7 gap-1">
@@ -220,10 +231,11 @@ export function WeeklyOffCalendar({ summary }: { summary: WeeklyOffSummary }) {
         })}
       </div>
       <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-ink-500">
-        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-emerald-200" /> Sunday weekly off</span>
-        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-amber-200" /> Worked on weekly off</span>
-        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-violet-200" /> Public holiday</span>
-        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-sky-200" /> Leave</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-red-500" /> Weekly off (Sunday)</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-orange-500" /> Half day</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-amber-400" /> Worked on weekly off</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-violet-400" /> Public holiday</span>
+        <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded bg-sky-400" /> Leave</span>
       </div>
     </div>
   );
@@ -299,11 +311,21 @@ export function WeeklyOffPanel({
         <Stat
           label="Weekly offs allocated"
           value={w.allocated}
-          hint={w.notEligible ? `${w.notEligible} before joining date` : 'One per Sunday'}
-          tone="border-brand-200 bg-brand-50 text-brand-800"
+          hint={w.notEligible ? `${w.notEligible} not eligible` : `${w.allocated} weekly offs this month`}
+          tone="border-blue-200 bg-blue-50 text-blue-800"
         />
-        <Stat label="Weekly offs taken" value={w.taken} hint="Sundays already off" tone="border-emerald-200 bg-emerald-50 text-emerald-800" />
-        <Stat label="Remaining weekly offs" value={w.remaining} hint="Upcoming Sundays" tone="border-sky-200 bg-sky-50 text-sky-800" />
+        <Stat
+          label="Weekly offs taken"
+          value={w.taken}
+          hint={w.taken === 0 ? '0 taken so far' : `${w.taken} taken so far`}
+          tone="border-red-200 bg-red-50 text-red-800"
+        />
+        <Stat
+          label="Remaining weekly offs"
+          value={w.remaining}
+          hint={w.remaining > 0 ? `${w.remaining} remaining this month` : 'All weekly offs taken'}
+          tone="border-emerald-200 bg-emerald-50 text-emerald-800"
+        />
         {!compact && (
           <Stat
             label="Sundays worked"
