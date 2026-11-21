@@ -18,45 +18,28 @@ export const authRouter = Router();
  * embedded in the frontend bundle: the browser asks the API at runtime.
  */
 const DEMO_LOGINS = [
-    { role: 'Super Admin', email: 'admin@bsctextiles.in', fallbackEmail: 'admin@workforce.test' },
+    { role: 'Super Admin', email: 'renukaradhya@bsctextiles.in', fallbackEmail: 'admin@workforce.test' },
     { role: 'IT Support', email: 'it.admin@workforce.test', fallbackEmail: 'it.admin@workforce.test' },
     { role: 'Department Manager', email: 'it.manager@workforce.test', fallbackEmail: 'it.manager@workforce.test' },
     { role: 'Store Manager', email: 'store.manager@bsctextiles.in', fallbackEmail: 'store.manager@workforce.test' },
-    { role: 'HR Manager', email: 'hr.manager@bsctextiles.in', fallbackEmail: 'hr.manager@workforce.test' },
+    { role: 'HR Manager', email: 'chetan.tk@bsctextiles.in', fallbackEmail: 'hr.manager@workforce.test' },
     { role: 'Developer', email: 'ananya.rao@bsctextiles.in', fallbackEmail: 'ananya.rao@workforce.test' },
     { role: 'Employee', email: 'karthik.iyer@bsctextiles.in', fallbackEmail: 'karthik.iyer@workforce.test' },
 ];
 authRouter.get('/test-accounts', asyncHandler(async (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
+    if (config.isProd) {
+        res.json({ enabled: false, environment: config.env, accounts: [] });
+        return;
+    }
     const password = process.env.TEST_LOGIN_PASSWORD ?? 'Workforce@2026';
-    const renuka = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Renuka%' OR role_id = 1 ORDER BY (role_id = 1) DESC LIMIT 1");
-    const email = renuka?.email || 'renukaradhya@bsctextiles.in';
-    const name = renuka?.full_name || 'Renukaradhya M S';
-    const code = renuka?.employee_code || 'EMP-DVG-1604';
-    const chetan = await queryOne("SELECT id, full_name, employee_code, email, mobile FROM employees WHERE full_name LIKE '%Chetan%' LIMIT 1");
-    const hrEmail = chetan?.email || 'chetan.tk@bsctextiles.in';
-    const hrName = chetan?.full_name || 'Chetan TK';
-    const hrCode = chetan?.employee_code || 'EMP-HQ-1002';
-    res.json({
-        enabled: true,
-        environment: config.env,
-        accounts: [
-            {
-                role: 'Super Admin',
-                employeeId: code,
-                name,
-                email,
-                password,
-            },
-            {
-                role: 'HR Manager',
-                employeeId: hrCode,
-                name: hrName,
-                email: hrEmail,
-                password,
-            },
-        ],
-    });
+    const accounts = [];
+    for (const login of DEMO_LOGINS) {
+        const employee = await queryOne("SELECT full_name, employee_code, email FROM employees WHERE email IN (?, ?) AND status = 'active' ORDER BY (email = ?) DESC LIMIT 1", [login.email, login.fallbackEmail, login.email]);
+        if (employee)
+            accounts.push({ role: login.role, employeeId: employee.employee_code, name: employee.full_name, email: employee.email, password });
+    }
+    res.json({ enabled: accounts.length > 0, environment: config.env, accounts });
 }));
 function setSessionCookie(res, token, refreshToken, expiresAt = Date.now() + config.sessionTtlDays * 86400000) {
     res.cookie(config.cookieName, token, { httpOnly: true, sameSite: 'strict', secure: config.isProd, path: '/', maxAge: 15 * 60000 });

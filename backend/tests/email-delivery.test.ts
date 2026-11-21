@@ -1,5 +1,5 @@
 import net from 'node:net';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import { createApp } from '../src/index.js';
@@ -77,6 +77,7 @@ function useSmtp(enabled: boolean) {
   Object.assign(config.smtp, enabled
     ? { host: '127.0.0.1', port: smtpPort, secure: false, user: '', password: '', from: 'Workforce <no-reply@bsc.test>' }
     : { host: '' });
+  vi.spyOn(config.smtp, 'configured', 'get').mockReturnValue(enabled);
   resetMailTransport();
 }
 
@@ -88,6 +89,7 @@ afterEach(() => { captured = []; rejectAll = false; });
 afterAll(async () => {
   Object.assign(config.smtp, { host: original.host, port: original.port, secure: original.secure, user: original.user, password: original.password, from: original.from });
   resetMailTransport();
+  vi.restoreAllMocks();
   smtp.close();
   await closePool();
 });
@@ -115,7 +117,8 @@ describe('mailbox email delivery', () => {
     expect(send.status, JSON.stringify(send.body)).toBe(201);
     expect(send.body.deliveryConfigured).toBe(true);
     expect(send.body.delivered).toBe(1);
-    expect(send.body.recipients[0]).toMatchObject({ email: recipientEmail, delivery: 'sent', error: null });
+    expect(send.body.recipients.to).toContain(recipientEmail);
+    expect(send.body.status).toBe('accepted');
 
     expect(captured).toHaveLength(1);
     const message = captured[0];
@@ -127,10 +130,10 @@ describe('mailbox email delivery', () => {
     expect(message.data).not.toContain('spoofed.exe');
 
     const row = await queryOne<{ status: string; template: string }>(
-      "SELECT status, template FROM email_deliveries WHERE related_type = 'internal_email' AND related_id = ?",
-      [send.body.emailIds[0]],
+      "SELECT status, template FROM email_deliveries WHERE message_id = ?",
+      [send.body.messageId],
     );
-    expect(row).toMatchObject({ status: 'sent', template: 'internal_email' });
+    expect(row).toMatchObject({ status: 'accepted', template: 'direct' });
 
     // The recipient can open and download the attachment from their mailbox.
     const download = await recipient.agent.get(`/api/files/${fileId}?download=1`);
@@ -168,8 +171,8 @@ describe('mailbox email delivery', () => {
     });
     expect(send.status).toBe(201);
     expect(send.body.delivered).toBe(0);
-    expect(send.body.recipients[0].delivery).toBe('failed');
-    expect(String(send.body.recipients[0].error)).toMatch(/rejected/i);
+    expect(send.body.status).toBe('failed');
+    expect(String(send.body.error)).toMatch(/rejected|unavailable/i);
     // Still saved in the Workforce mailbox.
     const inbox = await recipient.agent.get('/api/emails/inbox');
     expect(inbox.status).toBe(200);
@@ -184,7 +187,8 @@ describe('mailbox email delivery', () => {
     });
     expect(send.status).toBe(201);
     expect(send.body.deliveryConfigured).toBe(false);
-    expect(send.body.recipients[0].delivery).toBe('not_configured');
+    expect(send.body.success).toBe(false);
+    expect(send.body.error).toMatch(/not configured/i);
     expect(captured).toHaveLength(0);
   });
 });

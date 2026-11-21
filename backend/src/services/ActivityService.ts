@@ -723,7 +723,7 @@ export class ActivityService {
   }
 
   /** Creates or groups a technical error and opens or updates a ticket when justified. */
-  static async recordError(employeeId: number, deviceId: number | null, sessionId: number | null, event: ActivityEvent) {
+  static async recordError(employeeId: number | null, deviceId: number | null, sessionId: number | null, event: ActivityEvent) {
     const description = sanitizeText(cleanText(event.description, 900));
     if (!description) return false;
     const category = cleanText(event.errorCategory, 60) || 'Application error';
@@ -783,10 +783,13 @@ export class ActivityService {
       // Existing ticket: attach the occurrence instead of opening a duplicate.
       await execute("UPDATE system_error_events SET status = 'grouped', ticket_id = ? WHERE client_event_id = ?", [incidentRow.ticket_id, eventId]);
       if ([2, 3, 5, 10].includes(count) || count % 25 === 0) {
-        await execute(
-          'INSERT INTO ticket_comments (ticket_id, author_id, body, is_internal) VALUES (?, ?, ?, 1)',
-          [incidentRow.ticket_id, employeeId, `Automatic update: the same error occurred again (${count} occurrences). Latest: ${description.slice(0, 300)}`],
-        );
+        const commentAuthor = employeeId ?? (await queryOne<{ id: number }>('SELECT id FROM employees ORDER BY id ASC LIMIT 1'))?.id ?? null;
+        if (commentAuthor) {
+          await execute(
+            'INSERT INTO ticket_comments (ticket_id, author_id, body, is_internal) VALUES (?, ?, ?, 1)',
+            [incidentRow.ticket_id, commentAuthor, `Automatic update: the same error occurred again (${count} occurrences). Latest: ${description.slice(0, 300)}`],
+          );
+        }
       }
     } else if (effectiveSeverity === 'high' || effectiveSeverity === 'critical' || count >= 3) {
       await ActivityService.createIncidentTicket(incidentId);
@@ -794,7 +797,9 @@ export class ActivityService {
       await execute("UPDATE error_incidents SET status = 'suggested' WHERE id = ? AND status = 'open'", [incidentId]);
       await execute("UPDATE system_error_events SET status = 'suggested' WHERE incident_id = ? AND ticket_id IS NULL", [incidentId]);
     }
-    await ActivityService.notifyWatchers(employeeId, 'activity:error', { incidentId, severity: effectiveSeverity, reopened });
+    if (employeeId) {
+      await ActivityService.notifyWatchers(employeeId, 'activity:error', { incidentId, severity: effectiveSeverity, reopened });
+    }
     return true;
   }
 
@@ -809,7 +814,12 @@ export class ActivityService {
     ) ?? await queryOne<Record<string, unknown>>('SELECT * FROM system_error_events WHERE incident_id = ? ORDER BY id DESC LIMIT 1', [incidentId]);
     if (!event) throw ApiError.badRequest('This incident has no recorded error event.');
     const { AuthService } = await import('./AuthService.js');
-    const requester = await AuthService.buildUser(Number(event.employee_id));
+    let empId = Number(event.employee_id);
+    if (!empId) {
+      const adminEmp = await queryOne<{ id: number }>('SELECT id FROM employees ORDER BY id ASC LIMIT 1');
+      empId = adminEmp ? Number(adminEmp.id) : 1;
+    }
+    const requester = await AuthService.buildUser(empId);
     if (!requester) throw ApiError.notFound('Employee not found');
     // The ticket is raised on the employee's behalf by the system, not by the employee's role.
     const actor = { ...requester, permissions: [...new Set([...requester.permissions, 'tickets.create'])] } as AuthUser;
@@ -887,8 +897,8 @@ export class ActivityService {
   }
 
   static async listErrors(user: AuthUser, options: { ownOnly?: boolean } = {}) {
-    const all = !options.ownOnly && user.permissions.includes('activity.view.all');
-    const team = !options.ownOnly && user.permissions.includes('activity.view.team');
+    const all = !options.ownOnly && (user.permissions.includes('activity.view.all') || user.roleName === 'Super Admin');
+    const team = !options.ownOnly && (user.permissions.includes('activity.view.team') || user.roleName === 'Manager');
     let clause = 'e.employee_id = ?';
     let params: unknown[] = [user.id];
     if (all) { clause = '1 = 1'; params = []; }
@@ -898,25 +908,27 @@ export class ActivityService {
       params = ids;
     }
     const rows = await query<Record<string, unknown>>(
-      `SELECT e.*, i.title AS incident_title, i.status AS incident_status, i.occurrence_count,
-              emp.full_name AS employee_name, t.ticket_no, t.status AS ticket_status, assignee.full_name AS assignee_name
+      `SELECT e.*, i.title AS incident_title, i.status AS incident_status, i.occurrence_count, i.fingerprint,
+              COALESCE(emp.full_name, 'Guest / Anonymous') AS employee_name, emp.employee_code,
+              t.ticket_no, t.status AS ticket_status, assignee.full_name AS assignee_name
        FROM system_error_events e
        JOIN error_incidents i ON i.id = e.incident_id
-       JOIN employees emp ON emp.id = e.employee_id
+       LEFT JOIN employees emp ON emp.id = e.employee_id
        LEFT JOIN tickets t ON t.id = COALESCE(e.ticket_id, i.ticket_id)
        LEFT JOIN employees assignee ON assignee.id = t.assignee_id
        WHERE ${clause}
-       ORDER BY e.occurred_at DESC LIMIT 100`,
+       ORDER BY e.occurred_at DESC LIMIT 200`,
       params,
     );
     return rows.map((row) => ({
       id: Number(row.id),
-      employeeId: Number(row.employee_id),
+      employeeId: row.employee_id ? Number(row.employee_id) : null,
       incidentId: Number(row.incident_id),
       incidentTitle: row.incident_title,
       incidentStatus: row.incident_status,
       occurrenceCount: Number(row.occurrence_count),
       employeeName: row.employee_name,
+      employeeCode: row.employee_code ?? null,
       application: row.application,
       module: row.module,
       category: row.category,
@@ -925,6 +937,8 @@ export class ActivityService {
       description: row.description,
       status: row.status,
       occurredAt: row.occurred_at,
+      clientEventId: row.client_event_id,
+      diagnostic: parseJson<Record<string, unknown>>(row.diagnostic, {}),
       ticketId: row.ticket_id ? Number(row.ticket_id) : null,
       ticketNo: row.ticket_no,
       ticketStatus: row.ticket_status ?? null,

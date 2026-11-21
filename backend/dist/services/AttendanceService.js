@@ -559,6 +559,7 @@ export class AttendanceService {
         // Sundays and public holidays inside a leave range stay weekly offs / holidays:
         // they are not leave days and were not charged to the balance.
         const holidays = await WeeklyOffService.employeeHolidays(employeeId, start, end);
+        const weeklyOffDay = await WeeklyOffService.employeeWeekday(employeeId);
         const total = daysBetween(start, end);
         const isHalf = Boolean(halfDayOptions?.isHalfDay);
         const slotText = halfDayOptions?.halfDaySlot === 'second_half' ? 'Second Half' : 'First Half';
@@ -566,7 +567,7 @@ export class AttendanceService {
         const note = isHalf ? `Approved half-day leave (${slotText})` : 'Approved leave';
         for (let i = 0; i <= total; i += 1) {
             const date = addDays(start, i);
-            if (isWeeklyOff(date) || holidays.has(date))
+            if (isWeeklyOff(date, weeklyOffDay) || holidays.has(date))
                 continue;
             await execute(`INSERT INTO attendance (employee_id, work_date, status, notes)
          VALUES (?, ?, ?, ?)

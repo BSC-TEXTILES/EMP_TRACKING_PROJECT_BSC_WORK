@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { Router } from 'express';
+import { config } from '../config.js';
 import { ApiError, asyncHandler, clientIp, intParam } from '../lib/http.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
@@ -46,44 +47,66 @@ activityRouter.post('/agent/health', rateLimit({ windowMs: 60000, max: 20, keyPr
 activityRouter.post('/agent/location', rateLimit({ windowMs: 60000, max: 10, keyPrefix: 'agent-location' }), requireDevice, asyncHandler(async (req, res) => {
     res.json(await DeviceTelemetryService.recordLocation(req.device, (req.body ?? {})));
 }));
-// Allow web client to report frontend errors without requiring authentication (e.g. login failures)
-activityRouter.post('/client-error', rateLimit({ windowMs: 60000, max: 30, keyPrefix: 'activity-client-error' }), asyncHandler(async (req, res) => {
-    const path = String(req.body?.path ?? '/').slice(0, 180);
-    const status = Number(req.body?.status ?? 500);
-    if (!Number.isFinite(status) || status < 400 || status > 599) {
-        res.json({ recorded: false, reason: 'invalid_status' });
-        return;
-    }
+// Allow web client to report frontend errors without requiring authentication (e.g. login failures, React crashes)
+activityRouter.post('/client-error', rateLimit({ windowMs: 60000, max: 60, keyPrefix: 'activity-client-error' }), asyncHandler(async (req, res) => {
+    const path = String(req.body?.path ?? req.body?.url ?? '/').slice(0, 180);
+    const errorName = String(req.body?.errorName ?? req.body?.name ?? 'ClientError').slice(0, 80);
+    const message = String(req.body?.message ?? req.body?.description ?? 'Client error occurred').slice(0, 900);
+    const stack = req.body?.stack ? String(req.body.stack).slice(0, 2000) : null;
+    const componentStack = req.body?.componentStack ? String(req.body.componentStack).slice(0, 2000) : null;
+    const moduleName = String(req.body?.module ?? 'Web Client').slice(0, 60);
+    const rawStatus = req.body?.status;
+    const status = Number.isFinite(Number(rawStatus)) ? Number(rawStatus) : null;
+    const severity = ['low', 'medium', 'high', 'critical'].includes(req.body?.severity)
+        ? req.body.severity
+        : (status && status >= 500 ? 'high' : (componentStack ? 'high' : 'medium'));
     // Attempt to extract user if authorization header or cookie is present
-    const authHeader = req.headers.authorization;
-    if (authHeader?.startsWith('Bearer ')) {
-        try {
+    let userId = null;
+    let sessionId = null;
+    try {
+        const token = (req.cookies?.[config.cookieName] ?? (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : undefined));
+        if (token) {
             const { AuthService } = await import('../services/AuthService.js');
-            const user = await AuthService.authenticateToken(authHeader.slice(7));
+            const user = await AuthService.authenticateToken(token);
             if (user) {
+                userId = user.id;
                 const session = await ActivityService.currentSession(user);
                 if (session) {
-                    const recorded = await ActivityService.recordError(user.id, null, session.id, {
-                        type: 'error',
-                        clientEventId: `client-${crypto.randomUUID()}`,
-                        errorCategory: Number(status) >= 500 ? 'Failed project operation' : 'Client request error',
-                        module: String(req.body?.module ?? 'Platform').slice(0, 60),
-                        errorCode: `HTTP_${status}`,
-                        severity: Number(status) >= 500 ? 'medium' : 'low',
-                        description: `Platform request failed with HTTP ${status} on ${path}`,
-                        application: 'Workforce web app',
-                        diagnostic: { status, path, source: 'web_client' },
-                    });
-                    res.json({ recorded });
-                    return;
+                    sessionId = session.id;
                 }
             }
         }
-        catch {
-            // Fall through to anonymous return
-        }
     }
-    res.json({ recorded: false, reason: 'unauthenticated' });
+    catch {
+        // Unauthenticated / expired
+    }
+    const clientEventId = `client-${crypto.randomUUID()}`;
+    const description = status
+        ? `[${errorName}] HTTP ${status} on ${path}: ${message}`
+        : `[${errorName}] on ${path}: ${message}`;
+    const diagnostic = {
+        path,
+        status,
+        errorName,
+        message,
+        stack,
+        componentStack,
+        userAgent: req.headers['user-agent'] ? String(req.headers['user-agent']).slice(0, 255) : null,
+        source: 'web_client',
+        clientReportedAt: new Date().toISOString(),
+    };
+    const recorded = await ActivityService.recordError(userId, null, sessionId, {
+        type: 'error',
+        clientEventId,
+        errorCategory: status && status >= 500 ? 'Server Request Failure' : (componentStack ? 'React Component Crash' : 'Client Runtime Error'),
+        module: moduleName,
+        errorCode: status ? `HTTP_${status}` : errorName,
+        severity,
+        description,
+        application: 'Workforce Web App',
+        diagnostic,
+    });
+    res.json({ recorded: Boolean(recorded), clientEventId });
 }));
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);

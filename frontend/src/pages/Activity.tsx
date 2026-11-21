@@ -20,6 +20,7 @@ import { LiveDevicesPanel } from '../components/LiveDevicesPanel';
 import { ActivityOverview } from './activity/ActivityOverview';
 import { ActivityTodayPanel } from './activity/ActivityTodayPanel';
 import { ActivityRecycleBin } from './activity/ActivityRecycleBin';
+import { ActivityErrorTracking } from './activity/ActivityErrorTracking';
 import { ActivityDeleteModal, PermanentPurgeModal } from './activity/ActivityDeleteModal';
 import {
   formatMinutes,
@@ -94,6 +95,7 @@ export default function Activity() {
     | 'devices'
     | 'trash'
     | 'policy'
+    | 'errors'
   >('today');
 
   // Modals & Panels
@@ -555,6 +557,7 @@ export default function Activity() {
         label: trashData.total > 0 ? `Recycle Bin (${trashData.total})` : 'Recycle Bin',
       },
       { value: 'policy', label: 'Monitoring Policy' },
+      { value: 'errors', label: 'Error Tracking & Incidents' },
     ];
   }, [canTeam, canAdmin, trashData.total]);
 
@@ -1900,6 +1903,9 @@ export default function Activity() {
           </Card>
         )
       )}
+
+      {/* TAB: ERROR TRACKING & INCIDENTS */}
+      {tab === 'errors' && <ActivityErrorTracking />}
 
       {/* POLICY MODAL */}
       <Modal

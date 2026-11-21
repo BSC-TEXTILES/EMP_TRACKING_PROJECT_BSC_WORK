@@ -11,10 +11,12 @@ import { initNativeSession, isNative } from './lib/native';
 import { initTheme } from './lib/theme';
 import { registerWebPushSubscription } from './lib/notifications';
 import { initOutbox } from './lib/outbox';
+import { initErrorTracking } from './lib/errorTracking';
 // Captures the browser's one-time install event before any screen renders.
 import './lib/installPrompt';
 
 initTheme();
+initErrorTracking();
 if (isNative) document.documentElement.dataset.native = '1';
 
 // Global recovery for stale bundle chunks across all dynamically imported routes.

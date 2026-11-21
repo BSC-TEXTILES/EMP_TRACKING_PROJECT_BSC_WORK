@@ -69,7 +69,7 @@ describe('in-app calling', () => {
   it('rings, is accepted only by the callee, connects and records a server-side duration', async () => {
     const caller = await login('ananya.rao@workforce.test');
     const callee = await login('karthik.iyer@workforce.test');
-    const outsider = await login('meera.joshi@workforce.test');
+    const outsider = await login('divya.desai@workforce.test');
     await clearCalls(caller.id, callee.id, outsider.id);
     await appOnline(callee);
 

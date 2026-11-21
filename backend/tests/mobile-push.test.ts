@@ -266,11 +266,21 @@ describe('device tokens and push delivery', () => {
     expect(sent.some((m) => m.token === phone)).toBe(false);
   });
 
-  it('stops pushing after logout, even with only the refresh token', async () => {
+  it('preserves notification registration by default while revoking login access', async () => {
+    const login = await mobileLogin('mobile.b@workforce.test');
+    const phone = token('keep-logout');
+    await request(app).post('/api/push/devices').set('Origin', MOBILE_ORIGIN).set('Authorization', `Bearer ${login.body.accessToken}`).send({ token: phone, platform: 'ios' });
+    const out = await request(app).post('/api/auth/mobile/logout').set('Origin', MOBILE_ORIGIN).send({ refreshToken: login.body.refreshToken });
+    expect(out.status).toBe(200);
+    expect(await db.queryOne('SELECT keep_after_logout FROM push_device_tokens WHERE token = ?', [phone])).toMatchObject({ keep_after_logout: 1 });
+    expect((await request(app).get('/api/auth/me').set('Authorization', `Bearer ${login.body.accessToken}`)).status).toBe(401);
+  });
+
+  it('stops pushing when requested on logout, even with only the refresh token', async () => {
     const login = await mobileLogin('mobile.b@workforce.test');
     const phone = token('logout');
     await request(app).post('/api/push/devices').set('Origin', MOBILE_ORIGIN).set('Authorization', `Bearer ${login.body.accessToken}`).send({ token: phone, platform: 'ios' });
-    const out = await request(app).post('/api/auth/mobile/logout').set('Origin', MOBILE_ORIGIN).send({ refreshToken: login.body.refreshToken });
+    const out = await request(app).post('/api/auth/mobile/logout').set('Origin', MOBILE_ORIGIN).send({ refreshToken: login.body.refreshToken, keepNotifications: false });
     expect(out.status).toBe(200);
     expect(await db.queryOne('SELECT id FROM push_device_tokens WHERE token = ?', [phone])).toBeNull();
     const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${login.body.accessToken}`);

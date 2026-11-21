@@ -167,6 +167,37 @@ describe('half-day leave', () => {
     expect(await queryOne('SELECT status FROM attendance WHERE employee_id = ? AND work_date = ?', [employee.id, halfDayDate])).toMatchObject({ status: 'half_day' });
   });
 
+  it('serves the HTTP API: month summary cards, schema validation and a reason-less weekly-off submission', async () => {
+    const { default: request } = await import('supertest');
+    const { createApp } = await import('../src/index.js');
+    const app = createApp();
+    const agent = request.agent(app);
+    const loginResponse = await agent
+      .post('/api/auth/login')
+      .set('Origin', 'http://localhost:5173')
+      .send({ identifier: 'nitin.jadhav@bsctextiles.in', password: 'Workforce@2026' });
+    expect(loginResponse.status).toBe(200);
+    const token = loginResponse.body.accessToken as string | undefined;
+    const auth = (r: ReturnType<typeof agent.get>) => (token ? r.set('Authorization', `Bearer ${token}`) : r).set('Origin', 'http://localhost:5173');
+
+    const summary = await auth(agent.get(`/api/leave/weekly-offs?year=${year}&month=${month}`));
+    expect(summary.status).toBe(200);
+    expect(summary.body.weeklyOffs).toMatchObject({ allocated: 4, taken: 2, remaining: 2 });
+    expect(summary.body.halfDays).toMatchObject({ taken: 1, deducted: 0.5 });
+    expect(typeof summary.body.pendingRequests).toBe('number');
+
+    const invalid = await auth(agent.post('/api/leave/half-day')).send({ date: halfDayDate, slot: 'evening' });
+    expect(invalid.status).toBe(400);
+    const notOff = await auth(agent.post('/api/leave/weekly-off')).send({ date: halfDayDate });
+    expect(notOff.status).toBe(400);
+
+    const created = await auth(agent.post('/api/leave/weekly-off')).send({ date: eligible[3], hrApproverId: hr.id });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ allocated: 4, taken: 2, remainingAfterApproval: 1 });
+    const preview = await auth(agent.get(`/api/leave/half-day/preview?date=${eligible[3]}&slot=first_half`));
+    expect(preview.status).toBe(400);
+  });
+
   it('lists only the employee’s own requests in the "mine" scope', async () => {
     const mine = await LeaveService.list(employee, { scope: 'mine', pageSize: 100 });
     expect(mine.items.length).toBeGreaterThan(0);
@@ -174,4 +205,18 @@ describe('half-day leave', () => {
     expect(mine.items.some((item) => item.requestKind === 'weekly_off')).toBe(true);
     expect(mine.items.some((item) => item.requestKind === 'half_day')).toBe(true);
   });
+  it('uses an assigned Tuesday weekly off instead of assuming Sunday', async () => {
+    await execute('UPDATE employees SET weekly_off_day = 2 WHERE id = ?', [employee.id]);
+    try {
+      const nextMonth = month === 12 ? 1 : month + 1;
+      const nextYear = month === 12 ? year + 1 : year;
+      const expected = dateRange(isoDate(nextYear, nextMonth, 1), isoDate(nextYear, nextMonth, daysInMonth(nextYear, nextMonth))).filter((date) => weekdayOf(date) === 2);
+      const balance = await WeeklyOffService.monthBalance(employee.id, nextYear, nextMonth);
+      expect(balance.allocated).toBe(expected.length);
+      expect(balance.dates.map((entry) => entry.date)).toEqual(expected);
+    } finally {
+      await execute('UPDATE employees SET weekly_off_day = 0 WHERE id = ?', [employee.id]);
+    }
+  });
+
 });

@@ -6,6 +6,7 @@ import { execute, query, queryOne, closePool } from '../src/db/index.js';
 import { enqueueEmail, processEmailQueue } from '../src/lib/mailer.js';
 import { today } from '../src/lib/dates.js';
 import { AuthService } from '../src/services/AuthService.js';
+import { config } from '../src/config.js';
 
 let app: Express;
 
@@ -713,6 +714,18 @@ describe('collection module', () => {
 });
 
 describe('development test login', () => {
+  it('never exposes demo credentials in production', async () => {
+    const previous = config.isProd;
+    try {
+      config.isProd = true;
+      const response = await request(app).get('/api/auth/test-accounts');
+      expect(response.status).toBe(200);
+      expect(response.body).toMatchObject({ enabled: false, accounts: [] });
+      expect(JSON.stringify(response.body)).not.toContain(PASSWORD);
+    } finally {
+      config.isProd = previous;
+    }
+  });
   it('returns seeded demo accounts outside production only', async () => {
     const response = await request(app).get('/api/auth/test-accounts');
     expect(response.status).toBe(200);

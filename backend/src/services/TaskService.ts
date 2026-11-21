@@ -227,7 +227,7 @@ export class TaskService {
 
       await conn.query(
         'UPDATE tasks SET time_slot = ?, requires_evidence = ?, evidence_type = ?, requires_metric = ?, metric_label = ?, metric_unit = ? WHERE id = ?',
-        [input.timeSlot ?? null, input.requiresEvidence ? 1 : 0, input.evidenceType ?? null, input.requiresMetric ? 1 : 0, input.metricLabel ?? null, input.metricUnit ?? null, taskId],
+        [input.timeSlot ?? 'operations', input.requiresEvidence ? 1 : 0, input.evidenceType ?? null, input.requiresMetric ? 1 : 0, input.metricLabel ?? null, input.metricUnit ?? null, taskId],
       );
       for (const assignee of [...new Set(input.assigneeIds)]) {
         await conn.query(

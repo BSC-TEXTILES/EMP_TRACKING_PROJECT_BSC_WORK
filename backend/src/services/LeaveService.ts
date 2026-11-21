@@ -78,49 +78,23 @@ export class LeaveService {
         manager = { id: Number(locMgr.id), name: locMgr.full_name };
       }
     }
-    if (!manager) {
-      const defaultAdmin = await queryOne<{ id: number; full_name: string }>(
-        `SELECT e.id, e.full_name FROM employees e
-         JOIN roles r ON r.id = e.role_id
-         WHERE e.status = 'active' AND e.id <> ? AND (r.slug IN ('super_admin', 'admin') OR r.level >= 90)
-         ORDER BY e.id ASC LIMIT 1`,
-        [employeeId],
-      );
-      if (defaultAdmin) {
-        manager = { id: Number(defaultAdmin.id), name: defaultAdmin.full_name };
-      }
-    }
-
-    // 2. Resolve HR approvers (location-assigned HR first, then global HR / Admin)
-    const hrApprovers: { id: number; name: string }[] = [];
-    if (employee.location_id) {
-      const assignedHr = await query<{ id: number; full_name: string }>(
-        `SELECT e.id, e.full_name FROM location_hr_assignments lh JOIN employees e ON e.id = lh.employee_id
-         WHERE lh.location_id = ? AND e.status = 'active' AND e.id <> ? ORDER BY e.full_name`,
-        [employee.location_id, employeeId],
-      ).catch(() => []);
-      for (const hr of assignedHr) {
-        hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
-      }
-    }
-    if (hrApprovers.length === 0) {
-      const globalHrs = await query<{ id: number; full_name: string }>(
-        `SELECT e.id, e.full_name FROM employees e
-         JOIN roles r ON r.id = e.role_id
-         WHERE e.status = 'active' AND e.id <> ? AND (r.slug IN ('hr', 'hr_manager', 'super_admin', 'admin') OR r.level >= 60)
-         ORDER BY r.level DESC, e.full_name LIMIT 5`,
-        [employeeId],
-      );
-      for (const hr of globalHrs) {
-        hrApprovers.push({ id: Number(hr.id), name: hr.full_name });
-      }
-    }
-
-    // Default location fallback
-    const effectiveLocationId = employee.location_id ?? 1;
-    const effectiveLocationName = employee.location_name ?? 'Head Office (HUB-HQ)';
+    // Approval routes must stay within the employee's assigned location.
+    const hrApprovers = employee.location_id ? await query<{ id: number; name: string }>(
+      `SELECT DISTINCT e.id, e.full_name AS name FROM employees e
+       JOIN role_permissions rp ON rp.role_id = e.role_id
+       JOIN permissions p ON p.id = rp.permission_id AND p.code = 'leave.approve.hr'
+       WHERE e.status = 'active' AND e.id <> ? AND (
+         e.location_id = ?
+         OR EXISTS (SELECT 1 FROM employee_locations el WHERE el.employee_id = e.id AND el.location_id = ?)
+         OR EXISTS (SELECT 1 FROM location_hr_assignments lh WHERE lh.employee_id = e.id AND lh.location_id = ?)
+       ) ORDER BY e.full_name`,
+      [employeeId, employee.location_id, employee.location_id, employee.location_id],
+    ) : [];
+    const effectiveLocationId = employee.location_id;
+    const effectiveLocationName = employee.location_name;
 
     const issues: string[] = [];
+    if (!employee.location_id) issues.push('No location is assigned. Contact administration.');
     if (!manager) issues.push('No reporting manager could be assigned. Contact administration.');
     if (!hrApprovers.length) issues.push('No HR approver could be found. Contact administration.');
 
@@ -536,7 +510,7 @@ export class LeaveService {
     context: { ip?: string; userAgent?: string } = {},
   ) {
     const { routing, hr } = await LeaveService.resolveRoute(employeeId, input.hrApproverId);
-    const preview = await LeaveService.halfDayPreview(employeeId, input.date, input.slot);
+    let preview = await LeaveService.halfDayPreview(employeeId, input.date, input.slot);
     if (input.documentFileId) {
       const file = await queryOne<{ id: number }>("SELECT id FROM files WHERE id = ? AND owner_id = ? AND scan_status IN ('clean','validated')", [input.documentFileId, employeeId]);
       if (!file) throw ApiError.forbidden('Select a supporting document uploaded by you.');
@@ -545,6 +519,9 @@ export class LeaveService {
 
     const id = await transaction(async (conn) => {
       await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [employeeId]);
+      // Re-read pending reservations after acquiring the employee lock. A preview
+      // made before waiting for another application may no longer have balance.
+      preview = await LeaveService.halfDayPreview(employeeId, input.date, input.slot);
       await LeaveService.assertNoHalfDayConflict(employeeId, input.date, input.slot, conn);
       const [result] = await conn.query<any>(
         `INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
@@ -730,7 +707,7 @@ export class LeaveService {
     if (Number(leave.employee_id) === actor.id) throw ApiError.forbidden('You cannot approve your own leave.');
     const routing = await LeaveService.applicationContext(Number(leave.employee_id));
     const isSuperOrOrgWide = actor.roleSlug === 'super_admin' || (actor.roleLevel ?? 0) >= 90 || actor.permissions.includes('locations.manage');
-    const assignedLocations = await query<{ location_id: number }>('SELECT location_id FROM employee_locations WHERE employee_id = ?', [actor.id]);
+    const assignedLocations = await query<{ location_id: number }>('SELECT location_id FROM employee_locations WHERE employee_id = ? UNION SELECT location_id FROM location_hr_assignments WHERE employee_id = ?', [actor.id, actor.id]);
     const requestLocation = Number(leave.request_location_id ?? routing.locationId);
     if (!isSuperOrOrgWide && requestLocation > 0 && Number(actor.locationId) !== requestLocation && !assignedLocations.some((l) => Number(l.location_id) === requestLocation)) {
       throw ApiError.forbidden('You can only approve leave for your assigned locations.');

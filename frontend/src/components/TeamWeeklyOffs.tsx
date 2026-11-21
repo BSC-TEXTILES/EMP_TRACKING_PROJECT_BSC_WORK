@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, errorMessage } from '../lib/api';
 import { useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 import { Card, EmptyState, Field, Modal, Skeleton } from './ui';
 import { MonthPicker, WeeklyOffPanel } from './WeeklyOffPanel';
 
@@ -12,10 +13,15 @@ interface TeamRow {
   locationCode: string | null;
   locationName: string | null;
   departmentName: string | null;
+  weeklyOffDay: number;
+  weeklyOffDayName: string;
   allocated: number;
   taken: number;
+  pending: number;
   worked: number;
   remaining: number;
+  halfDaysTaken: number;
+  halfDayDeducted: number;
   leaveDaysThisMonth: number;
   compOffAvailable: number;
 }
@@ -29,8 +35,13 @@ interface TeamSummary {
   employees: TeamRow[];
 }
 
+const WEEKDAY_OPTIONS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
 /** Managers see their reporting team; HR / admins see the locations they are assigned to. */
 export function TeamWeeklyOffs() {
+  const { has } = useAuth();
+  const toast = useToast();
+  const canManage = has('leave.manage');
   const now = new Date();
   const [period, setPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [locationId, setLocationId] = useState('');
@@ -63,6 +74,19 @@ export function TeamWeeklyOffs() {
     void load();
   }, [load]);
   useSocketEvent('leave:policy', () => void load());
+  useSocketEvent('leave:updated', () => void load());
+
+  const changeWeekday = async (row: TeamRow, weekday: number) => {
+    if (weekday === row.weeklyOffDay) return;
+    if (!window.confirm(`Change ${row.name}'s weekly off to ${WEEKDAY_OPTIONS[weekday]}? Approved weekly offs already taken are kept.`)) return;
+    try {
+      await api.put(`/leave/weekly-off-day/${row.employeeId}`, { weekday });
+      toast.success(`${row.name}'s weekly off is now ${WEEKDAY_OPTIONS[weekday]}.`);
+      await load();
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    }
+  };
 
   const rows = (data?.employees ?? []).filter((row) =>
     `${row.name} ${row.code ?? ''} ${row.locationCode ?? ''}`.toLowerCase().includes(search.trim().toLowerCase()),
@@ -74,7 +98,7 @@ export function TeamWeeklyOffs() {
         <div>
           <h2 className="text-sm font-semibold text-ink-900">Team weekly offs</h2>
           <p className="text-xs text-ink-500">
-            {data ? `${data.monthName} ${data.year} has ${data.totalSundays} Sundays, so each eligible employee gets ${data.totalSundays} weekly offs.` : 'Loading…'}
+            {data ? `${data.monthName} ${data.year}: weekly offs allocated from each employee's assigned weekly-off day and joining date; taken = approved.` : 'Loading…'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -103,10 +127,13 @@ export function TeamWeeklyOffs() {
               <tr>
                 <th>Employee</th>
                 <th>Location</th>
+                <th>Weekly off</th>
                 <th className="text-right">Allocated</th>
                 <th className="text-right">Taken</th>
+                <th className="text-right">Pending</th>
                 <th className="text-right">Remaining</th>
-                <th className="text-right">Sundays worked</th>
+                <th className="text-right">Half days</th>
+                <th className="text-right">Worked on off</th>
                 <th className="text-right">Leave days</th>
                 <th className="text-right">Comp-off</th>
               </tr>
@@ -119,9 +146,25 @@ export function TeamWeeklyOffs() {
                     <p className="text-xs text-ink-400">{row.code ?? ''}{row.departmentName ? ` · ${row.departmentName}` : ''}</p>
                   </td>
                   <td className="text-ink-600">{row.locationCode ?? '—'}</td>
+                  <td className="text-ink-600" onClick={(event) => canManage && event.stopPropagation()}>
+                    {canManage ? (
+                      <select
+                        className="input h-7 w-auto py-0 text-xs"
+                        value={row.weeklyOffDay}
+                        aria-label={`Weekly-off day for ${row.name}`}
+                        onChange={(event) => void changeWeekday(row, Number(event.target.value))}
+                      >
+                        {WEEKDAY_OPTIONS.map((name, index) => <option key={name} value={index}>{name}</option>)}
+                      </select>
+                    ) : (
+                      row.weeklyOffDayName
+                    )}
+                  </td>
                   <td className="text-right font-semibold text-ink-800">{row.allocated}</td>
-                  <td className="text-right font-semibold text-red-700">{row.taken}</td>
+                  <td className="text-right font-semibold text-emerald-700">{row.taken}</td>
+                  <td className="text-right text-amber-700">{row.pending}</td>
                   <td className="text-right font-semibold text-emerald-700">{row.remaining}</td>
+                  <td className="text-right text-orange-700">{row.halfDaysTaken}{row.halfDayDeducted ? ` (${row.halfDayDeducted} d)` : ''}</td>
                   <td className="text-right text-amber-700">{row.worked}</td>
                   <td className="text-right text-ink-600">{row.leaveDaysThisMonth}</td>
                   <td className="text-right text-ink-600">{row.compOffAvailable}</td>
@@ -186,7 +229,7 @@ export function LeavePolicyModal({ open, onClose }: { open: boolean; onClose: ()
       open={open}
       onClose={onClose}
       title="Weekly off & comp-off policy"
-      description="Sundays are always weekly offs and are calculated from the calendar. These rules control compensatory offs."
+      description="Weekly offs are calculated from each employee's assigned weekly-off day. These rules control compensatory offs."
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
@@ -199,12 +242,13 @@ export function LeavePolicyModal({ open, onClose }: { open: boolean; onClose: ()
       ) : (
         <form id="leave-policy-form" onSubmit={save} className="space-y-4">
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-800">
-            Every Sunday is a weekly off. A month with 5 Sundays gives 5 weekly offs; a month with 4 gives 4. Weekly offs are never deducted
-            from CL, SL or EL, and Sundays or public holidays inside a leave request are not charged.
+            Each employee's assigned weekly-off day (Sunday by default) is allocated for every such date on or after joining: a month with 5
+            gives 5 weekly offs, a month with 4 gives 4. A weekly off counts as taken once the manager and HR approve it. Weekly offs are never
+            deducted from CL, SL or EL, and weekly offs or public holidays inside a leave request are not charged.
           </div>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" className="h-4 w-4" checked={policy.compOffEnabled} onChange={(event) => setPolicy({ ...policy, compOffEnabled: event.target.checked })} />
-            Give compensatory off when an employee works on a Sunday
+            Give compensatory off when an employee works on their weekly off
           </label>
           <label className="flex items-center gap-2 text-sm">
             <input
