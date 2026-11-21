@@ -27,7 +27,40 @@ interface Holiday {
   is_optional: number;
 }
 
-type RequestOption = 'weekly_off' | 'half_day';
+interface LeaveType {
+  id: number;
+  name: string;
+  code: string;
+  annual_quota: number;
+  is_paid: number;
+  requires_document: number;
+}
+
+interface Balance {
+  leaveTypeId: number;
+  name: string;
+  code: string;
+  allocated: number;
+  used: number;
+  available: number;
+  requiresDocument: boolean;
+  isPaid: boolean;
+}
+
+interface DayBreakdown {
+  startDate: string;
+  endDate: string;
+  calendarDays: number;
+  chargedDays: number;
+  weeklyOffDays: number;
+  holidayDays: number;
+  weeklyOffDates: string[];
+  holidays: { date: string; name: string }[];
+  calendarCounted: boolean;
+  isHalfDay: boolean;
+}
+
+type RequestOption = 'regular' | 'weekly_off' | 'half_day';
 type HalfDaySlot = 'first_half' | 'second_half';
 
 interface HalfDayPreview {
@@ -106,20 +139,33 @@ export default function Leave() {
   const [busy, setBusy] = useState(false);
 
   // ------------------------------------------------------------ application form
-  const [requestType, setRequestType] = useState<RequestOption>('weekly_off');
+  const [requestType, setRequestType] = useState<RequestOption>('regular');
   const [reason, setReason] = useState('');
   const [document, setDocument] = useState<File | null>(null);
+
+  // Regular Leave State (CL, SL, EL, etc.)
+  const [types, setTypes] = useState<LeaveType[]>([]);
+  const [balances, setBalances] = useState<Balance[]>([]);
+  const [selectedLeaveTypeId, setSelectedLeaveTypeId] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [breakdown, setBreakdown] = useState<DayBreakdown | null>(null);
+  const [breakdownError, setBreakdownError] = useState<string>('');
+
+  // Weekly Off State (only user with saved weekly off can take)
   const now = new Date();
   const [woPeriod, setWoPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [woDate, setWoDate] = useState('');
   const { data: woSummary, error: woError, loading: woLoading } = useWeeklyOffSummary(undefined, woPeriod.year, woPeriod.month);
+
+  // Half Day State (0.5 day)
   const [hdDate, setHdDate] = useState('');
   const [hdSlot, setHdSlot] = useState<HalfDaySlot>('first_half');
   const [halfPreview, setHalfPreview] = useState<HalfDayPreview | null>(null);
   const [halfPreviewError, setHalfPreviewError] = useState('');
 
   const resetForm = () => {
-    setRequestType('weekly_off');
+    setRequestType('regular');
     setReason('');
     setDocument(null);
     setWoDate('');
@@ -127,6 +173,10 @@ export default function Leave() {
     setHdSlot('first_half');
     setHalfPreview(null);
     setHalfPreviewError('');
+    setStartDate('');
+    setEndDate('');
+    setBreakdown(null);
+    setBreakdownError('');
   };
 
   const load = async () => {
@@ -163,6 +213,23 @@ export default function Leave() {
     if (!entry || entry.status !== 'available') setWoDate('');
   }, [woSummary, woDate]);
 
+  // Regular Leave Breakdown preview
+  useEffect(() => {
+    setBreakdown(null);
+    setBreakdownError('');
+    if (!applyOpen || requestType !== 'regular' || !startDate || !endDate || endDate < startDate) return;
+    let cancelled = false;
+    const params = new URLSearchParams({ startDate, endDate });
+    if (selectedLeaveTypeId) params.set('leaveTypeId', selectedLeaveTypeId);
+    api
+      .get<DayBreakdown>(`/leave/preview?${params.toString()}`)
+      .then((res) => !cancelled && setBreakdown(res))
+      .catch((caught) => !cancelled && setBreakdownError(errorMessage(caught)));
+    return () => {
+      cancelled = true;
+    };
+  }, [applyOpen, requestType, startDate, endDate, selectedLeaveTypeId]);
+
   // Half day: server-side validation and the balance that will be charged 0.5 day.
   useEffect(() => {
     setHalfPreview(null);
@@ -189,14 +256,37 @@ export default function Leave() {
       setRoutingError(errorMessage(error));
     }
   };
+
   useEffect(() => {
-    if (applyOpen) void loadRouting();
+    if (applyOpen) {
+      void loadRouting();
+      // Fetch leave types (exclude 'WO' so Weekly Off never appears in regular leave types)
+      api
+        .get<{ types: LeaveType[] }>('/leave/types')
+        .then((res) => {
+          const regularTypes = (res.types ?? []).filter((t) => t.code !== 'WO');
+          setTypes(regularTypes);
+          if (regularTypes.length > 0) {
+            setSelectedLeaveTypeId((prev) => prev || String(regularTypes[0].id));
+          }
+        })
+        .catch(() => {});
+
+      api
+        .get<{ balances: Balance[] }>('/leave/balances')
+        .then((res) => setBalances(res.balances ?? []))
+        .catch(() => {});
+    }
   }, [applyOpen]);
 
   const canSubmit =
     Boolean(routing?.canApply && hrApproverId) &&
     !busy &&
-    (requestType === 'weekly_off' ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) > 0 : Boolean(hdDate && halfPreview));
+    (requestType === 'weekly_off'
+      ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) > 0
+      : requestType === 'half_day'
+        ? Boolean(hdDate && halfPreview)
+        : Boolean(selectedLeaveTypeId && startDate && endDate && endDate >= startDate && (breakdown?.chargedDays ?? 0) > 0));
 
   const apply = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -204,12 +294,17 @@ export default function Leave() {
     setBusy(true);
     try {
       const trimmed = reason.trim();
+      let documentFileId: number | undefined;
+      if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
+
       if (requestType === 'weekly_off') {
+        if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
+          toast.error('You have no saved weekly offs available to take.');
+          return;
+        }
         await api.post('/leave/weekly-off', { date: woDate, reason: trimmed || undefined, hrApproverId: Number(hrApproverId) });
         toast.success(`Weekly off request for ${formatDate(woDate)} submitted for approval.`);
-      } else {
-        let documentFileId: number | undefined;
-        if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
+      } else if (requestType === 'half_day') {
         await api.post('/leave/half-day', {
           date: hdDate,
           slot: hdSlot,
@@ -218,6 +313,16 @@ export default function Leave() {
           hrApproverId: Number(hrApproverId),
         });
         toast.success(`Half-day leave (${SLOT_LABEL[hdSlot]}) for ${formatDate(hdDate)} submitted for approval.`);
+      } else {
+        await api.post('/leave', {
+          leaveTypeId: Number(selectedLeaveTypeId),
+          hrApproverId: Number(hrApproverId),
+          startDate,
+          endDate,
+          reason: trimmed || undefined,
+          documentFileId,
+        });
+        toast.success('Leave request submitted for approval.');
       }
       setApplyOpen(false);
       resetForm();
@@ -525,20 +630,150 @@ export default function Leave() {
           )}
 
           <div className="space-y-1.5">
-            <span className="label">Request type</span>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2" role="group" aria-label="Request type">
-              {optionButton('weekly_off', 'calendar', 'Weekly Off', '1 day')}
+            <span className="label font-bold text-ink-900">Request type</span>
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3" role="group" aria-label="Request type">
+              {optionButton('regular', 'calendar', 'Regular Leave', 'CL / SL / EL')}
+              {optionButton('weekly_off', 'calendar', 'Weekly Off', `Saved (${w?.available ?? 0} avail)`)}
               {optionButton('half_day', 'clock', 'Half-Day Leave', '0.5 day')}
             </div>
           </div>
 
-          {requestType === 'weekly_off' ? (
+          {requestType === 'regular' ? (
             <>
-              <div className="space-y-2">
+              <Field label="Leave type" required>
+                <select
+                  className="input font-medium"
+                  value={selectedLeaveTypeId}
+                  onChange={(e) => setSelectedLeaveTypeId(e.target.value)}
+                  required
+                >
+                  <option value="">Select leave type</option>
+                  {types.map((t) => {
+                    const bal = balances.find((b) => b.leaveTypeId === t.id);
+                    let label = t.name;
+                    if (t.code === 'LWP') label += ' (Unpaid · Loss of Pay)';
+                    else if (t.code === 'CO') label += ` (${bal?.available ?? 0} days available · Compensatory Off)`;
+                    else if (t.code === 'ML') label += ' (Maternity · 26 weeks · Medical doc required)';
+                    else if (t.code === 'PL') label += ' (Paternity · Up to 10 days · Doc required)';
+                    else label += ` (${bal?.available ?? t.annual_quota} days available)`;
+                    return (
+                      <option key={t.id} value={t.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Start date" required>
+                  <input
+                    type="date"
+                    className="input font-medium"
+                    value={startDate}
+                    min={localToday()}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
+                    }}
+                    required
+                  />
+                </Field>
+                <Field label="End date" required>
+                  <input
+                    type="date"
+                    className="input font-medium"
+                    value={endDate}
+                    min={startDate || localToday()}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    required
+                  />
+                </Field>
+              </div>
+
+              {breakdownError ? (
+                <p role="alert" className="text-xs text-red-600">{breakdownError}</p>
+              ) : breakdown ? (
+                <div className={breakdown.chargedDays > 0 ? 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700' : 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'}>
+                  {breakdown.calendarCounted ? (
+                    <p><strong>{breakdown.chargedDays}</strong> calendar day(s) (maternity leave is counted in calendar days).</p>
+                  ) : breakdown.chargedDays > 0 ? (
+                    <p>
+                      <strong>{breakdown.chargedDays}</strong> day(s) will be deducted from your leave balance
+                      {breakdown.weeklyOffDays + breakdown.holidayDays > 0 &&
+                        ` (${breakdown.calendarDays} calendar days; ${breakdown.weeklyOffDays ? `${breakdown.weeklyOffDays} Sunday weekly off(s)` : ''}${breakdown.weeklyOffDays && breakdown.holidayDays ? ' and ' : ''}${breakdown.holidayDays ? `${breakdown.holidayDays} public holiday(s)` : ''} not charged)`}
+                      .
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="font-semibold text-amber-900">
+                        These selected dates ({startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} to ${formatDate(endDate)}`}) are Sunday weekly off(s) or public holidays.
+                      </p>
+                      {breakdown.weeklyOffDays > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-amber-200">
+                          <span className="text-[11px] text-amber-800 font-medium">
+                            Want to take this date as your scheduled weekly off from your monthly balance?
+                          </span>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
+                            onClick={() => {
+                              setRequestType('weekly_off');
+                              setWoDate(startDate);
+                            }}
+                          >
+                            <Icon name="calendar" size={12} />
+                            Apply as Saved Weekly Off
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              <Field label="Supporting document (optional)">
+                <input type="file" className="input" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
+              </Field>
+            </>
+          ) : requestType === 'weekly_off' ? (
+            <>
+              <div className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="label mb-0">Select date</span>
+                  <div>
+                    <span className="label mb-0 block font-bold text-ink-900">Select weekly-off date</span>
+                    <span className="text-[11px] text-ink-500">Only saved/allocated weekly offs can be selected and taken</span>
+                  </div>
                   <MonthPicker year={woPeriod.year} month={woPeriod.month} onChange={(year, month) => { setWoPeriod({ year, month }); setWoDate(''); }} />
                 </div>
+
+                {/* Monthly Saved Weekly-Off Balance Summary Card */}
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-950 sm:grid-cols-4 shadow-xs">
+                  <div>
+                    <span className="text-[11px] text-emerald-700 block">Total Sundays</span>
+                    <strong className="text-sm font-bold">{woSummary?.totalSundays ?? 5}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-emerald-700 block">Allocated</span>
+                    <strong className="text-sm font-bold">{w?.allocated ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-emerald-700 block">Taken</span>
+                    <strong className="text-sm font-bold text-emerald-800">{w?.taken ?? 0}</strong>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-emerald-700 block">Saved / Available</span>
+                    <strong className={cx('text-sm font-bold', (w?.available ?? 0) > 0 ? 'text-emerald-700' : 'text-red-600')}>
+                      {w?.available ?? 0} available
+                    </strong>
+                  </div>
+                  {(w?.pending ?? 0) > 0 && (
+                    <div className="col-span-2 sm:col-span-4 pt-1 border-t border-emerald-200 text-emerald-800 text-[11px]">
+                      {w?.pending} date(s) currently reserved by pending approval.
+                    </div>
+                  )}
+                </div>
+
                 {woError && !woSummary ? (
                   <p role="alert" className="text-xs text-red-600">{woError}</p>
                 ) : !woSummary || (woLoading && (woSummary.month !== woPeriod.month || woSummary.year !== woPeriod.year)) ? (
@@ -558,35 +793,30 @@ export default function Leave() {
                             disabled={!selectable}
                             onClick={() => setWoDate(entry.date)}
                             className={cx(
-                              'rounded-lg border px-2 py-2 text-left text-xs transition-all',
+                              'rounded-lg border px-2.5 py-2.5 text-left text-xs transition-all',
                               selected
-                                ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-semibold'
+                                ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
                                 : selectable
-                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-emerald-300'
-                                  : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400',
+                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
+                                  : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
                             )}
                           >
-                            <span className="block font-semibold">{formatDate(entry.date)}</span>
-                            <span className="text-[11px]">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
+                            <span className="block font-bold">{formatDate(entry.date)}</span>
+                            <span className="text-[11px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
                           </button>
                         );
                       })}
                     </div>
-                    <p className="text-xs text-ink-500">
-                      Only your eligible {woSummary.weeklyOffDayName}s on or after your joining date can be selected. Taken, pending and worked dates are locked.
-                    </p>
-                    <div className="grid grid-cols-2 gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 sm:grid-cols-4">
-                      <span>Allocated: <strong>{w?.allocated ?? 0}</strong></span>
-                      <span>Taken: <strong>{w?.taken ?? 0}</strong></span>
-                      <span>Available balance: <strong>{w?.available ?? 0}</strong></span>
-                      <span>
-                        Remaining balance{woDate ? ' after approval' : ''}: <strong>{woDate ? Math.max(0, (w?.remaining ?? 0) - 1) : (w?.remaining ?? 0)}</strong>
-                      </span>
-                      {(w?.pending ?? 0) > 0 && <span className="col-span-2 sm:col-span-4 text-emerald-800">{w?.pending} date(s) reserved by pending requests.</span>}
-                    </div>
-                    {(w?.available ?? 0) <= 0 && (
-                      <p role="alert" className="text-xs font-semibold text-red-700">No weekly-off balance is available for {woSummary.monthName} {woSummary.year}.</p>
-                    )}
+
+                    {(w?.available ?? 0) <= 0 ? (
+                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
+                        ⚠️ No saved weekly-off balance is available for {woSummary.monthName} {woSummary.year}. You have taken or reserved all eligible weekly offs.
+                      </div>
+                    ) : woDate ? (
+                      <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
+                        Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your saved weekly-off quota upon approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
+                      </div>
+                    ) : null}
                   </>
                 )}
               </div>
