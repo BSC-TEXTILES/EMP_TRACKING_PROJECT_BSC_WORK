@@ -1,5 +1,6 @@
 import { emailSettingsRouter } from './emailSettings.js';
 import { internalEmailsRouter } from './internalEmails.js';
+import { publicDownloadsRouter } from './publicDownloads.js';
 import { Router } from 'express';
 import { queryOne } from '../db/index.js';
 import { authRouter } from './auth.js';
@@ -76,3 +77,4 @@ apiRouter.use('/groups', groupsRouter);
 apiRouter.use('/hierarchy', hierarchyRouter);
 apiRouter.use('/issues', issuesRouter);
 apiRouter.use('/hr', hrRouter);
+apiRouter.use('/downloads', publicDownloadsRouter);

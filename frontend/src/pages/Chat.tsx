@@ -163,6 +163,7 @@ export default function Chat() {
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
+  const [deleteModePopover, setDeleteModePopover] = useState<{ target: ConversationSummary; x: number; y: number } | null>(null);
   const [membersOpen, setMembersOpen] = useState(false);
   const [busyAction, setBusyAction] = useState(false);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
@@ -898,14 +899,14 @@ export default function Chat() {
     if (!targetId) return;
     setBusyAction(true);
     try {
-      const result = await api.del<{ deleted?: boolean; left?: boolean; hidden?: boolean }>(
-        `/chat/conversations/${targetId}`,
-      );
+      const url = deleteMode === 'both' ? `/chat/conversations/${targetId}?for=both` : `/chat/conversations/${targetId}`;
+      const result = await api.del<{ deleted?: boolean; left?: boolean; hidden?: boolean }>(url);
       removeConversationLocally(targetId);
       setDeleteOpen(false);
       setDeleteTarget(null);
+      setDeleteMode('me'); // Reset to default
       if (result.hidden) toast.success('Chat deleted from your account.');
-      else if (result.deleted) toast.success('Group deleted for all members.');
+      else if (result.deleted) toast.success(deleteMode === 'both' ? 'Conversation deleted for both participants.' : 'Group deleted for all members.');
       else if (result.left) toast.success('You left the conversation.');
       else toast.success('Conversation removed.');
     } catch (caught) {
@@ -913,6 +914,27 @@ export default function Chat() {
     } finally {
       setBusyAction(false);
     }
+  };
+
+  const openDeleteModeSelector = (e: React.MouseEvent<HTMLElement>, conversation: ConversationSummary) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    // For admins on direct chats, show mode selector popover
+    if (isAdmin && conversation.type === 'direct') {
+      setDeleteModePopover({ target: conversation, x: rect.left, y: rect.bottom + 4 });
+    } else {
+      // Non-admins or groups: direct to delete modal with default mode
+      setDeleteMode('me');
+      setDeleteTarget(conversation);
+      setDeleteOpen(true);
+    }
+  };
+
+  const selectDeleteMode = (mode: 'me' | 'both', conversation: ConversationSummary) => {
+    setDeleteMode(mode);
+    setDeleteTarget(conversation);
+    setDeleteOpen(true);
+    setDeleteModePopover(null);
   };
 
   const onTyping = (value: string) => {
@@ -1034,18 +1056,31 @@ export default function Chat() {
         ? ({ id: detail.id, name: detail.name, type: detail.type } as ConversationSummary)
         : null);
 
+  // Check if current user is admin (matches backend: roleLevel >= 60 || chat.groups.manage permission)
+  const isAdmin = user && (user.roleLevel >= 60 || user.permissions.includes('chat.groups.manage'));
+
+  // State for delete mode: 'me' (default) or 'both' (admin only)
+  const [deleteMode, setDeleteMode] = useState<'me' | 'both'>('me');
+
   const deleteCopy =
     currentDeleteTarget?.type === 'direct'
-      ? {
-          title: `Delete chat with ${currentDeleteTarget.name}`,
-          description:
-            `This chat with ${currentDeleteTarget.name} and its messages will be removed from your account. The other participant keeps their copy. This cannot be undone.`,
-          confirm: 'Delete chat',
-        }
+      ? deleteMode === 'both'
+        ? {
+            title: `Delete chat with ${currentDeleteTarget.name} for both sides`,
+            description:
+              `This will permanently delete the conversation and all messages for BOTH you and ${currentDeleteTarget.name}. This action cannot be undone.`,
+            confirm: 'Delete for both',
+          }
+        : {
+            title: `Delete chat with ${currentDeleteTarget.name} for you`,
+            description:
+              `This chat with ${currentDeleteTarget.name} and its messages will be removed from your account only. The other participant keeps their copy. This cannot be undone.`,
+            confirm: 'Delete for me',
+          }
       : {
           title: `Delete group "${currentDeleteTarget?.name ?? 'group'}"`,
           description:
-            'Are you sure you want to delete this group? This action will permanently remove the conversation and all messages.',
+            'Are you sure you want to delete this group? This action will permanently remove the conversation and all messages for all members.',
           confirm: 'Delete group',
         };
 
@@ -1205,11 +1240,7 @@ export default function Chat() {
                       type="button"
                       title="Delete chat"
                       aria-label="Delete chat"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setDeleteTarget(conversation);
-                        setDeleteOpen(true);
-                      }}
+                      onClick={(e) => openDeleteModeSelector(e, conversation)}
                       className="rounded-lg p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
                     >
                       <Icon name="trash" size={13} />
@@ -1357,14 +1388,13 @@ export default function Chat() {
                   type="button"
                   className="rounded-lg p-1.5 text-red-500 hover:bg-red-50 transition-colors"
                   title="Delete chat"
-                  onClick={() => {
+                  onClick={(e) => {
                     const target = activeConversation ?? (detail ? ({
                       id: detail.id,
                       name: detail.name,
                       type: detail.type,
                     } as ConversationSummary) : null);
-                    setDeleteTarget(target);
-                    setDeleteOpen(true);
+                    if (target) openDeleteModeSelector(e, target);
                   }}
                 >
                   <Icon name="trash" size={16} />
@@ -1685,6 +1715,41 @@ export default function Chat() {
         confirmLabel={deleteCopy.confirm}
         busy={busyAction}
       />
+      {/* Delete Mode Selector Popover (for admins on direct chats) */}
+      {deleteModePopover && (
+        <div
+          className="fixed z-50"
+          style={{ left: deleteModePopover.x, top: deleteModePopover.y }}
+        >
+          <div className="rounded-lg border border-ink-200 bg-white shadow-lg min-w-[180px] py-1">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-ink-700 hover:bg-ink-50"
+              onClick={() => selectDeleteMode('me', deleteModePopover.target)}
+            >
+              <Icon name="trash" size={14} className="text-slate-500" />
+              <span>Delete for me</span>
+              <span className="ml-auto text-[10px] text-slate-400">Keeps for other</span>
+            </button>
+            <div className="border-t border-ink-100" />
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50"
+              onClick={() => selectDeleteMode('both', deleteModePopover.target)}
+            >
+              <Icon name="trash" size={14} className="text-red-500" />
+              <span>Delete for both sides</span>
+              <span className="ml-auto text-[10px] text-red-400">Admin only</span>
+            </button>
+          </div>
+          {/* Invisible backdrop to catch outside clicks */}
+          <div
+            className="fixed inset-0 z-[-1]"
+            onClick={() => setDeleteModePopover(null)}
+            aria-hidden="true"
+          />
+        </div>
+      )}
       <GroupMembersModal
         open={membersOpen}
         onClose={() => setMembersOpen(false)}

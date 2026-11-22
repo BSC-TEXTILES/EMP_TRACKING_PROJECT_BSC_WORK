@@ -367,6 +367,9 @@ export class DailyReportService {
         }
         let newStatus = report.status;
         if (input.status) {
+            if (!isReviewer && (input.status === 'approved' || input.status === 'changes_requested')) {
+                throw ApiError.forbidden('Only a manager or reviewer can approve reports or request changes.');
+            }
             newStatus = input.status;
             updates.push('status = ?');
             params.push(newStatus);

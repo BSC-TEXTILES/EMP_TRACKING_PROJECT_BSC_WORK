@@ -262,7 +262,7 @@ export class WeeklyOffService {
         const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
         const [requests, attendance] = await Promise.all([
             run(`SELECT id, start_date, end_date, status FROM leave_requests
-         WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')
+         WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_both','pending_manager','pending_hr','approved')
            AND start_date <= ? AND end_date >= ?`, [employeeId, end, start]),
             run('SELECT work_date, status, check_in_at FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?', [employeeId, start, end]),
         ]);
@@ -373,14 +373,14 @@ export class WeeklyOffService {
             query('SELECT work_date, status, check_in_at, total_minutes FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?', [employeeId, start, end]),
             query(`SELECT l.start_date, l.end_date, t.name AS type_name, t.code, l.status, l.is_half_day, l.half_day_slot
          FROM leave_requests l JOIN leave_types t ON t.id = l.leave_type_id
-         WHERE l.employee_id = ? AND l.request_kind <> 'weekly_off' AND l.status IN ('approved','pending_manager','pending_hr')
+         WHERE l.employee_id = ? AND l.request_kind <> 'weekly_off' AND l.status IN ('approved','pending_both','pending_manager','pending_hr')
            AND l.start_date <= ? AND l.end_date >= ?`, [employeeId, end, start]),
             query('SELECT work_date, days, status FROM comp_off_credits WHERE employee_id = ? AND work_date BETWEEN ? AND ?', [employeeId, start, end]),
             WeeklyOffService.policy(),
             query(`SELECT COUNT(*) AS total, SUM(days) AS deducted FROM leave_requests
          WHERE employee_id = ? AND is_half_day = 1 AND status = 'approved' AND start_date BETWEEN ? AND ?`, [employeeId, start, end]),
             query(`SELECT request_kind, is_half_day, COUNT(*) AS total FROM leave_requests
-         WHERE employee_id = ? AND status IN ('pending_manager','pending_hr') AND start_date BETWEEN ? AND ?
+         WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr') AND start_date BETWEEN ? AND ?
          GROUP BY request_kind, is_half_day`, [employeeId, start, end]),
         ]);
         const weekday = balance.weekday;
@@ -553,7 +553,7 @@ export class WeeklyOffService {
         const [requests, attendance, leaveDays, halfDays, credits, coLedger] = await Promise.all([
             query(`SELECT employee_id, start_date, end_date, status FROM leave_requests
          WHERE employee_id IN (${placeholders}) AND request_kind = 'weekly_off'
-           AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`, [...ids, end, start]),
+           AND status IN ('pending_both','pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`, [...ids, end, start]),
             query(`SELECT employee_id, work_date, status, check_in_at FROM attendance
          WHERE employee_id IN (${placeholders}) AND work_date BETWEEN ? AND ? AND (check_in_at IS NOT NULL OR status = 'weekly_off')`, [...ids, start, end]),
             query(`SELECT employee_id, COUNT(*) AS total FROM attendance

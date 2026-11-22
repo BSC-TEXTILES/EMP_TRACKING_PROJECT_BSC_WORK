@@ -43,17 +43,25 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const toast = useCallback(
     (message: string, tone: ToastTone = 'info', title?: string, durationMs = 4500) => {
-      counter += 1;
-      const id = counter;
-      const newToast: Toast = { id, message, title, tone, createdAt: Date.now() };
-
+      // Prevent rapid duplicate toast spamming within 3 seconds
+      const now = Date.now();
+      let isDuplicate = false;
       setToasts((prev) => {
+        if (prev.some((item) => item.message === message && now - item.createdAt < 3000)) {
+          isDuplicate = true;
+          return prev;
+        }
+        counter += 1;
+        const id = counter;
+        const newToast: Toast = { id, message, title, tone, createdAt: now };
+
         // Keep at most 4 stacked notifications at a time to prevent screen clogging
         const trimmed = prev.length >= 4 ? prev.slice(prev.length - 3) : prev;
         return [...trimmed, newToast];
       });
 
-      if (durationMs > 0) {
+      if (!isDuplicate && durationMs > 0) {
+        const id = counter;
         window.setTimeout(() => {
           dismiss(id);
         }, durationMs);

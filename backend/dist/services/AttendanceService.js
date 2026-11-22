@@ -173,9 +173,9 @@ export class AttendanceService {
         const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
         const shift = await shiftConfig(emp?.location_id);
         const row = await queryOne(`SELECT a.*, NOW(3) AS server_now,
-              (SELECT b.id FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_id,
-              (SELECT b.started_at FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_start
-       FROM attendance a WHERE a.employee_id = ? AND a.work_date = ?`, [employeeId, date]);
+              (SELECT b.id FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.session_number = a.session_number AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_id,
+              (SELECT b.started_at FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.session_number = a.session_number AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_start
+       FROM attendance a WHERE a.employee_id = ? AND a.work_date = ? ORDER BY a.session_number DESC LIMIT 1`, [employeeId, date]);
         const holiday = await queryOne(`SELECT h.name FROM holidays h
        WHERE h.holiday_date = ?
          AND (h.location_id IS NULL OR h.location_id = (SELECT location_id FROM employees WHERE id = ?))
@@ -224,22 +224,23 @@ export class AttendanceService {
         const nowTime = localTime();
         const late = minutesOfDay(nowTime) > minutesOfDay(shift.workStart) + shift.graceMinutes;
         await transaction(async (conn) => {
+            // Lock all sessions for today to check for active session and get max session_number
             const [locked] = await conn.query('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? FOR UPDATE', [
                 employeeId,
                 date,
             ]);
-            const existing = locked[0];
-            if (existing?.check_in_at) {
-                throw ApiError.conflict('You have already checked in for today.');
+            const existing = locked;
+            // Check if there's an active session (checked in but not checked out)
+            const activeSession = existing.find((s) => s.check_in_at && !s.check_out_at);
+            if (activeSession) {
+                throw ApiError.conflict('You have already checked in. Please check out first.');
             }
-            if (existing) {
-                await conn.query(`UPDATE attendance SET check_in_at = NOW(3), status = ?, is_late = ?, source = ?, notes = ?, auto_closed = 0
-           WHERE id = ?`, [late ? 'late' : 'present', late ? 1 : 0, input.source ?? 'web', input.notes ?? null, existing.id]);
-            }
-            else {
-                await conn.query(`INSERT INTO attendance (employee_id, work_date, check_in_at, status, is_late, source, notes)
-           VALUES (?, ?, NOW(3), ?, ?, ?, ?)`, [employeeId, date, late ? 'late' : 'present', late ? 1 : 0, input.source ?? 'web', input.notes ?? null]);
-            }
+            // Determine the next session number
+            const maxSession = existing.length > 0 ? Math.max(...existing.map((s) => Number(s.session_number))) : 0;
+            const nextSession = maxSession + 1;
+            // Create new attendance session
+            await conn.query(`INSERT INTO attendance (employee_id, work_date, session_number, check_in_at, status, is_late, source, notes)
+         VALUES (?, ?, ?, NOW(3), ?, ?, ?, ?)`, [employeeId, date, nextSession, late ? 'late' : 'present', late ? 1 : 0, input.source ?? 'web', input.notes ?? null]);
         });
         const state = await AttendanceService.stateFor(employeeId, date);
         await recordAudit({
@@ -272,15 +273,15 @@ export class AttendanceService {
         const date = today();
         const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
         const shift = await shiftConfig(emp?.location_id);
-        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, date]);
+        // Get the active session (checked in but not checked out)
+        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY session_number DESC LIMIT 1', [employeeId, date]);
         if (!row?.check_in_at)
-            throw ApiError.badRequest('You have not checked in today.');
-        if (row.check_out_at)
-            throw ApiError.conflict('You have already checked out today.');
+            throw ApiError.badRequest('You have not checked in or have already checked out.');
         await transaction(async (conn) => {
-            await conn.query('UPDATE attendance_breaks SET ended_at = NOW(3), minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, started_at, NOW(3))) WHERE attendance_id = ? AND ended_at IS NULL', [row.id]);
-            const [breakRows] = await conn.query('SELECT COALESCE(SUM(minutes), 0) AS total FROM attendance_breaks WHERE attendance_id = ?', [
+            await conn.query('UPDATE attendance_breaks SET ended_at = NOW(3), minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, started_at, NOW(3))) WHERE attendance_id = ? AND session_number = ? AND ended_at IS NULL', [row.id, row.session_number]);
+            const [breakRows] = await conn.query('SELECT COALESCE(SUM(minutes), 0) AS total FROM attendance_breaks WHERE attendance_id = ? AND session_number = ?', [
                 row.id,
+                row.session_number,
             ]);
             const breakMinutes = Number(breakRows[0]?.total ?? 0);
             const [totals] = await conn.query('SELECT GREATEST(0, TIMESTAMPDIFF(MINUTE, check_in_at, NOW(3)) - ?) AS worked, NOW(3) AS now FROM attendance WHERE id = ?', [breakMinutes, row.id]);
@@ -311,15 +312,15 @@ export class AttendanceService {
     }
     static async startBreak(employeeId) {
         const date = today();
-        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, date]);
+        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY session_number DESC LIMIT 1', [employeeId, date]);
         if (!row?.check_in_at)
             throw ApiError.badRequest('Check in before starting a break.');
         if (row.check_out_at)
-            throw ApiError.badRequest('Your work day is already closed.');
-        const open = await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND ended_at IS NULL', [row.id]);
+            throw ApiError.badRequest('Your work session is already closed.');
+        const open = await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND session_number = ? AND ended_at IS NULL', [row.id, row.session_number]);
         if (open)
             throw ApiError.conflict('A break is already running.');
-        await execute('INSERT INTO attendance_breaks (attendance_id, employee_id, started_at) VALUES (?, ?, NOW(3))', [row.id, employeeId]);
+        await execute('INSERT INTO attendance_breaks (attendance_id, session_number, employee_id, started_at) VALUES (?, ?, ?, NOW(3))', [row.id, row.session_number, employeeId]);
         await syncMonitoring((service) => service.setBreakState(employeeId, true));
         const state = await AttendanceService.stateFor(employeeId, date);
         emitToEmployee(employeeId, 'attendance:update', state);
@@ -327,10 +328,10 @@ export class AttendanceService {
     }
     static async endBreak(employeeId) {
         const date = today();
-        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, date]);
+        const row = await queryOne('SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? AND check_in_at IS NOT NULL AND check_out_at IS NULL ORDER BY session_number DESC LIMIT 1', [employeeId, date]);
         if (!row)
-            throw ApiError.badRequest('No attendance record for today.');
-        const open = await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1', [row.id]);
+            throw ApiError.badRequest('No active attendance session for today.');
+        const open = await queryOne('SELECT id FROM attendance_breaks WHERE attendance_id = ? AND session_number = ? AND ended_at IS NULL ORDER BY id DESC LIMIT 1', [row.id, row.session_number]);
         if (!open)
             throw ApiError.badRequest('No break is currently running.');
         await execute('UPDATE attendance_breaks SET ended_at = NOW(3), minutes = GREATEST(0, TIMESTAMPDIFF(MINUTE, started_at, NOW(3))) WHERE id = ?', [open.id]);
@@ -345,10 +346,11 @@ export class AttendanceService {
         return AttendanceService.stateFor(employeeId);
     }
     static async history(employeeId, from, to) {
-        const rows = await query(`SELECT * FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date DESC`, [employeeId, from, to]);
+        const rows = await query(`SELECT * FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date DESC, session_number DESC`, [employeeId, from, to]);
         return rows.map((r) => ({
             id: Number(r.id),
             date: r.work_date,
+            sessionNumber: Number(r.session_number),
             checkInAt: toIso(r.check_in_at),
             checkOutAt: toIso(r.check_out_at),
             status: r.status,

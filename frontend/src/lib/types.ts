@@ -435,6 +435,12 @@ export interface LeaveItem {
   holidayDays?: number | null;
   reason: string;
   status: string;
+  managerStatus?: string | null;
+  hrStatus?: string | null;
+  managerNote?: string | null;
+  hrNote?: string | null;
+  designationTitle?: string | null;
+  locationCode?: string | null;
   decisionNote: string | null;
   managerActionAt: string | null;
   hrActionAt: string | null;

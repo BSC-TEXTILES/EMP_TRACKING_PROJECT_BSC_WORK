@@ -4,7 +4,7 @@ import { useServerClock } from '../lib/hooks';
 import { cx, formatTime, minutesToHours, secondsToClock } from '../lib/format';
 import { errorMessage } from '../lib/api';
 import type { AttendanceState } from '../lib/types';
-import { Badge, StatusBadge } from './ui';
+import { Badge, StatusBadge, Modal } from './ui';
 import { Icon } from './icons';
 
 interface Props {
@@ -18,10 +18,15 @@ interface Props {
 export function AttendanceTimer({ state, loading, pending, onAction, compact }: Props) {
   const toast = useToast();
   const [locating, setLocating] = useState(false);
+  const [checkoutConfirmOpen, setCheckoutConfirmOpen] = useState(false);
   const running = Boolean(state?.checkInAt && !state?.checkOutAt);
   const elapsed = useServerClock(state?.serverNow ?? null, state?.elapsedSeconds ?? 0, running);
 
   const handle = async (action: 'check-in' | 'check-out' | 'break/start' | 'break/end') => {
+    if (action === 'check-out') {
+      setCheckoutConfirmOpen(true);
+      return;
+    }
     try {
       let payload: Record<string, unknown> = {};
       if (action === 'check-in' && 'geolocation' in navigator) {
@@ -46,12 +51,20 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
       toast.success(
         action === 'check-in'
           ? 'Checked in. Your working timer has started.'
-          : action === 'check-out'
-            ? 'Checked out. Working hours saved.'
-            : action === 'break/start'
-              ? 'Break started.'
-              : 'Break ended.',
+          : action === 'break/start'
+            ? 'Break started.'
+            : 'Break ended.',
       );
+    } catch (error) {
+      toast.error(errorMessage(error));
+    }
+  };
+
+  const confirmCheckout = async () => {
+    setCheckoutConfirmOpen(false);
+    try {
+      await onAction('check-out');
+      toast.success('Checked out. Working hours saved.');
     } catch (error) {
       toast.error(errorMessage(error));
     }
@@ -119,6 +132,30 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
           )}
         </div>
       </div>
+
+      {/* Checkout Confirmation Modal */}
+      {checkoutConfirmOpen && (
+        <Modal
+          open={checkoutConfirmOpen}
+          onClose={() => setCheckoutConfirmOpen(false)}
+          title="Confirm Check Out"
+          description="Are you sure you want to check out? This will end your current working session."
+          footer={
+            <>
+              <button type="button" className="btn-secondary" onClick={() => setCheckoutConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn-danger" onClick={confirmCheckout} disabled={pending === 'check-out'}>
+                {pending === 'check-out' ? 'Checking out…' : 'Confirm Check Out'}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-600">
+            Your current session will be closed and working hours will be saved. You can check in again later if needed.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

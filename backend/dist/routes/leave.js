@@ -164,6 +164,20 @@ leaveRouter.post('/', requireAny('leave.apply'), asyncHandler(async (req, res) =
     });
     res.status(201).json(result);
 }));
+leaveRouter.post('/bulk-decide', requireAny('leave.approve.manager', 'leave.approve.hr'), asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const body = parseBody(z.object({
+        requestIds: z.array(z.number().int().positive()).min(1).max(100),
+        approve: z.boolean(),
+        note: z.string().max(500).optional(),
+        stage: z.enum(['manager', 'hr', 'auto']).default('auto'),
+    }), req.body);
+    const result = await LeaveService.bulkDecide(body.requestIds, user, body, {
+        ip: clientIp(req),
+        userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.json(result);
+}));
 leaveRouter.post('/:id/decide', requireAny('leave.approve.manager', 'leave.approve.hr'), asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);

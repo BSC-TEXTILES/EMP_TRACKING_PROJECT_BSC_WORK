@@ -232,6 +232,8 @@ export const config = {
     redisUrl: process.env.REDIS_URL ?? '',
     websocketUrl: process.env.WEBSOCKET_URL ?? '',
     cookieName: 'wfm_session',
+    /** Directory containing public APK downloads (default: frontend/public/downloads). */
+    publicDownloadsDir: process.env.PUBLIC_DOWNLOADS_DIR ?? path.join(rootDir, 'frontend/public/downloads'),
 };
 if (config.isProd && (config.jwtSecret.length < 32 || config.jwtSecret.includes('development-only')))
     throw new Error('Production JWT_SECRET must be a strong secret of at least 32 characters');

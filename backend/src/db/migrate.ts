@@ -101,7 +101,7 @@ export async function runMigrations(db = config.db, createDatabase = true): Prom
       assertNonDestructive(file, sql);
       console.log(`[migrate] applying ${file}`);
       await connection.query(sql);
-      await connection.query('INSERT INTO schema_migrations (filename) VALUES (?)', [file]);
+      await connection.query('INSERT IGNORE INTO schema_migrations (filename) VALUES (?)', [file]);
     }
     console.log('[migrate] up to date');
   } finally {

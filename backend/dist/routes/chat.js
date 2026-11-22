@@ -54,7 +54,8 @@ chatRouter.patch('/conversations/:id', asyncHandler(async (req, res) => {
 chatRouter.delete('/conversations/:id', asyncHandler(async (req, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
-    const result = await ChatService.deleteConversation(id, user);
+    const forBoth = req.query.for === 'both';
+    const result = await ChatService.deleteConversation(id, user, forBoth);
     res.json(result);
 }));
 chatRouter.get('/conversations/:id/messages', asyncHandler(async (req, res) => {

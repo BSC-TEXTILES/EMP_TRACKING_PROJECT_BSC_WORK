@@ -382,7 +382,7 @@ export class WeeklyOffService {
     const [requests, attendance] = await Promise.all([
       run<{ id: number; start_date: string; end_date: string; status: string }>(
         `SELECT id, start_date, end_date, status FROM leave_requests
-         WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')
+         WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_both','pending_manager','pending_hr','approved')
            AND start_date <= ? AND end_date >= ?`,
         [employeeId, end, start],
       ),
@@ -506,7 +506,7 @@ export class WeeklyOffService {
       query<{ start_date: string; end_date: string; type_name: string; code: string; status: string; is_half_day: number; half_day_slot: string | null }>(
         `SELECT l.start_date, l.end_date, t.name AS type_name, t.code, l.status, l.is_half_day, l.half_day_slot
          FROM leave_requests l JOIN leave_types t ON t.id = l.leave_type_id
-         WHERE l.employee_id = ? AND l.request_kind <> 'weekly_off' AND l.status IN ('approved','pending_manager','pending_hr')
+         WHERE l.employee_id = ? AND l.request_kind <> 'weekly_off' AND l.status IN ('approved','pending_both','pending_manager','pending_hr')
            AND l.start_date <= ? AND l.end_date >= ?`,
         [employeeId, end, start],
       ),
@@ -522,7 +522,7 @@ export class WeeklyOffService {
       ),
       query<{ request_kind: string; is_half_day: number; total: number }>(
         `SELECT request_kind, is_half_day, COUNT(*) AS total FROM leave_requests
-         WHERE employee_id = ? AND status IN ('pending_manager','pending_hr') AND start_date BETWEEN ? AND ?
+         WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr') AND start_date BETWEEN ? AND ?
          GROUP BY request_kind, is_half_day`,
         [employeeId, start, end],
       ),
@@ -704,7 +704,7 @@ export class WeeklyOffService {
       query<{ employee_id: number; start_date: string; end_date: string; status: string }>(
         `SELECT employee_id, start_date, end_date, status FROM leave_requests
          WHERE employee_id IN (${placeholders}) AND request_kind = 'weekly_off'
-           AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`,
+           AND status IN ('pending_both','pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`,
         [...ids, end, start],
       ),
       query<{ employee_id: number; work_date: string; status: string; check_in_at: string | null }>(

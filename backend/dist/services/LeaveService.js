@@ -2,7 +2,7 @@ import { execute, query, queryOne, transaction, txQuery } from '../db/index.js';
 import { getSetting, recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
 import { MONTH_NAMES as MONTHS, WEEKDAY_NAMES, chargeableDays, dateRange, isValidIsoDate, isWeeklyOff } from '../lib/calendar.js';
-import { emitToEmployee } from '../realtime/io.js';
+import { emitToEmployee, getIO } from '../realtime/io.js';
 import { WeeklyOffService } from './WeeklyOffService.js';
 import { ApiError } from '../lib/http.js';
 import { assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
@@ -141,7 +141,7 @@ export class LeaveService {
             isHalfDay,
         };
     }
-    static async apply(employeeId, input, context) {
+    static async apply(employeeId, input, context = {}) {
         const routing = await LeaveService.applicationContext(employeeId);
         if (!routing.canApply)
             throw ApiError.conflict(routing.issues.join(' '));
@@ -221,9 +221,9 @@ export class LeaveService {
                 if (!canCoexist)
                     throw ApiError.conflict('You already have a leave request overlapping these dates.');
             }
-            const [created] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_hr', ?, ?, ?, ?, ?)`, [employeeId, input.leaveTypeId, isHalfDay ? 'half_day' : 'leave', input.startDate, input.endDate, days, breakdown.weeklyOffDays, breakdown.holidayDays, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, isHalfDay ? 1 : 0, halfDaySlot]);
-            await recordHistory(conn, created.insertId, 'submitted', null, 'pending_hr', employeeId);
+            const [created] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot, manager_status, hr_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_both', ?, ?, ?, ?, ?, 'pending', 'pending')`, [employeeId, input.leaveTypeId, isHalfDay ? 'half_day' : 'leave', input.startDate, input.endDate, days, breakdown.weeklyOffDays, breakdown.holidayDays, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, isHalfDay ? 1 : 0, halfDaySlot]);
+            await recordHistory(conn, created.insertId, 'submitted', null, 'pending_both', employeeId);
             return created;
         });
         await recordAudit({
@@ -232,10 +232,10 @@ export class LeaveService {
             entityType: 'leave_request',
             entityId: result.insertId,
             after: { ...input, days, isHalfDay, halfDaySlot, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays },
-            ip: context.ip,
-            userAgent: context.userAgent,
+            ip: context?.ip,
+            userAgent: context?.userAgent,
         });
-        await LeaveService.notifySubmittedToHr(employeeId, hr.id, result.insertId, `${days} day(s) of ${type.name} leave`);
+        await LeaveService.notifySubmitted(employeeId, routing.manager.id, hr.id, result.insertId, `${days} day(s) of ${type.name} leave`);
         return { id: result.insertId, days, weeklyOffDays: breakdown.weeklyOffDays, holidayDays: breakdown.holidayDays };
     }
     // ------------------------------------------------------------ weekly off & half day
@@ -250,19 +250,33 @@ export class LeaveService {
             throw ApiError.badRequest('Select an HR approver assigned to your location.');
         return { routing, hr };
     }
-    static async notifySubmittedToHr(employeeId, hrId, requestId, summary) {
+    static async notifySubmitted(employeeId, managerId, hrId, requestId, summary) {
         const employee = await queryOne('SELECT full_name FROM employees WHERE id = ?', [employeeId]);
+        const empName = employee?.full_name ?? 'An employee';
+        // Notify HR
         await NotificationService.notify({
             employeeIds: [hrId],
             type: 'leave',
-            title: 'New Week-Off Request',
-            body: `${employee?.full_name ?? 'An employee'} applied for ${summary}. Awaiting your HR verification.`,
+            title: 'New Leave Request (HR Verification)',
+            body: `${empName} applied for ${summary}. Awaiting your Location HR verification.`,
             link: '/leave?tab=all',
             priority: 'high',
             actorId: employeeId,
         });
+        // Notify Manager
+        await NotificationService.notify({
+            employeeIds: [managerId],
+            type: 'leave',
+            title: 'New Leave Request (Manager Approval)',
+            body: `${empName} applied for ${summary}. Awaiting your reporting manager approval.`,
+            link: '/leave?tab=team',
+            priority: 'high',
+            actorId: employeeId,
+        });
         emitToEmployee(employeeId, 'leave:updated', { reason: 'applied', id: requestId });
+        emitToEmployee(managerId, 'leave:updated', { reason: 'applied', id: requestId });
         emitToEmployee(hrId, 'leave:updated', { reason: 'applied', id: requestId });
+        getIO()?.emit('leave:updated', { reason: 'applied', id: requestId });
     }
     /**
      * Weekly-off application: employee selects any eligible calendar date or continuous range (including weekdays).
@@ -320,8 +334,8 @@ export class LeaveService {
                 throw ApiError.conflict(`You already have a leave or weekly-off request overlapping ${sDate} to ${eDate}.`);
             }
             try {
-                const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
-           VALUES (?, ?, 'weekly_off', ?, ?, ?, ?, 0, ?, NULL, 'pending_hr', ?, ?, ?, 0, NULL)`, [
+                const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot, manager_status, hr_status)
+           VALUES (?, ?, 'weekly_off', ?, ?, ?, ?, 0, ?, NULL, 'pending_both', ?, ?, ?, 0, NULL, 'pending', 'pending')`, [
                     employeeId,
                     typeRow.id,
                     sDate,
@@ -333,7 +347,7 @@ export class LeaveService {
                     routing.locationId,
                     hr.id,
                 ]);
-                await recordHistory(conn, result.insertId, 'submitted', null, 'pending_hr', employeeId);
+                await recordHistory(conn, result.insertId, 'submitted', null, 'pending_both', employeeId);
                 return { id: Number(result.insertId), balance };
             }
             catch (error) {
@@ -348,11 +362,11 @@ export class LeaveService {
             entityType: 'leave_request',
             entityId: created.id,
             after: { startDate: sDate, endDate: eDate, days, reason, hrApproverId: hr.id },
-            ip: context.ip,
-            userAgent: context.userAgent,
+            ip: context?.ip,
+            userAgent: context?.userAgent,
         });
         await WeeklyOffService.persistAllocation(employeeId, year, month);
-        await LeaveService.notifySubmittedToHr(employeeId, hr.id, created.id, days > 1 ? `Weekly off (${days} days) ${sDate} → ${eDate}` : `Weekly off on ${sDate}`);
+        await LeaveService.notifySubmitted(employeeId, routing.manager.id, hr.id, created.id, days > 1 ? `Weekly off (${days} days) ${sDate} → ${eDate}` : `Weekly off on ${sDate}`);
         return {
             id: created.id,
             date: sDate,
@@ -461,9 +475,9 @@ export class LeaveService {
             // made before waiting for another application may no longer have balance.
             preview = await LeaveService.halfDayPreview(employeeId, input.date, input.slot);
             await LeaveService.assertNoHalfDayConflict(employeeId, input.date, input.slot, conn);
-            const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
-         VALUES (?, ?, 'half_day', ?, ?, 0.5, 0, 0, ?, ?, 'pending_hr', ?, ?, ?, 1, ?)`, [employeeId, preview.deductFrom.leaveTypeId, input.date, input.date, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, input.slot]);
-            await recordHistory(conn, result.insertId, 'submitted', null, 'pending_hr', employeeId);
+            const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot, manager_status, hr_status)
+         VALUES (?, ?, 'half_day', ?, ?, 0.5, 0, 0, ?, ?, 'pending_both', ?, ?, ?, 1, ?, 'pending', 'pending')`, [employeeId, preview.deductFrom.leaveTypeId, input.date, input.date, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, input.slot]);
+            await recordHistory(conn, result.insertId, 'submitted', null, 'pending_both', employeeId);
             return Number(result.insertId);
         });
         await recordAudit({
@@ -472,10 +486,10 @@ export class LeaveService {
             entityType: 'leave_request',
             entityId: id,
             after: { date: input.date, slot: input.slot, days: 0.5, leaveType: preview.deductFrom.code, lossOfPay: preview.lossOfPay, reason },
-            ip: context.ip,
-            userAgent: context.userAgent,
+            ip: context?.ip,
+            userAgent: context?.userAgent,
         });
-        await LeaveService.notifySubmittedToHr(employeeId, hr.id, id, `Half-day leave (${SLOT_LABEL[input.slot]}) on ${input.date}`);
+        await LeaveService.notifySubmitted(employeeId, routing.manager.id, hr.id, id, `Half-day leave (${SLOT_LABEL[input.slot]}) on ${input.date}`);
         return { id, date: input.date, slot: input.slot, days: 0.5, leaveType: preview.deductFrom.code, lossOfPay: preview.lossOfPay };
     }
     static async list(user, filters) {
@@ -516,18 +530,19 @@ export class LeaveService {
         const page = Math.max(1, filters.page ?? 1);
         const pageSize = Math.min(100, Math.max(5, filters.pageSize ?? 30));
         const where = clauses.join(' AND ');
-        const rows = await query(`SELECT l.*, e.full_name, e.employee_code, d.name AS department_name, lt.name AS type_name, lt.code AS type_code,
+        const rows = await query(`SELECT l.*, e.full_name, e.employee_code, d.name AS department_name, dg.title AS designation_title, lt.name AS type_name, lt.code AS type_code,
               (l.employee_id = ?) AS created_by_me,
-              (l.manager_id = ?) AS is_my_report, loc.name location_name, mgr.full_name manager_name, hr.full_name hr_name
+              (l.manager_id = ?) AS is_my_report, loc.name location_name, loc.code location_code, mgr.full_name manager_name, hr.full_name hr_name
        FROM leave_requests l
        JOIN employees e ON e.id = l.employee_id
        JOIN leave_types lt ON lt.id = l.leave_type_id
        LEFT JOIN departments d ON d.id = e.department_id
+       LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN locations loc ON loc.id = COALESCE(l.request_location_id, e.location_id)
        LEFT JOIN employees mgr ON mgr.id = l.manager_id
        LEFT JOIN employees hr ON hr.id = l.hr_approver_id
        WHERE ${where}
-       ORDER BY FIELD(l.status, 'pending_manager','pending_hr','approved','rejected','cancelled'), l.start_date DESC
+       ORDER BY FIELD(l.status, 'pending_both','pending_manager','pending_hr','pending','approved','rejected','cancelled'), l.start_date DESC
        LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`, [user.id, user.id, ...params]);
         const ids = rows.map((r) => Number(r.id));
         const historyRows = ids.length
@@ -543,39 +558,54 @@ export class LeaveService {
         }
         const isSuperOrOrgWide = user.roleSlug === 'super_admin' || (user.roleLevel ?? 0) >= 90 || user.permissions.includes('locations.manage');
         return {
-            items: rows.map((r) => ({
-                id: Number(r.id),
-                employeeId: Number(r.employee_id),
-                employeeName: r.full_name,
-                employeeCode: r.employee_code,
-                departmentName: r.department_name,
-                requestKind: (r.request_kind === 'weekly_off' || r.request_kind === 'half_day' ? r.request_kind : r.is_half_day ? 'half_day' : 'leave'),
-                leaveTypeCode: r.type_code,
-                history: historyBy.get(Number(r.id)) ?? [],
-                leaveType: r.type_name,
-                documentFileId: r.document_file_id ? Number(r.document_file_id) : null,
-                locationName: r.location_name, managerName: r.manager_name, hrName: r.hr_name,
-                startDate: r.start_date,
-                endDate: r.end_date,
-                days: Number(r.days),
-                isHalfDay: Boolean(r.is_half_day),
-                halfDaySlot: r.half_day_slot ?? null,
-                weeklyOffDays: r.weekly_off_days === null || r.weekly_off_days === undefined ? null : Number(r.weekly_off_days),
-                holidayDays: r.holiday_days === null || r.holiday_days === undefined ? null : Number(r.holiday_days),
-                reason: r.reason,
-                status: r.status,
-                decisionNote: r.decision_note,
-                managerActionAt: toIso(r.manager_action_at),
-                hrActionAt: toIso(r.hr_action_at),
-                createdAt: toIso(r.created_at),
-                canApproveManager: r.status === 'pending_manager' && (Number(r.is_my_report) === 1 || isSuperOrOrgWide || (user.permissions.includes('leave.approve.manager') && Number(r.manager_id) === user.id)) && Number(r.employee_id) !== user.id,
-                canApproveHr: r.status === 'pending_hr' && (user.permissions.includes('leave.approve.hr') || isSuperOrOrgWide) && Number(r.employee_id) !== user.id,
-                canCancel: Number(r.created_by_me) === 1 && ['pending_manager', 'pending_hr'].includes(r.status),
-            })),
+            items: rows.map((r) => {
+                const isManagerPending = (r.manager_status ?? 'pending') === 'pending';
+                const isHrPending = (r.hr_status ?? 'pending') === 'pending';
+                const isPending = !['approved', 'rejected', 'cancelled'].includes(r.status);
+                const isManager = (Number(r.is_my_report) === 1 || isSuperOrOrgWide || (user.permissions.includes('leave.approve.manager') && Number(r.manager_id) === user.id));
+                const isHr = (user.permissions.includes('leave.approve.hr') || isSuperOrOrgWide);
+                return {
+                    id: Number(r.id),
+                    employeeId: Number(r.employee_id),
+                    employeeName: r.full_name,
+                    employeeCode: r.employee_code,
+                    departmentName: r.department_name,
+                    designationTitle: r.designation_title ?? null,
+                    locationCode: r.location_code ?? null,
+                    requestKind: (r.request_kind === 'weekly_off' || r.request_kind === 'half_day' ? r.request_kind : r.is_half_day ? 'half_day' : 'leave'),
+                    leaveTypeCode: r.type_code,
+                    history: historyBy.get(Number(r.id)) ?? [],
+                    leaveType: r.type_name,
+                    documentFileId: r.document_file_id ? Number(r.document_file_id) : null,
+                    locationName: r.location_name,
+                    managerName: r.manager_name,
+                    hrName: r.hr_name,
+                    startDate: r.start_date,
+                    endDate: r.end_date,
+                    days: Number(r.days),
+                    isHalfDay: Boolean(r.is_half_day),
+                    halfDaySlot: r.half_day_slot ?? null,
+                    weeklyOffDays: r.weekly_off_days === null || r.weekly_off_days === undefined ? null : Number(r.weekly_off_days),
+                    holidayDays: r.holiday_days === null || r.holiday_days === undefined ? null : Number(r.holiday_days),
+                    reason: r.reason,
+                    status: r.status,
+                    managerStatus: r.manager_status ?? 'pending',
+                    hrStatus: r.hr_status ?? 'pending',
+                    managerNote: r.manager_note ?? null,
+                    hrNote: r.hr_note ?? null,
+                    decisionNote: r.decision_note,
+                    managerActionAt: toIso(r.manager_action_at),
+                    hrActionAt: toIso(r.hr_action_at),
+                    createdAt: toIso(r.created_at),
+                    canApproveManager: isPending && isManagerPending && isManager && Number(r.employee_id) !== user.id,
+                    canApproveHr: isPending && isHrPending && isHr && Number(r.employee_id) !== user.id,
+                    canCancel: Number(r.created_by_me) === 1 && isPending,
+                };
+            }),
             total: rows.length,
         };
     }
-    static async decide(leaveId, actor, input, context) {
+    static async decide(leaveId, actor, input, context = {}) {
         const leave = await queryOne(`SELECT l.*, e.full_name FROM leave_requests l JOIN employees e ON e.id = l.employee_id WHERE l.id = ?`, [leaveId]);
         if (!leave)
             throw ApiError.notFound('Leave request not found');
@@ -588,149 +618,262 @@ export class LeaveService {
         if (!isSuperOrOrgWide && requestLocation > 0 && Number(actor.locationId) !== requestLocation && !assignedLocations.some((l) => Number(l.location_id) === requestLocation)) {
             throw ApiError.forbidden('You can only approve leave for your assigned locations.');
         }
+        if (['rejected', 'cancelled'].includes(leave.status)) {
+            throw ApiError.conflict(`This request has already been ${leave.status}.`);
+        }
+        const note = input.note?.trim() || null;
         if (input.stage === 'hr') {
-            // Step 2 in workflow: Location HR reviews first
-            if (leave.status !== 'pending_hr')
-                throw ApiError.conflict('This request is not awaiting HR verification.');
+            if (!actor.permissions.includes('leave.approve.hr') && !isSuperOrOrgWide) {
+                throw ApiError.forbidden('You cannot approve at HR stage.');
+            }
+            if (leave.hr_status !== 'pending') {
+                throw ApiError.conflict('This request has already been processed by HR.');
+            }
             if (leave.hr_approver_id && Number(leave.hr_approver_id) !== actor.id && !isSuperOrOrgWide) {
                 const isLocHr = assignedLocations.some((l) => Number(l.location_id) === requestLocation);
                 if (!isLocHr)
                     throw ApiError.forbidden('This request is assigned to another HR approver.');
             }
-            if (!actor.permissions.includes('leave.approve.hr') && !isSuperOrOrgWide) {
-                throw ApiError.forbidden('You cannot approve at HR stage.');
-            }
             if (input.approve) {
-                // HR approves -> advances to pending_manager (Reporting Manager stage)
-                const updated = await execute("UPDATE leave_requests SET status = 'pending_manager', hr_action_at = NOW(3), hr_approver_id = COALESCE(hr_approver_id, ?), decision_note = ? WHERE id = ? AND status = 'pending_hr'", [actor.id, input.note ?? null, leaveId]);
-                if (!updated.affectedRows)
-                    throw ApiError.conflict('This request was already processed.');
-                await recordHistory(null, leaveId, 'hr_approved', 'pending_hr', 'pending_manager', actor.id, input.note);
-                // Notify reporting manager
-                if (leave.manager_id) {
-                    await NotificationService.notify({
-                        employeeIds: [Number(leave.manager_id)],
-                        type: 'leave',
-                        title: 'Week-off request awaiting manager approval',
-                        body: `${leave.full_name}'s week-off on ${leave.start_date} was verified by Location HR and is awaiting your final approval.`,
-                        link: '/leave?tab=team',
-                        priority: 'high',
-                        actorId: actor.id,
-                    });
-                    emitToEmployee(Number(leave.manager_id), 'leave:updated', { reason: 'hr_approved', id: leaveId });
-                }
-            }
-            else {
-                if (!input.note)
-                    throw ApiError.badRequest('Provide a rejection reason.');
-                const updated = await execute("UPDATE leave_requests SET status = 'rejected', hr_action_at = NOW(3), decision_note = ? WHERE id = ? AND status = 'pending_hr'", [input.note, leaveId]);
-                if (!updated.affectedRows)
-                    throw ApiError.conflict('This request was already processed.');
-                await recordHistory(null, leaveId, 'hr_rejected', 'pending_hr', 'rejected', actor.id, input.note);
-            }
-        }
-        else {
-            // Step 3 in workflow: Reporting Manager final review
-            if (leave.status !== 'pending_manager')
-                throw ApiError.conflict('This request is not awaiting manager approval.');
-            const isManager = Number(leave.manager_id) === actor.id || isSuperOrOrgWide || leave.manager_id === null;
-            if (!isManager || (!actor.permissions.includes('leave.approve.manager') && !isSuperOrOrgWide)) {
-                throw ApiError.forbidden('You are not the reporting manager for this employee.');
-            }
-            if (input.approve) {
-                // Manager approves -> FINAL STATUS 'approved'
+                const willBeFullyApproved = leave.manager_status === 'approved';
+                const newStatus = willBeFullyApproved ? 'approved' : 'pending_manager';
                 await transaction(async (conn) => {
                     await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [leave.employee_id]);
-                    const [updated] = await conn.query("UPDATE leave_requests SET status = 'approved', manager_action_at = NOW(3), manager_id = COALESCE(manager_id, ?), decision_note = ? WHERE id = ? AND status = 'pending_manager'", [actor.id, input.note ?? null, leaveId]);
+                    const [updated] = await conn.query(`UPDATE leave_requests
+             SET hr_status = 'approved', hr_action_at = NOW(3), hr_approver_id = COALESCE(hr_approver_id, ?), hr_note = ?, hr_action_by = ?,
+                 status = ?, decision_note = COALESCE(?, decision_note)
+             WHERE id = ? AND hr_status = 'pending'`, [actor.id, note, actor.id, newStatus, note, leaveId]);
                     if (!updated.affectedRows)
-                        throw ApiError.conflict('This request was already processed.');
-                    await recordHistory(conn, leaveId, 'manager_approved', 'pending_manager', 'approved', actor.id, input.note);
-                    const sDate = String(leave.start_date).slice(0, 10);
-                    const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
-                    if (leave.request_kind !== 'weekly_off') {
-                        const yr = Number(sDate.slice(0, 4));
-                        await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
-               VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
-               ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, yr, leave.leave_type_id, leave.days]);
-                    }
-                    const attStatus = leave.request_kind === 'weekly_off' ? 'weekly_off' : Boolean(leave.is_half_day) ? 'half_day' : 'on_leave';
-                    const attNotes = leave.request_kind === 'weekly_off' ? 'Approved weekly off' : Boolean(leave.is_half_day) ? 'Approved half-day leave' : 'Approved leave';
-                    const rangeDates = dateRange(sDate, eDate);
-                    for (const d of rangeDates) {
-                        await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, d, attStatus, attNotes]);
+                        throw ApiError.conflict('This request was already processed by HR.');
+                    await recordHistory(conn, leaveId, 'hr_approved', leave.status, newStatus, actor.id, note);
+                    if (willBeFullyApproved) {
+                        const sDate = String(leave.start_date).slice(0, 10);
+                        const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
+                        if (leave.request_kind !== 'weekly_off') {
+                            const yr = Number(sDate.slice(0, 4));
+                            await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
+                 VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
+                 ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, yr, leave.leave_type_id, leave.days]);
+                        }
+                        const attStatus = leave.request_kind === 'weekly_off' ? 'weekly_off' : Boolean(leave.is_half_day) ? 'half_day' : 'on_leave';
+                        const attNotes = leave.request_kind === 'weekly_off' ? 'Approved weekly off' : Boolean(leave.is_half_day) ? 'Approved half-day leave' : 'Approved leave';
+                        const rangeDates = dateRange(sDate, eDate);
+                        for (const d of rangeDates) {
+                            await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, d, attStatus, attNotes]);
+                        }
                     }
                 });
-                if (leave.request_kind === 'weekly_off') {
+                if (willBeFullyApproved && leave.request_kind === 'weekly_off') {
                     const sDate = String(leave.start_date).slice(0, 10);
                     const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
                     const monthsToPersist = new Set();
-                    for (const d of dateRange(sDate, eDate)) {
+                    for (const d of dateRange(sDate, eDate))
                         monthsToPersist.add(d.slice(0, 7));
-                    }
                     for (const ym of monthsToPersist) {
                         const [y, m] = ym.split('-').map(Number);
                         await WeeklyOffService.persistAllocation(Number(leave.employee_id), y, m);
                     }
                 }
+                if (willBeFullyApproved) {
+                    await NotificationService.notify({
+                        employeeIds: [Number(leave.employee_id)],
+                        type: 'leave',
+                        title: 'Leave Request Approved',
+                        body: `Your leave request for ${leave.start_date} has been fully approved by Location HR and your Reporting Manager.`,
+                        link: '/leave?tab=mine',
+                        priority: 'high',
+                        actorId: actor.id,
+                    });
+                }
+                else if (leave.manager_id) {
+                    await NotificationService.notify({
+                        employeeIds: [Number(leave.manager_id)],
+                        type: 'leave',
+                        title: 'Leave verified by Location HR',
+                        body: `${leave.full_name}'s leave starting ${leave.start_date} was verified by Location HR. Awaiting your reporting manager approval.`,
+                        link: '/leave?tab=team',
+                        priority: 'high',
+                        actorId: actor.id,
+                    });
+                }
             }
             else {
-                if (!input.note)
+                if (!note)
                     throw ApiError.badRequest('Provide a rejection reason.');
-                const updated = await execute("UPDATE leave_requests SET status = 'rejected', manager_action_at = NOW(3), decision_note = ? WHERE id = ? AND status = 'pending_manager'", [input.note, leaveId]);
+                const updated = await execute(`UPDATE leave_requests
+           SET hr_status = 'rejected', hr_action_at = NOW(3), hr_approver_id = COALESCE(hr_approver_id, ?), hr_note = ?, hr_action_by = ?,
+               status = 'rejected', decision_note = ?
+           WHERE id = ? AND hr_status = 'pending'`, [actor.id, note, actor.id, note, leaveId]);
                 if (!updated.affectedRows)
-                    throw ApiError.conflict('This request was already processed.');
-                await recordHistory(null, leaveId, 'manager_rejected', 'pending_manager', 'rejected', actor.id, input.note);
+                    throw ApiError.conflict('This request was already processed by HR.');
+                await recordHistory(null, leaveId, 'hr_rejected', leave.status, 'rejected', actor.id, note);
+                await NotificationService.notify({
+                    employeeIds: [Number(leave.employee_id)],
+                    type: 'leave',
+                    title: 'Leave Request Rejected',
+                    body: `Your leave request for ${leave.start_date} was rejected by Location HR: ${note}`,
+                    link: '/leave?tab=mine',
+                    priority: 'high',
+                    actorId: actor.id,
+                });
+            }
+        }
+        else {
+            // stage === 'manager'
+            const isManager = Number(leave.manager_id) === actor.id || isSuperOrOrgWide || leave.manager_id === null;
+            if (!isManager || (!actor.permissions.includes('leave.approve.manager') && !isSuperOrOrgWide)) {
+                throw ApiError.forbidden('You are not the reporting manager for this employee.');
+            }
+            if (leave.manager_status !== 'pending') {
+                throw ApiError.conflict('This request has already been processed by the reporting manager.');
+            }
+            if (input.approve) {
+                const willBeFullyApproved = leave.hr_status === 'approved';
+                const newStatus = willBeFullyApproved ? 'approved' : 'pending_hr';
+                await transaction(async (conn) => {
+                    await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [leave.employee_id]);
+                    const [updated] = await conn.query(`UPDATE leave_requests
+             SET manager_status = 'approved', manager_action_at = NOW(3), manager_id = COALESCE(manager_id, ?), manager_note = ?, manager_action_by = ?,
+                 status = ?, decision_note = COALESCE(?, decision_note)
+             WHERE id = ? AND manager_status = 'pending'`, [actor.id, note, actor.id, newStatus, note, leaveId]);
+                    if (!updated.affectedRows)
+                        throw ApiError.conflict('This request was already processed by the manager.');
+                    await recordHistory(conn, leaveId, 'manager_approved', leave.status, newStatus, actor.id, note);
+                    if (willBeFullyApproved) {
+                        const sDate = String(leave.start_date).slice(0, 10);
+                        const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
+                        if (leave.request_kind !== 'weekly_off') {
+                            const yr = Number(sDate.slice(0, 4));
+                            await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
+                 VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
+                 ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, yr, leave.leave_type_id, leave.days]);
+                        }
+                        const attStatus = leave.request_kind === 'weekly_off' ? 'weekly_off' : Boolean(leave.is_half_day) ? 'half_day' : 'on_leave';
+                        const attNotes = leave.request_kind === 'weekly_off' ? 'Approved weekly off' : Boolean(leave.is_half_day) ? 'Approved half-day leave' : 'Approved leave';
+                        const rangeDates = dateRange(sDate, eDate);
+                        for (const d of rangeDates) {
+                            await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
+                 ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, d, attStatus, attNotes]);
+                        }
+                    }
+                });
+                if (willBeFullyApproved && leave.request_kind === 'weekly_off') {
+                    const sDate = String(leave.start_date).slice(0, 10);
+                    const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
+                    const monthsToPersist = new Set();
+                    for (const d of dateRange(sDate, eDate))
+                        monthsToPersist.add(d.slice(0, 7));
+                    for (const ym of monthsToPersist) {
+                        const [y, m] = ym.split('-').map(Number);
+                        await WeeklyOffService.persistAllocation(Number(leave.employee_id), y, m);
+                    }
+                }
+                if (willBeFullyApproved) {
+                    await NotificationService.notify({
+                        employeeIds: [Number(leave.employee_id)],
+                        type: 'leave',
+                        title: 'Leave Request Approved',
+                        body: `Your leave request for ${leave.start_date} has been fully approved by your Reporting Manager and Location HR.`,
+                        link: '/leave?tab=mine',
+                        priority: 'high',
+                        actorId: actor.id,
+                    });
+                }
+                else if (leave.hr_approver_id) {
+                    await NotificationService.notify({
+                        employeeIds: [Number(leave.hr_approver_id)],
+                        type: 'leave',
+                        title: 'Leave approved by Reporting Manager',
+                        body: `${leave.full_name}'s leave starting ${leave.start_date} was approved by Reporting Manager. Awaiting your location HR verification.`,
+                        link: '/leave?tab=all',
+                        priority: 'high',
+                        actorId: actor.id,
+                    });
+                }
+            }
+            else {
+                if (!note)
+                    throw ApiError.badRequest('Provide a rejection reason.');
+                const updated = await execute(`UPDATE leave_requests
+           SET manager_status = 'rejected', manager_action_at = NOW(3), manager_id = COALESCE(manager_id, ?), manager_note = ?, manager_action_by = ?,
+               status = 'rejected', decision_note = ?
+           WHERE id = ? AND manager_status = 'pending'`, [actor.id, note, actor.id, note, leaveId]);
+                if (!updated.affectedRows)
+                    throw ApiError.conflict('This request was already processed by the manager.');
+                await recordHistory(null, leaveId, 'manager_rejected', leave.status, 'rejected', actor.id, note);
+                await NotificationService.notify({
+                    employeeIds: [Number(leave.employee_id)],
+                    type: 'leave',
+                    title: 'Leave Request Rejected',
+                    body: `Your leave request for ${leave.start_date} was rejected by Reporting Manager: ${note}`,
+                    link: '/leave?tab=mine',
+                    priority: 'high',
+                    actorId: actor.id,
+                });
             }
         }
         if (leave.request_kind === 'weekly_off' && !input.approve) {
             const date = String(leave.start_date).slice(0, 10);
             await WeeklyOffService.persistAllocation(Number(leave.employee_id), Number(date.slice(0, 4)), Number(date.slice(5, 7)));
         }
-        const finalStatus = input.approve ? (input.stage === 'hr' ? 'pending_manager' : 'approved') : 'rejected';
         await recordAudit({
             actorId: actor.id,
             action: `leave.${input.stage}_${input.approve ? 'approved' : 'rejected'}`,
             entityType: 'leave_request',
             entityId: leaveId,
-            before: { status: leave.status },
-            after: { status: finalStatus, note: input.note },
-            ip: context.ip,
-            userAgent: context.userAgent,
+            after: { approve: input.approve, stage: input.stage, note },
+            ip: context?.ip,
+            userAgent: context?.userAgent,
         });
-        const summary = describeRequest(leave.request_kind, leave.start_date, leave.end_date, leave.is_half_day ? leave.half_day_slot : null);
         emitToEmployee(Number(leave.employee_id), 'leave:updated', { reason: 'decided', id: leaveId });
-        let notifyTitle = '';
-        let notifyBody = '';
-        if (input.stage === 'hr') {
-            if (input.approve) {
-                notifyTitle = 'Verified by Location HR · Pending Manager Approval';
-                notifyBody = `${summary} was verified by Location HR and forwarded to your reporting manager for final approval.`;
+        if (leave.manager_id)
+            emitToEmployee(Number(leave.manager_id), 'leave:updated', { reason: 'decided', id: leaveId });
+        if (leave.hr_approver_id)
+            emitToEmployee(Number(leave.hr_approver_id), 'leave:updated', { reason: 'decided', id: leaveId });
+        getIO()?.emit('leave:updated', { reason: 'decided', id: leaveId, stage: input.stage, approve: input.approve });
+    }
+    static async bulkDecide(requestIds, actor, input, context = {}) {
+        const results = [];
+        let successCount = 0;
+        let failureCount = 0;
+        for (const id of requestIds) {
+            try {
+                let effectiveStage = input.stage;
+                if (effectiveStage === 'auto') {
+                    const row = await queryOne('SELECT manager_id, hr_approver_id, manager_status, hr_status FROM leave_requests WHERE id = ?', [id]);
+                    if (!row)
+                        throw ApiError.notFound('Request not found');
+                    if (actor.permissions.includes('leave.approve.hr') && row.hr_status === 'pending') {
+                        effectiveStage = 'hr';
+                    }
+                    else if ((Number(row.manager_id) === actor.id || actor.permissions.includes('leave.approve.manager')) && row.manager_status === 'pending') {
+                        effectiveStage = 'manager';
+                    }
+                    else if (actor.permissions.includes('leave.approve.hr')) {
+                        effectiveStage = 'hr';
+                    }
+                    else {
+                        effectiveStage = 'manager';
+                    }
+                }
+                await LeaveService.decide(id, actor, { approve: input.approve, note: input.note, stage: effectiveStage }, context);
+                results.push({ id, success: true });
+                successCount += 1;
             }
-            else {
-                notifyTitle = 'Week-Off Request Rejected by Location HR';
-                notifyBody = `${summary} was rejected by Location HR${input.note ? `: ${input.note}` : ''}.`;
+            catch (err) {
+                results.push({ id, success: false, reason: err?.message || 'Processing failed' });
+                failureCount += 1;
             }
         }
-        else {
-            if (input.approve) {
-                notifyTitle = 'Week-Off Request Approved';
-                notifyBody = `${summary} was approved by your reporting manager. Attendance has been marked as Weekly Off.`;
-            }
-            else {
-                notifyTitle = 'Week-Off Request Rejected by Manager';
-                notifyBody = `${summary} was rejected by your reporting manager${input.note ? `: ${input.note}` : ''}.`;
-            }
-        }
-        await NotificationService.notify({
-            employeeIds: [Number(leave.employee_id)],
-            type: 'leave',
-            title: notifyTitle,
-            body: notifyBody,
-            link: '/leave',
-            priority: 'high',
-            actorId: actor.id,
-        });
+        return {
+            total: requestIds.length,
+            successCount,
+            failureCount,
+            failCount: failureCount,
+            errors: results.filter((r) => !r.success).map((r) => r.reason || 'Failed'),
+            results,
+        };
     }
     static async cancel(leaveId, employeeId) {
         const leave = await queryOne('SELECT employee_id, status, start_date, request_kind, manager_id FROM leave_requests WHERE id = ?', [leaveId]);

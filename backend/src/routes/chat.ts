@@ -93,7 +93,8 @@ chatRouter.delete(
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     const user = currentUser(req);
-    const result = await ChatService.deleteConversation(id, user);
+    const forBoth = req.query.for === 'both';
+    const result = await ChatService.deleteConversation(id, user, forBoth);
     res.json(result);
   }),
 );

@@ -18,6 +18,7 @@ import {
   Tabs,
 } from '../components/ui';
 import { Icon } from '../components/icons';
+import { InstallAppButton } from '../components/InstallAppButton';
 import { formatDate, formatDateTime, minutesToHours } from '../lib/format';
 
 interface ReportHistoryEntry {
@@ -1219,14 +1220,7 @@ export default function DailyReports() {
               </div>
 
               <div className="mt-6 pt-4 border-t border-ink-100">
-                <a
-                  href="/downloads/bsc-hrms-debug.apk"
-                  download="bsc-hrms-debug.apk"
-                  className="btn-secondary w-full text-center flex items-center justify-center gap-2 py-2.5"
-                >
-                  <Icon name="download" size={16} />
-                  <span>Download Debug APK (8.4 MB)</span>
-                </a>
+                <InstallAppButton variant="standalone" />
               </div>
             </Card>
           </div>
@@ -1357,9 +1351,9 @@ export default function DailyReports() {
                       value={editForm.status}
                       onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}
                     >
-                      <option value="submitted">Submitted (Under Review)</option>
-                      <option value="approved">Approved</option>
-                      <option value="changes_requested">Changes Requested</option>
+                      <option value="submitted">Submitted (Under Review / Resubmit)</option>
+                      {isManagerOrAdmin && <option value="approved">Approved</option>}
+                      {isManagerOrAdmin && <option value="changes_requested">Changes Requested</option>}
                     </select>
                   </Field>
 

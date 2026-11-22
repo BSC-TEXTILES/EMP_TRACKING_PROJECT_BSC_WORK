@@ -817,20 +817,27 @@ export class ChatService {
   }
 
   /**
-   * Deletes a conversation for the caller.
+   * Deletes a conversation.
    *
-   * Direct chats are hidden and cleared per user only: the other participant's
-   * messages, attachments and history remain intact. Group administrators keep
-   * the existing organisation-wide delete behaviour for groups they manage.
+   * - forBoth=false (default): "Delete for me" - hides conversation only for the caller.
+   *   Available to all users. Other participant retains full conversation.
+   * - forBoth=true: "Delete for both sides" - permanently deletes conversation for all participants.
+   *   RESTRICTED TO ADMINS ONLY (roleLevel >= 60 or chat.groups.manage permission).
+   *   Non-admin attempts return 403 Forbidden.
    */
-  static async deleteConversation(conversationId: number, actor: AuthUser): Promise<{ deleted: boolean; left: boolean; hidden: boolean }> {
+  static async deleteConversation(conversationId: number, actor: AuthUser, forBoth = false): Promise<{ deleted: boolean; left: boolean; hidden: boolean }> {
     await ChatService.assertMember(conversationId, actor.id);
     const conv = await queryOne<{ conv_type: string; created_by: number | null }>('SELECT conv_type, created_by FROM conversations WHERE id = ?', [conversationId]);
     if (!conv) throw ApiError.notFound('Conversation not found');
 
+    const isFullAdmin = actor.roleLevel >= 60 || actor.permissions.includes('chat.groups.manage');
+
     if (conv.conv_type === 'direct') {
-      const isFullAdmin = actor.roleLevel >= 60 || actor.permissions.includes('chat.groups.manage');
-      if (isFullAdmin) {
+      if (forBoth) {
+        // ADMIN ONLY: Delete for both sides
+        if (!isFullAdmin) {
+          throw ApiError.forbidden('Only administrators can delete conversations for both participants.');
+        }
         await transaction(async (conn) => {
           const [messages] = await conn.query('SELECT id FROM messages WHERE conversation_id = ?', [conversationId]);
           const msgIds = (messages as { id: number }[]).map((m) => m.id);
@@ -846,15 +853,22 @@ export class ChatService {
           await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
         });
         emitToConversation(conversationId, 'conversation:deleted', { conversationId });
+        // Get the other participant for audit log
+        const otherMember = await queryOne<{ employee_id: number }>(
+          'SELECT employee_id FROM conversation_members WHERE conversation_id = ? AND employee_id <> ?',
+          [conversationId, actor.id],
+        );
         await recordAudit({
           actorId: actor.id,
-          action: 'chat.conversation_deleted',
+          action: 'chat.conversation_deleted_for_both',
           entityType: 'conversation',
           entityId: conversationId,
+          after: { scope: 'both', affectedUserIds: [actor.id, otherMember?.employee_id].filter(Boolean) },
         });
         return { deleted: true, left: false, hidden: false };
       }
 
+      // Delete for me (all users)
       await execute(
         `INSERT INTO conversation_user_state (conversation_id, employee_id, deleted_at, cleared_at)
          VALUES (?, ?, NOW(3), NOW(3))
@@ -874,12 +888,44 @@ export class ChatService {
     }
 
     const membership = await queryOne<{ member_role: string }>('SELECT member_role FROM conversation_members WHERE conversation_id = ? AND employee_id = ?', [conversationId, actor.id]);
-    const isAdmin = membership?.member_role === 'admin' ||
+    const isGroupAdmin = membership?.member_role === 'admin' ||
       Number(conv.created_by) === actor.id ||
       actor.roleLevel >= 50 ||
       actor.permissions.includes('chat.groups.manage');
 
-    if (isAdmin) {
+    if (forBoth) {
+      // ADMIN ONLY: Delete group for all members
+      if (!isFullAdmin) {
+        throw ApiError.forbidden('Only administrators can delete conversations for all participants.');
+      }
+      const allMemberIds = (await query<{ employee_id: number }>('SELECT employee_id FROM conversation_members WHERE conversation_id = ?', [conversationId])).map((m) => Number(m.employee_id));
+      await transaction(async (conn) => {
+        const [messages] = await conn.query('SELECT id FROM messages WHERE conversation_id = ?', [conversationId]);
+        const msgIds = (messages as { id: number }[]).map((m) => m.id);
+        if (msgIds.length > 0) {
+          const ph = msgIds.map(() => '?').join(',');
+          await conn.query(`DELETE FROM message_reactions WHERE message_id IN (${ph})`, msgIds);
+          await conn.query(`DELETE FROM message_attachments WHERE message_id IN (${ph})`, msgIds);
+          await conn.query(`DELETE FROM message_receipts WHERE message_id IN (${ph})`, msgIds);
+          await conn.query('DELETE FROM messages WHERE conversation_id = ?', [conversationId]);
+        }
+        await conn.query('DELETE FROM conversation_user_state WHERE conversation_id = ?', [conversationId]);
+        await conn.query('DELETE FROM conversation_members WHERE conversation_id = ?', [conversationId]);
+        await conn.query('DELETE FROM conversations WHERE id = ?', [conversationId]);
+      });
+      emitToConversation(conversationId, 'conversation:deleted', { conversationId });
+      await recordAudit({
+        actorId: actor.id,
+        action: 'chat.conversation_deleted_for_both',
+        entityType: 'conversation',
+        entityId: conversationId,
+        after: { scope: 'both', affectedUserIds: allMemberIds },
+      });
+      return { deleted: true, left: false, hidden: false };
+    }
+
+    // forBoth=false: Group admin deletes for everyone; non-admin leaves group
+    if (isGroupAdmin) {
       await transaction(async (conn) => {
         const [messages] = await conn.query('SELECT id FROM messages WHERE conversation_id = ?', [conversationId]);
         const msgIds = (messages as { id: number }[]).map((m) => m.id);

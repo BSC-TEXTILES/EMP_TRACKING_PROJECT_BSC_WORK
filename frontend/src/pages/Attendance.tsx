@@ -15,6 +15,7 @@ import { WeeklyOffPanel } from '../components/WeeklyOffPanel';
 interface HistoryRecord {
   id: number;
   date: string;
+  sessionNumber?: number;
   checkInAt: string | null;
   checkOutAt: string | null;
   status: string;
@@ -225,6 +226,7 @@ export default function Attendance() {
                   <thead>
                     <tr>
                       <th>Date</th>
+                      <th>Session</th>
                       <th>Status</th>
                       <th>Check in</th>
                       <th>Check out</th>
@@ -235,23 +237,30 @@ export default function Attendance() {
                     </tr>
                   </thead>
                   <tbody>
-                    {history.map((record) => (
-                      <tr key={record.id}>
-                        <td className="whitespace-nowrap font-medium text-ink-800">{record.date}</td>
-                        <td>
-                          <div className="flex flex-wrap items-center gap-1">
-                            <StatusBadge status={record.status} />
-                            {record.autoClosed && <Badge tone="warning">Auto-closed</Badge>}
-                          </div>
-                        </td>
-                        <td className="whitespace-nowrap">{record.checkInAt ? new Date(record.checkInAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                        <td className="whitespace-nowrap">{record.checkOutAt ? new Date(record.checkOutAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                        <td>{minutesToHours(record.totalMinutes)}</td>
-                        <td>{minutesToHours(record.breakMinutes)}</td>
-                        <td>{record.overtimeMinutes ? minutesToHours(record.overtimeMinutes) : '—'}</td>
-                        <td className="text-xs text-ink-500">{record.source}</td>
-                      </tr>
-                    ))}
+                    {history.map((record, index) => {
+                      const isFirstSessionForDate = index === 0 || history[index - 1].date !== record.date;
+                      const sessionsForDate = history.filter((r) => r.date === record.date);
+                      return (
+                        <tr key={record.id} className={isFirstSessionForDate ? 'border-t border-ink-200' : ''}>
+                          <td className="whitespace-nowrap font-medium text-ink-800">{isFirstSessionForDate ? record.date : ''}</td>
+                          <td className="whitespace-nowrap text-center text-sm text-ink-500">
+                            {sessionsForDate.length > 1 ? `#${record.sessionNumber ?? 1}` : '—'}
+                          </td>
+                          <td>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <StatusBadge status={record.status} />
+                              {record.autoClosed && <Badge tone="warning">Auto-closed</Badge>}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap">{record.checkInAt ? new Date(record.checkInAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                          <td className="whitespace-nowrap">{record.checkOutAt ? new Date(record.checkOutAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                          <td>{minutesToHours(record.totalMinutes)}</td>
+                          <td>{minutesToHours(record.breakMinutes)}</td>
+                          <td>{record.overtimeMinutes ? minutesToHours(record.overtimeMinutes) : '—'}</td>
+                          <td className="text-xs text-ink-500">{record.source}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

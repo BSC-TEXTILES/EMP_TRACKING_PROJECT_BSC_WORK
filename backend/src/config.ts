@@ -229,6 +229,8 @@ export const config = {
   redisUrl: process.env.REDIS_URL ?? '',
   websocketUrl: process.env.WEBSOCKET_URL ?? '',
   cookieName: 'wfm_session',
+  /** Directory containing public APK downloads (default: frontend/public/downloads). */
+  publicDownloadsDir: process.env.PUBLIC_DOWNLOADS_DIR ?? path.join(rootDir, 'frontend/public/downloads'),
 };
 
 export type AppConfig = typeof config;
