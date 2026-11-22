@@ -33,8 +33,21 @@ export interface CurrentUser {
   lastLoginAt: string | null;
 }
 
+export interface AttendanceSessionItem {
+  id: number;
+  sessionNumber: number;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+  totalMinutes: number;
+  breakMinutes: number;
+  status: string;
+  isLate: boolean;
+  isActive: boolean;
+}
+
 export interface AttendanceState {
   id: number | null;
+  sessionNumber?: number;
   date: string;
   checkInAt: string | null;
   checkOutAt: string | null;
@@ -57,6 +70,8 @@ export interface AttendanceState {
   canCheckIn: boolean;
   canCheckOut: boolean;
   canBreak: boolean;
+  sessions?: AttendanceSessionItem[];
+  activeSessionId?: number | null;
 }
 
 export interface TaskSummary {

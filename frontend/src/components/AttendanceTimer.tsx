@@ -84,32 +84,48 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
         </div>
         <div className="text-right text-xs text-ink-500">
           <p>Shift {state?.workStart ?? '—'} – {state?.workEnd ?? '—'}</p>
-          <p className="mt-0.5">Check-in {state?.checkInAt ? formatTime(state.checkInAt) : '—'}</p>
-          <p>Check-out {state?.checkOutAt ? formatTime(state.checkOutAt) : '—'}</p>
+          <p className="mt-0.5">
+            {state?.sessions && state.sessions.length > 1 ? `Active Session #${state.sessionNumber ?? 1} · ` : ''}
+            Check-in {state?.checkInAt ? formatTime(state.checkInAt) : '—'}
+          </p>
+          <p>Check-out {state?.checkOutAt ? formatTime(state.checkOutAt) : state?.canCheckOut ? 'In progress…' : '—'}</p>
         </div>
       </div>
 
       <div className="mt-4 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-widest text-ink-400">
-            {running ? 'Working duration' : state?.checkOutAt ? 'Total worked' : 'Not started'}
+            {running ? `Session #${state?.sessionNumber ?? 1} active` : state?.totalMinutes ? 'Total worked today' : 'Not started'}
           </p>
           <p className="font-mono text-3xl font-semibold tabular-nums text-ink-900 sm:text-4xl">
             {loading && !state ? '--:--:--' : running ? secondsToClock(elapsed) : minutesToHours(state?.totalMinutes ?? 0)}
           </p>
           <p className="mt-1 text-xs text-ink-500">
-            {state?.breakMinutes ? `Breaks ${minutesToHours(state.breakMinutes)} · ` : ''}
-            {state?.overtimeMinutes ? `Overtime ${minutesToHours(state.overtimeMinutes)}` : 'Server-timestamped · continues after refresh'}
+            {state?.breakMinutes ? `Total breaks ${minutesToHours(state.breakMinutes)} · ` : ''}
+            {state?.overtimeMinutes ? `Overtime ${minutesToHours(state.overtimeMinutes)} · ` : ''}
+            Server-timestamped · continues after refresh
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {!state?.checkInAt && (
-            <button type="button" className="btn-primary" disabled={pending === 'check-in' || locating} onClick={() => void handle('check-in')}>
-              <Icon name="play" size={16} /> {locating ? 'Locating…' : pending === 'check-in' ? 'Checking in…' : 'CHECK IN'}
+          {state?.canCheckIn && (
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={pending === 'check-in' || locating}
+              onClick={() => void handle('check-in')}
+            >
+              <Icon name="play" size={16} />{' '}
+              {locating
+                ? 'Locating…'
+                : pending === 'check-in'
+                  ? 'Checking in…'
+                  : state?.sessions && state.sessions.length > 0
+                    ? `CHECK IN (Session #${state.sessions.length + 1})`
+                    : 'CHECK IN'}
             </button>
           )}
-          {state?.checkInAt && !state?.checkOutAt && (
+          {state?.canCheckOut && (
             <>
               {state.isOnBreak ? (
                 <button type="button" className="btn-secondary" disabled={pending === 'break/end'} onClick={() => void handle('break/end')}>
@@ -120,18 +136,67 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
                   <Icon name="pause" size={16} /> Start break
                 </button>
               )}
-              <button type="button" className="btn-danger" disabled={pending === 'check-out'} onClick={() => void handle('check-out')}>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={pending === 'check-out'}
+                onClick={() => setCheckoutConfirmOpen(true)}
+              >
                 <Icon name="check" size={16} /> CHECK OUT
               </button>
             </>
           )}
-          {state?.checkOutAt && (
+          {!state?.canCheckIn && !state?.canCheckOut && state?.checkOutAt && (
             <span className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
-              Day closed · {minutesToHours(state.totalMinutes)}
+              Session completed · {minutesToHours(state.totalMinutes)}
             </span>
           )}
         </div>
       </div>
+
+      {/* Today's Multi-Session Breakdown */}
+      {state?.sessions && state.sessions.length > 0 && (
+        <div className="mt-4 border-t border-ink-100 pt-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-ink-500 mb-2">
+            Today&apos;s Sessions ({state.sessions.length})
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {state.sessions.map((s) => (
+              <div
+                key={s.id}
+                className={cx(
+                  'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
+                  s.isActive
+                    ? 'border-emerald-300 bg-emerald-50/70 text-emerald-950 font-semibold shadow-xs'
+                    : 'border-ink-200 bg-white text-ink-700',
+                )}
+              >
+                <span className={cx(
+                  'flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold text-white',
+                  s.isActive ? 'bg-emerald-600 animate-pulse' : 'bg-ink-400',
+                )}>
+                  #{s.sessionNumber}
+                </span>
+                <span>
+                  {s.checkInAt ? formatTime(s.checkInAt) : '—'}
+                  {' → '}
+                  {s.checkOutAt ? formatTime(s.checkOutAt) : s.isActive ? 'Active' : 'Closed'}
+                </span>
+                <span className="text-ink-400">·</span>
+                <span className="font-mono">{minutesToHours(s.totalMinutes)}</span>
+                {s.breakMinutes > 0 && (
+                  <span className="text-ink-400 text-[10px]">({s.breakMinutes}m break)</span>
+                )}
+                {s.isActive && (
+                  <span className="rounded-full bg-emerald-200 px-1.5 py-0.2 text-[9px] font-bold text-emerald-900">
+                    LIVE
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Checkout Confirmation Modal */}
       {checkoutConfirmOpen && (
@@ -143,7 +208,7 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
           footer={
             <>
               <button type="button" className="btn-secondary" onClick={() => setCheckoutConfirmOpen(false)}>
-                Cancel
+                Cancel / Go Back
               </button>
               <button type="button" className="btn-danger" onClick={confirmCheckout} disabled={pending === 'check-out'}>
                 {pending === 'check-out' ? 'Checking out…' : 'Confirm Check Out'}
@@ -151,9 +216,14 @@ export function AttendanceTimer({ state, loading, pending, onAction, compact }: 
             </>
           }
         >
-          <p className="text-sm text-ink-600">
-            Your current session will be closed and working hours will be saved. You can check in again later if needed.
-          </p>
+          <div className="space-y-3 text-sm text-ink-600">
+            <p>
+              Your current working session (<strong>Session #{state?.sessionNumber ?? 1}</strong>) will be closed and your working duration will be recorded to the database.
+            </p>
+            <div className="rounded-lg bg-amber-50 p-3 border border-amber-200 text-xs text-amber-900">
+              <strong>Need to resume work later?</strong> You can check in again at any time today to start a new attendance session segment (e.g. Session #{(state?.sessionNumber ?? 1) + 1}).
+            </div>
+          </div>
         </Modal>
       )}
     </div>

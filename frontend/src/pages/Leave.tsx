@@ -820,34 +820,38 @@ export default function Leave() {
                           onKeyDown={(e) => {
                             if (e.key === 'Enter' || e.key === ' ') setViewingFlowLeave(leave);
                           }}
-                          className="mt-2.5 rounded-xl border border-blue-200/90 bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-slate-50/80 p-2.5 transition-all hover:border-brand-400 hover:shadow-xs cursor-pointer group"
-                          title="Click to view live interactive application flow diagram"
+                          className="mt-3 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/90 via-indigo-50/60 to-slate-50/90 p-3 transition-all hover:border-brand-500 hover:shadow-sm cursor-pointer group"
+                          title="Click to inspect live application flow & telemetry"
                         >
-                          <div className="flex items-center justify-between text-[11px] font-bold text-ink-600 mb-2">
-                            <div className="flex items-center gap-1.5">
-                              <span className="flex h-2 w-2 relative">
+                          <div className="flex items-center justify-between text-[11px] font-bold text-ink-600 mb-2.5">
+                            <div className="flex items-center gap-2">
+                              <span className="flex h-2.5 w-2.5 relative">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-500 opacity-75"></span>
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-brand-600"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand-600"></span>
                               </span>
-                              <span className="text-brand-900 uppercase tracking-wider text-[10px] font-bold">Live Flow Status</span>
+                              <span className="text-brand-900 uppercase tracking-wider text-[11px] font-bold">
+                                Live Application Flow Pipeline
+                              </span>
                             </div>
-                            <span className="text-[10px] text-brand-700 font-semibold group-hover:underline flex items-center gap-0.5">
-                              <span>Inspect Live Flow</span>
-                              <Icon name="chevronRight" size={12} />
+                            <span className="text-[11px] text-brand-700 font-semibold group-hover:underline flex items-center gap-1">
+                              <span>Full Flow Diagram</span>
+                              <Icon name="chevronRight" size={13} />
                             </span>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-1.5">
                             {/* Step 1: Submitted */}
-                            <div className="flex items-center gap-2 rounded-lg bg-white/95 p-2 border border-emerald-200 shadow-2xs">
-                              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[10px] font-bold text-white shadow-2xs">
+                            <div className="flex-1 flex items-center gap-2 rounded-lg bg-white p-2 border border-emerald-300 shadow-2xs">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white shadow-2xs">
                                 ✓
                               </span>
-                              <div className="min-w-0">
+                              <div className="min-w-0 flex-1">
                                 <p className="text-[11px] font-bold text-emerald-950 truncate">1. Submitted</p>
-                                <p className="text-[9px] text-ink-500 truncate">{leave.createdAt ? formatDate(leave.createdAt) : 'Applied'}</p>
+                                <p className="text-[9px] text-ink-500 truncate">{leave.createdAt ? formatDateTime(leave.createdAt) : 'Applied'}</p>
                               </div>
                             </div>
+
+                            <span className="hidden sm:inline-block text-ink-300 font-bold px-0.5">→</span>
 
                             {/* Step 2: Location HR Verification (Independent) */}
                             {(() => {
@@ -856,26 +860,45 @@ export default function Leave() {
                               const isCurrent = !isDone && !isRejected && leave.status !== 'rejected' && leave.status !== 'cancelled';
                               return (
                                 <div className={cx(
-                                  'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
-                                  isDone ? 'bg-emerald-50/90 border-emerald-200' : isCurrent ? 'bg-amber-50/95 border-amber-300 ring-1 ring-amber-400/30' : isRejected ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80',
+                                  'flex-1 flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                                  isDone
+                                    ? 'bg-emerald-50 border-emerald-300'
+                                    : isCurrent
+                                      ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/20'
+                                      : isRejected
+                                        ? 'bg-red-50 border-red-300'
+                                        : 'bg-white/90 border-ink-200 opacity-80',
                                 )}>
                                   <span className={cx(
-                                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white shadow-2xs',
                                     isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300',
                                   )}>
                                     {isDone ? '✓' : isRejected ? '✕' : '2'}
                                   </span>
-                                  <div className="min-w-0">
-                                    <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
-                                      2. Location HR
-                                    </p>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between">
+                                      <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
+                                        2. Location HR
+                                      </p>
+                                      <span className={cx(
+                                        'rounded px-1 py-0.1 text-[8px] font-bold uppercase',
+                                        isDone ? 'bg-emerald-200 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-100 text-ink-600'
+                                      )}>
+                                        {isDone ? 'Verified' : isCurrent ? 'Pending' : isRejected ? 'Declined' : 'Queue'}
+                                      </span>
+                                    </div>
                                     <p className="text-[9px] text-ink-500 truncate" title={leave.hrName ?? 'Location HR'}>
-                                      {isDone ? 'Verified' : isCurrent ? 'Awaiting HR' : isRejected ? 'Rejected' : leave.hrName ?? 'HR Verification'}
+                                      {leave.hrName ? leave.hrName : 'Location HR'}
                                     </p>
+                                    {leave.hrActionAt && (
+                                      <p className="text-[8px] text-ink-400 truncate">{formatDateTime(leave.hrActionAt)}</p>
+                                    )}
                                   </div>
                                 </div>
                               );
                             })()}
+
+                            <span className="hidden sm:inline-block text-ink-300 font-bold px-0.5">→</span>
 
                             {/* Step 3: Reporting Manager Review (Independent) */}
                             {(() => {
@@ -884,26 +907,45 @@ export default function Leave() {
                               const isCurrent = !isDone && !isRejected && leave.status !== 'rejected' && leave.status !== 'cancelled';
                               return (
                                 <div className={cx(
-                                  'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
-                                  isDone ? 'bg-emerald-50/90 border-emerald-200' : isCurrent ? 'bg-amber-50/95 border-amber-300 ring-1 ring-amber-400/30' : isRejected ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80',
+                                  'flex-1 flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                                  isDone
+                                    ? 'bg-emerald-50 border-emerald-300'
+                                    : isCurrent
+                                      ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/20'
+                                      : isRejected
+                                        ? 'bg-red-50 border-red-300'
+                                        : 'bg-white/90 border-ink-200 opacity-80',
                                 )}>
                                   <span className={cx(
-                                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white shadow-2xs',
                                     isDone ? 'bg-emerald-600' : isCurrent ? 'bg-amber-500 animate-pulse' : isRejected ? 'bg-red-500' : 'bg-ink-300',
                                   )}>
                                     {isDone ? '✓' : isRejected ? '✕' : '3'}
                                   </span>
-                                  <div className="min-w-0">
-                                    <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
-                                      3. Manager
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between">
+                                      <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
+                                        3. Manager
+                                      </p>
+                                      <span className={cx(
+                                        'rounded px-1 py-0.1 text-[8px] font-bold uppercase',
+                                        isDone ? 'bg-emerald-200 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-100 text-ink-600'
+                                      )}>
+                                        {isDone ? 'Approved' : isCurrent ? 'Pending' : isRejected ? 'Declined' : 'Queue'}
+                                      </span>
+                                    </div>
+                                    <p className="text-[9px] text-ink-500 truncate" title={leave.managerName ?? 'Reporting Manager'}>
+                                      {leave.managerName ? leave.managerName : 'Direct Manager'}
                                     </p>
-                                    <p className="text-[9px] text-ink-500 truncate" title={leave.managerName ?? 'Direct Manager'}>
-                                      {isDone ? 'Approved' : isCurrent ? 'Awaiting Manager' : isRejected ? 'Rejected' : leave.managerName ?? 'Manager Review'}
-                                    </p>
+                                    {leave.managerActionAt && (
+                                      <p className="text-[8px] text-ink-400 truncate">{formatDateTime(leave.managerActionAt)}</p>
+                                    )}
                                   </div>
                                 </div>
                               );
                             })()}
+
+                            <span className="hidden sm:inline-block text-ink-300 font-bold px-0.5">→</span>
 
                             {/* Step 4: Final Approval & Attendance Sync */}
                             {(() => {
@@ -912,21 +954,36 @@ export default function Leave() {
                               const isCancelled = leave.status === 'cancelled';
                               return (
                                 <div className={cx(
-                                  'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
-                                  isApproved ? 'bg-emerald-50/90 border-emerald-200' : isRejected || isCancelled ? 'bg-red-50 border-red-200' : 'bg-white/90 border-ink-100 opacity-80',
+                                  'flex-1 flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
+                                  isApproved
+                                    ? 'bg-emerald-50 border-emerald-300'
+                                    : isRejected || isCancelled
+                                      ? 'bg-red-50 border-red-300'
+                                      : 'bg-white/90 border-ink-200 opacity-80',
                                 )}>
                                   <span className={cx(
-                                    'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold text-white shadow-2xs',
+                                    'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-white shadow-2xs',
                                     isApproved ? 'bg-emerald-600' : isRejected || isCancelled ? 'bg-red-500' : 'bg-ink-300',
                                   )}>
                                     {isApproved ? '✓' : isRejected || isCancelled ? '✕' : '4'}
                                   </span>
-                                  <div className="min-w-0">
-                                    <p className={cx('text-[11px] font-bold truncate', isApproved ? 'text-emerald-950' : isRejected || isCancelled ? 'text-red-950' : 'text-ink-700')}>
-                                      4. Live Sync
-                                    </p>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center justify-between">
+                                      <p className={cx('text-[11px] font-bold truncate', isApproved ? 'text-emerald-950' : isRejected || isCancelled ? 'text-red-950' : 'text-ink-700')}>
+                                        4. Live Sync
+                                      </p>
+                                      <span className={cx(
+                                        'rounded px-1 py-0.1 text-[8px] font-bold uppercase',
+                                        isApproved ? 'bg-emerald-200 text-emerald-900' : isRejected || isCancelled ? 'bg-red-200 text-red-900' : 'bg-ink-100 text-ink-600'
+                                      )}>
+                                        {isApproved ? 'Active' : isRejected || isCancelled ? 'Void' : 'Pending'}
+                                      </span>
+                                    </div>
                                     <p className="text-[9px] text-ink-500 truncate">
-                                      {isApproved ? 'Attendance Synced' : isRejected ? 'Rejected' : isCancelled ? 'Cancelled' : 'Pending Both'}
+                                      {isApproved ? 'Attendance Synced' : isRejected ? 'Rejected' : isCancelled ? 'Cancelled' : 'Pending Approvals'}
+                                    </p>
+                                    <p className="text-[8px] text-ink-400 truncate">
+                                      {isApproved ? 'Store Roster Updated' : 'No changes to roster'}
                                     </p>
                                   </div>
                                 </div>

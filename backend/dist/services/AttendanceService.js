@@ -172,39 +172,84 @@ export class AttendanceService {
     static async stateFor(employeeId, date = today()) {
         const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [employeeId]);
         const shift = await shiftConfig(emp?.location_id);
-        const row = await queryOne(`SELECT a.*, NOW(3) AS server_now,
+        const rows = await query(`SELECT a.*, NOW(3) AS server_now,
               (SELECT b.id FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.session_number = a.session_number AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_id,
               (SELECT b.started_at FROM attendance_breaks b WHERE b.attendance_id = a.id AND b.session_number = a.session_number AND b.ended_at IS NULL ORDER BY b.id DESC LIMIT 1) AS open_break_start
-       FROM attendance a WHERE a.employee_id = ? AND a.work_date = ? ORDER BY a.session_number DESC LIMIT 1`, [employeeId, date]);
+       FROM attendance a WHERE a.employee_id = ? AND a.work_date = ? ORDER BY a.session_number ASC`, [employeeId, date]);
         const holiday = await queryOne(`SELECT h.name FROM holidays h
        WHERE h.holiday_date = ?
          AND (h.location_id IS NULL OR h.location_id = (SELECT location_id FROM employees WHERE id = ?))
        LIMIT 1`, [date, employeeId]);
-        const serverNow = row?.server_now ?? (await queryOne('SELECT NOW(3) AS now'))?.now ?? localDate();
+        const serverNow = rows[0]?.server_now ?? (await queryOne('SELECT NOW(3) AS now'))?.now ?? localDate();
+        // Identify active session if one exists (checked in, not checked out)
+        const activeRow = rows.find((r) => r.check_in_at && !r.check_out_at);
+        // Target session for current controls: active session or latest closed session
+        const latestRow = rows.length > 0 ? rows[rows.length - 1] : null;
+        const targetRow = activeRow ?? latestRow;
         let elapsedSeconds = 0;
-        if (row?.check_in_at) {
-            const checkIn = parseUtc(row.check_in_at).getTime();
-            const end = row.check_out_at ? parseUtc(row.check_out_at).getTime() : parseUtc(serverNow).getTime();
-            const breakMs = Number(row.break_minutes) * 60000;
-            const openBreakMs = row.open_break_start ? parseUtc(serverNow).getTime() - parseUtc(row.open_break_start).getTime() : 0;
+        if (activeRow?.check_in_at) {
+            const checkIn = parseUtc(activeRow.check_in_at).getTime();
+            const end = parseUtc(serverNow).getTime();
+            const breakMs = Number(activeRow.break_minutes) * 60000;
+            const openBreakMs = activeRow.open_break_start ? parseUtc(serverNow).getTime() - parseUtc(activeRow.open_break_start).getTime() : 0;
             elapsedSeconds = Math.max(0, Math.floor((end - checkIn - breakMs - openBreakMs) / 1000));
         }
-        const lateMinutes = row?.check_in_at ? lateMinutesFor(row.check_in_at, shift) : 0;
+        else if (latestRow?.check_in_at && latestRow.check_out_at) {
+            elapsedSeconds = Math.max(0, Math.floor(Number(latestRow.total_minutes) * 60));
+        }
+        let totalWorkedMinutes = 0;
+        let totalBreakMinutes = 0;
+        let totalOvertimeMinutes = 0;
+        const sessions = rows.map((r) => {
+            const isActive = Boolean(r.check_in_at && !r.check_out_at);
+            let sessionWorkedMinutes = Number(r.total_minutes || 0);
+            let sessionBreakMinutes = Number(r.break_minutes || 0);
+            if (isActive && r.check_in_at) {
+                const checkIn = parseUtc(r.check_in_at).getTime();
+                const now = parseUtc(serverNow).getTime();
+                const breakMs = sessionBreakMinutes * 60000;
+                const openBreakMs = r.open_break_start ? now - parseUtc(r.open_break_start).getTime() : 0;
+                sessionWorkedMinutes = Math.max(0, Math.floor((now - checkIn - breakMs - openBreakMs) / 60000));
+                if (r.open_break_start) {
+                    sessionBreakMinutes += Math.max(0, Math.floor(openBreakMs / 60000));
+                }
+            }
+            totalWorkedMinutes += sessionWorkedMinutes;
+            totalBreakMinutes += sessionBreakMinutes;
+            totalOvertimeMinutes += Number(r.overtime_minutes || 0);
+            return {
+                id: Number(r.id),
+                sessionNumber: Number(r.session_number),
+                checkInAt: toIso(r.check_in_at),
+                checkOutAt: toIso(r.check_out_at),
+                totalMinutes: sessionWorkedMinutes,
+                breakMinutes: sessionBreakMinutes,
+                status: r.status,
+                isLate: Boolean(r.is_late),
+                isActive,
+            };
+        });
+        const lateMinutes = targetRow?.check_in_at ? lateMinutesFor(targetRow.check_in_at, shift) : 0;
+        // Check-in is ALWAYS available when there is no active session!
+        const canCheckIn = !activeRow;
+        const canCheckOut = Boolean(activeRow);
+        const canBreak = Boolean(activeRow);
         return {
-            id: row ? Number(row.id) : null,
+            id: targetRow ? Number(targetRow.id) : null,
+            sessionNumber: targetRow ? Number(targetRow.session_number) : 1,
             date,
-            checkInAt: toIso(row?.check_in_at ?? null),
-            checkOutAt: toIso(row?.check_out_at ?? null),
-            status: row?.status ?? (isWeeklyOff(date) ? 'weekly_off' : holiday ? 'holiday' : 'absent'),
-            totalMinutes: row ? Number(row.total_minutes) : 0,
-            breakMinutes: row ? Number(row.break_minutes) : 0,
-            overtimeMinutes: row ? Number(row.overtime_minutes) : 0,
-            isLate: Boolean(row?.is_late),
+            checkInAt: toIso(targetRow?.check_in_at ?? null),
+            checkOutAt: toIso(targetRow?.check_out_at ?? null),
+            status: targetRow?.status ?? (isWeeklyOff(date) ? 'weekly_off' : holiday ? 'holiday' : 'absent'),
+            totalMinutes: totalWorkedMinutes,
+            breakMinutes: totalBreakMinutes,
+            overtimeMinutes: totalOvertimeMinutes,
+            isLate: Boolean(targetRow?.is_late),
             lateMinutes,
-            earlyDeparture: Boolean(row?.early_departure),
-            autoClosed: Boolean(row?.auto_closed),
-            isOnBreak: Boolean(row?.open_break_start),
-            breakStartedAt: toIso(row?.open_break_start ?? null),
+            earlyDeparture: Boolean(targetRow?.early_departure),
+            autoClosed: Boolean(targetRow?.auto_closed),
+            isOnBreak: Boolean(activeRow?.open_break_start),
+            breakStartedAt: toIso(activeRow?.open_break_start ?? null),
             elapsedSeconds,
             serverNow: toIso(serverNow) ?? new Date().toISOString(),
             workStart: shift.workStart,
@@ -212,9 +257,11 @@ export class AttendanceService {
             isHoliday: Boolean(holiday),
             holidayName: holiday?.name ?? null,
             isWeeklyOff: isWeeklyOff(date),
-            canCheckIn: !row?.check_in_at,
-            canCheckOut: Boolean(row?.check_in_at) && !row?.check_out_at,
-            canBreak: Boolean(row?.check_in_at) && !row?.check_out_at,
+            canCheckIn,
+            canCheckOut,
+            canBreak,
+            sessions,
+            activeSessionId: activeRow ? Number(activeRow.id) : null,
         };
     }
     static async checkIn(employeeId, input) {
