@@ -380,11 +380,11 @@ export class WeeklyOffService {
     const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
 
     const [requests, attendance] = await Promise.all([
-      run<{ id: number; start_date: string; status: string }>(
-        `SELECT id, start_date, status FROM leave_requests
+      run<{ id: number; start_date: string; end_date: string; status: string }>(
+        `SELECT id, start_date, end_date, status FROM leave_requests
          WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')
-           AND start_date BETWEEN ? AND ?`,
-        [employeeId, start, end],
+           AND start_date <= ? AND end_date >= ?`,
+        [employeeId, end, start],
       ),
       run<{ work_date: string; status: string; check_in_at: string | null }>(
         'SELECT work_date, status, check_in_at FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ?',
@@ -395,9 +395,14 @@ export class WeeklyOffService {
     const approved = new Map<string, number>();
     const pending = new Map<string, number>();
     for (const row of requests) {
-      const date = String(row.start_date).slice(0, 10);
-      if (row.status === 'approved') approved.set(date, Number(row.id));
-      else if (row.status === 'pending_manager' || row.status === 'pending_hr') pending.set(date, Number(row.id));
+      const s = String(row.start_date).slice(0, 10);
+      const e = String(row.end_date || row.start_date).slice(0, 10);
+      for (const d of dateRange(s, e)) {
+        if (d >= start && d <= end) {
+          if (row.status === 'approved') approved.set(d, Number(row.id));
+          else if (row.status === 'pending_manager' || row.status === 'pending_hr') pending.set(d, Number(row.id));
+        }
+      }
     }
     const markedOff = new Set<string>();
     const worked = new Set<string>();
@@ -696,11 +701,11 @@ export class WeeklyOffService {
     const ids = employees.map((employee) => Number(employee.id));
     const placeholders = ids.map(() => '?').join(',');
     const [requests, attendance, leaveDays, halfDays, credits, coLedger] = await Promise.all([
-      query<{ employee_id: number; start_date: string; status: string }>(
-        `SELECT employee_id, start_date, status FROM leave_requests
+      query<{ employee_id: number; start_date: string; end_date: string; status: string }>(
+        `SELECT employee_id, start_date, end_date, status FROM leave_requests
          WHERE employee_id IN (${placeholders}) AND request_kind = 'weekly_off'
-           AND status IN ('pending_manager','pending_hr','approved') AND start_date BETWEEN ? AND ?`,
-        [...ids, start, end],
+           AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`,
+        [...ids, end, start],
       ),
       query<{ employee_id: number; work_date: string; status: string; check_in_at: string | null }>(
         `SELECT employee_id, work_date, status, check_in_at FROM attendance
@@ -732,10 +737,33 @@ export class WeeklyOffService {
       ),
     ]);
     const key = (id: number | string, date: string) => `${Number(id)}:${String(date).slice(0, 10)}`;
-    const approvedSet = new Set(requests.filter((r) => r.status === 'approved').map((r) => key(r.employee_id, r.start_date)));
-    const pendingSet = new Set(requests.filter((r) => r.status !== 'approved').map((r) => key(r.employee_id, r.start_date)));
+    const approvedDatesByEmp = new Map<number, Set<string>>();
+    const pendingDatesByEmp = new Map<number, Set<string>>();
+    for (const r of requests) {
+      const empId = Number(r.employee_id);
+      const s = String(r.start_date).slice(0, 10);
+      const e = String(r.end_date || r.start_date).slice(0, 10);
+      for (const d of dateRange(s, e)) {
+        if (d >= start && d <= end) {
+          if (r.status === 'approved') {
+            if (!approvedDatesByEmp.has(empId)) approvedDatesByEmp.set(empId, new Set());
+            approvedDatesByEmp.get(empId)!.add(d);
+          } else {
+            if (!pendingDatesByEmp.has(empId)) pendingDatesByEmp.set(empId, new Set());
+            pendingDatesByEmp.get(empId)!.add(d);
+          }
+        }
+      }
+    }
+    for (const a of attendance) {
+      const empId = Number(a.employee_id);
+      const d = String(a.work_date).slice(0, 10);
+      if (!a.check_in_at && a.status === 'weekly_off') {
+        if (!approvedDatesByEmp.has(empId)) approvedDatesByEmp.set(empId, new Set());
+        approvedDatesByEmp.get(empId)!.add(d);
+      }
+    }
     const workedSet = new Set(attendance.filter((r) => r.check_in_at).map((r) => key(r.employee_id, r.work_date)));
-    const markedSet = new Set(attendance.filter((r) => !r.check_in_at && r.status === 'weekly_off').map((r) => key(r.employee_id, r.work_date)));
     const leaveMap = new Map(leaveDays.map((row) => [Number(row.employee_id), Number(row.total)]));
     const halfMap = new Map(halfDays.map((row) => [Number(row.employee_id), row]));
     const earnedMap = new Map(credits.map((row) => [Number(row.employee_id), Number(row.earned ?? 0)]));
@@ -753,14 +781,16 @@ export class WeeklyOffService {
           employee.joining_date ? String(employee.joining_date) : null,
           employee.deactivated_at ? String(employee.deactivated_at) : null,
         );
-        let taken = 0;
-        let pending = 0;
+        const empApproved = approvedDatesByEmp.get(id) ?? new Set<string>();
+        const empPending = pendingDatesByEmp.get(id) ?? new Set<string>();
+        const taken = empApproved.size;
+        const pending = empPending.size;
+        const allocated = eligible.length;
+        const remaining = Math.max(0, allocated - taken);
         let workedCount = 0;
         for (const date of eligible) {
           const k = key(id, date);
-          if (approvedSet.has(k) || markedSet.has(k)) taken += 1;
-          else if (pendingSet.has(k)) pending += 1;
-          else if (workedSet.has(k)) workedCount += 1;
+          if (workedSet.has(k)) workedCount += 1;
         }
         const ledger = ledgerMap.get(id);
         const allocatedCo = (earnedMap.get(id) ?? 0) + Number(ledger?.manual ?? 0);

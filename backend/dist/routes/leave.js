@@ -85,7 +85,11 @@ leaveRouter.get('/preview', asyncHandler(async (req, res) => {
 /** Weekly-off application: one assigned weekly-off date, reason optional. */
 leaveRouter.post('/weekly-off', requireAny('leave.apply'), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        consecutive: z.boolean().optional(),
+        isAccumulated: z.boolean().optional(),
         reason: z.string().max(2000).nullable().optional(),
         hrApproverId: z.number().int().positive().optional(),
     }), req.body);

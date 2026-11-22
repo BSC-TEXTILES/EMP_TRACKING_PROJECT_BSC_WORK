@@ -1,7 +1,7 @@
 import { execute, query, queryOne, transaction, txQuery } from '../db/index.js';
 import { getSetting, recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
-import { MONTH_NAMES as MONTHS, WEEKDAY_NAMES, chargeableDays, isValidIsoDate, isWeeklyOff } from '../lib/calendar.js';
+import { MONTH_NAMES as MONTHS, WEEKDAY_NAMES, chargeableDays, dateRange, isValidIsoDate, isWeeklyOff } from '../lib/calendar.js';
 import { emitToEmployee } from '../realtime/io.js';
 import { WeeklyOffService } from './WeeklyOffService.js';
 import { ApiError } from '../lib/http.js';
@@ -265,36 +265,42 @@ export class LeaveService {
         emitToEmployee(hrId, 'leave:updated', { reason: 'applied', id: requestId });
     }
     /**
-     * Weekly-off application: employee selects any eligible calendar date (including weekdays).
+     * Weekly-off application: employee selects any eligible calendar date or continuous range (including weekdays).
      * Validated against monthly entitlement (based on number of Sundays in that month).
      * First step: submitted to Location-wise HR for verification (status: 'pending_hr').
      */
     static async applyWeeklyOff(employeeId, input, context = {}) {
-        if (!isValidIsoDate(input.date))
-            throw ApiError.badRequest('Select a valid weekly-off date.');
+        const sDate = (input.startDate || input.date || '').trim();
+        const eDate = (input.endDate || input.date || sDate).trim();
+        if (!isValidIsoDate(sDate) || !isValidIsoDate(eDate))
+            throw ApiError.badRequest('Select a valid weekly-off date range.');
+        if (eDate < sDate)
+            throw ApiError.badRequest('End date cannot be earlier than start date.');
+        const requestedDates = dateRange(sDate, eDate);
+        const days = requestedDates.length;
+        if (days <= 0)
+            throw ApiError.badRequest('Select at least one day for weekly off.');
         const { routing, hr } = await LeaveService.resolveRoute(employeeId, input.hrApproverId);
-        const year = Number(input.date.slice(0, 4));
-        const month = Number(input.date.slice(5, 7));
+        const year = Number(sDate.slice(0, 4));
+        const month = Number(sDate.slice(5, 7));
         const reason = (input.reason ?? '').trim();
         const assertAvailable = (balance) => {
-            if (input.date < today()) {
-                throw ApiError.badRequest('Week-off cannot be requested for past dates.');
+            for (const d of requestedDates) {
+                if (d < today()) {
+                    throw ApiError.badRequest('Week-off cannot be requested for past dates.');
+                }
+                if (balance.joiningDate && d < balance.joiningDate) {
+                    throw ApiError.badRequest(`${d} is not eligible for weekly off (prior to joining date).`);
+                }
+                if (balance.takenDates?.includes(d)) {
+                    throw ApiError.conflict(`A week off on ${d} has already been approved.`);
+                }
+                if (balance.pendingDates?.includes(d)) {
+                    throw ApiError.conflict(`You already have a week-off request for ${d} awaiting approval.`);
+                }
             }
-            if (!balance.allDates.includes(input.date)) {
-                throw ApiError.badRequest(`${input.date} is not your scheduled weekly-off day.`);
-            }
-            const entry = balance.dates.find((d) => d.date === input.date);
-            if (entry?.status === 'not_eligible' || (balance.joiningDate && input.date < balance.joiningDate)) {
-                throw ApiError.badRequest(`${input.date} is not eligible for weekly off (prior to joining date).`);
-            }
-            if (balance.takenDates?.includes(input.date)) {
-                throw ApiError.conflict(`A week off on ${input.date} has already been approved.`);
-            }
-            if (balance.pendingDates?.includes(input.date)) {
-                throw ApiError.conflict(`You already have a week-off request for ${input.date} awaiting approval.`);
-            }
-            if (balance.available <= 0) {
-                throw ApiError.conflict(`No weekly-off balance remaining for ${MONTHS[month - 1]} ${year} (${balance.allocated} allocated, ${balance.taken} taken, ${balance.pending} pending).`);
+            if (balance.available < days) {
+                throw ApiError.conflict(`Insufficient weekly-off balance remaining for ${MONTHS[month - 1]} ${year} (Requested: ${days} day(s), Available: ${balance.available}, Allocated: ${balance.allocated}, Taken: ${balance.taken}, Pending: ${balance.pending}).`);
             }
         };
         // Fast pre-check
@@ -307,15 +313,32 @@ export class LeaveService {
             await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [employeeId]);
             const balance = await WeeklyOffService.monthBalance(employeeId, year, month, runnerFor(conn));
             assertAvailable(balance);
+            const [overlap] = await conn.query(`SELECT id FROM leave_requests
+         WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
+           AND start_date <= ? AND end_date >= ? LIMIT 1`, [employeeId, eDate, sDate]);
+            if (overlap.length > 0) {
+                throw ApiError.conflict(`You already have a leave or weekly-off request overlapping ${sDate} to ${eDate}.`);
+            }
             try {
                 const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
-           VALUES (?, ?, 'weekly_off', ?, ?, 1, 1, 0, ?, NULL, 'pending_hr', ?, ?, ?, 0, NULL)`, [employeeId, typeRow.id, input.date, input.date, reason || 'Weekly Off', routing.manager.id, routing.locationId, hr.id]);
+           VALUES (?, ?, 'weekly_off', ?, ?, ?, ?, 0, ?, NULL, 'pending_hr', ?, ?, ?, 0, NULL)`, [
+                    employeeId,
+                    typeRow.id,
+                    sDate,
+                    eDate,
+                    days,
+                    days,
+                    reason || (days > 1 ? `Consecutive Weekly Off (${days} days)` : 'Weekly Off'),
+                    routing.manager.id,
+                    routing.locationId,
+                    hr.id,
+                ]);
                 await recordHistory(conn, result.insertId, 'submitted', null, 'pending_hr', employeeId);
                 return { id: Number(result.insertId), balance };
             }
             catch (error) {
                 if (error.code === 'ER_DUP_ENTRY')
-                    throw ApiError.conflict(`A weekly-off request for ${input.date} already exists.`);
+                    throw ApiError.conflict(`A weekly-off request for ${sDate} to ${eDate} already exists.`);
                 throw error;
             }
         });
@@ -324,18 +347,21 @@ export class LeaveService {
             action: 'leave.applied_weekly_off',
             entityType: 'leave_request',
             entityId: created.id,
-            after: { date: input.date, reason, hrApproverId: hr.id },
+            after: { startDate: sDate, endDate: eDate, days, reason, hrApproverId: hr.id },
             ip: context.ip,
             userAgent: context.userAgent,
         });
         await WeeklyOffService.persistAllocation(employeeId, year, month);
-        await LeaveService.notifySubmittedToHr(employeeId, hr.id, created.id, `Weekly off on ${input.date}`);
+        await LeaveService.notifySubmittedToHr(employeeId, hr.id, created.id, days > 1 ? `Weekly off (${days} days) ${sDate} → ${eDate}` : `Weekly off on ${sDate}`);
         return {
             id: created.id,
-            date: input.date,
+            date: sDate,
+            startDate: sDate,
+            endDate: eDate,
+            days,
             allocated: created.balance.allocated,
             taken: created.balance.taken,
-            remainingAfterApproval: Math.max(0, created.balance.remaining - 1),
+            remainingAfterApproval: Math.max(0, created.balance.remaining - days),
         };
     }
     /** Leave types eligible to absorb a half day, in policy order, with balances net of pending requests. */
@@ -619,23 +645,33 @@ export class LeaveService {
                     if (!updated.affectedRows)
                         throw ApiError.conflict('This request was already processed.');
                     await recordHistory(conn, leaveId, 'manager_approved', 'pending_manager', 'approved', actor.id, input.note);
-                    const date = String(leave.start_date).slice(0, 10);
+                    const sDate = String(leave.start_date).slice(0, 10);
+                    const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
                     if (leave.request_kind !== 'weekly_off') {
-                        const yr = Number(date.slice(0, 4));
+                        const yr = Number(sDate.slice(0, 4));
                         await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
                VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
                ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, yr, leave.leave_type_id, leave.days]);
                     }
                     const attStatus = leave.request_kind === 'weekly_off' ? 'weekly_off' : Boolean(leave.is_half_day) ? 'half_day' : 'on_leave';
                     const attNotes = leave.request_kind === 'weekly_off' ? 'Approved weekly off' : Boolean(leave.is_half_day) ? 'Approved half-day leave' : 'Approved leave';
-                    await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, date, attStatus, attNotes]);
+                    const rangeDates = dateRange(sDate, eDate);
+                    for (const d of rangeDates) {
+                        await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
+               ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, d, attStatus, attNotes]);
+                    }
                 });
                 if (leave.request_kind === 'weekly_off') {
-                    const date = String(leave.start_date).slice(0, 10);
-                    const year = Number(date.slice(0, 4));
-                    const month = Number(date.slice(5, 7));
-                    await WeeklyOffService.persistAllocation(Number(leave.employee_id), year, month);
+                    const sDate = String(leave.start_date).slice(0, 10);
+                    const eDate = String(leave.end_date || leave.start_date).slice(0, 10);
+                    const monthsToPersist = new Set();
+                    for (const d of dateRange(sDate, eDate)) {
+                        monthsToPersist.add(d.slice(0, 7));
+                    }
+                    for (const ym of monthsToPersist) {
+                        const [y, m] = ym.split('-').map(Number);
+                        await WeeklyOffService.persistAllocation(Number(leave.employee_id), y, m);
+                    }
                 }
             }
             else {

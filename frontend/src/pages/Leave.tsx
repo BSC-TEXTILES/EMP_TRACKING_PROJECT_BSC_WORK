@@ -156,8 +156,19 @@ export default function Leave() {
   // Weekly Off State (only user with saved weekly off can take)
   const now = new Date();
   const [woPeriod, setWoPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [woMode, setWoMode] = useState<'single' | 'range'>('single');
   const [woDate, setWoDate] = useState('');
+  const [woStartDate, setWoStartDate] = useState('');
+  const [woEndDate, setWoEndDate] = useState('');
   const { data: woSummary, error: woError, loading: woLoading } = useWeeklyOffSummary(undefined, woPeriod.year, woPeriod.month);
+
+  // Helper to calculate requested week-off days
+  const getWoDaysCount = (): number => {
+    if (woMode === 'single') return woDate ? 1 : 0;
+    if (!woStartDate || !woEndDate || woEndDate < woStartDate) return 0;
+    const diff = Math.round((new Date(woEndDate).getTime() - new Date(woStartDate).getTime()) / (1000 * 3600 * 24)) + 1;
+    return Math.max(0, diff);
+  };
 
   // Half Day State (0.5 day)
   const [hdDate, setHdDate] = useState('');
@@ -169,7 +180,10 @@ export default function Leave() {
     setRequestType('regular');
     setReason('');
     setDocument(null);
+    setWoMode('single');
     setWoDate('');
+    setWoStartDate('');
+    setWoEndDate('');
     setHdDate('');
     setHdSlot('first_half');
     setHalfPreview(null);
@@ -284,7 +298,9 @@ export default function Leave() {
     Boolean(routing?.canApply && hrApproverId) &&
     !busy &&
     (requestType === 'weekly_off'
-      ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) > 0
+      ? woMode === 'single'
+        ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) >= 1
+        : Boolean(woStartDate && woEndDate && woEndDate >= woStartDate && getWoDaysCount() > 0 && (woSummary?.weeklyOffs.available ?? 0) >= getWoDaysCount())
       : requestType === 'half_day'
         ? Boolean(hdDate && halfPreview)
         : Boolean(selectedLeaveTypeId && startDate && endDate && endDate >= startDate && (breakdown?.chargedDays ?? 0) > 0));
@@ -299,16 +315,28 @@ export default function Leave() {
       if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
 
       if (requestType === 'weekly_off') {
-        if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
-          toast.error('You have no saved weekly offs available to take this month.');
+        const needed = getWoDaysCount();
+        if ((woSummary?.weeklyOffs.available ?? 0) < needed) {
+          toast.error(`You have only ${woSummary?.weeklyOffs.available ?? 0} saved weekly off(s) available this month.`);
           return;
         }
-        await api.post('/leave/weekly-off', {
-          date: woDate,
-          reason: trimmed || undefined,
-          hrApproverId: Number(hrApproverId),
-        });
-        toast.success(`Week-off request for ${formatDate(woDate)} submitted to Location HR for verification.`);
+        if (woMode === 'single') {
+          await api.post('/leave/weekly-off', {
+            date: woDate,
+            reason: trimmed || undefined,
+            hrApproverId: Number(hrApproverId),
+          });
+          toast.success(`Week-off request for ${formatDate(woDate)} submitted to Location HR for verification.`);
+        } else {
+          await api.post('/leave/weekly-off', {
+            startDate: woStartDate,
+            endDate: woEndDate,
+            consecutive: true,
+            reason: trimmed || undefined,
+            hrApproverId: Number(hrApproverId),
+          });
+          toast.success(`Continuous week-off request (${needed} days) for ${formatDate(woStartDate)} to ${formatDate(woEndDate)} submitted to Location HR.`);
+        }
       } else if (requestType === 'half_day') {
         await api.post('/leave/half-day', {
           date: hdDate,
@@ -893,63 +921,151 @@ export default function Leave() {
                 )}
               </div>
 
-              {/* Date Selection: Any Calendar Date in the Month */}
-              <div className="space-y-2">
-                <Field label="Select Week-Off Date" hint="Eligible on any calendar date in the month, including weekdays">
-                  <input
-                    type="date"
-                    className="input font-bold text-sm text-ink-900"
-                    value={woDate}
-                    min={localToday()}
-                    max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
-                    onChange={(e) => setWoDate(e.target.value)}
-                    required
-                  />
-                </Field>
-
-                {woSummary && (
-                  <div className="space-y-1.5">
-                    <span className="text-[11px] font-semibold text-ink-500">Quick Pick Month Sundays:</span>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Quick pick Sunday">
-                      {woSummary.sundays.map((entry) => {
-                        const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
-                        const selected = woDate === entry.date;
-                        return (
-                          <button
-                            key={entry.date}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={!selectable}
-                            onClick={() => setWoDate(entry.date)}
-                            className={cx(
-                              'rounded-lg border px-2.5 py-2 text-left text-xs transition-all',
-                              selected
-                                ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
-                                : selectable
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
-                                  : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
-                            )}
-                          >
-                            <span className="block font-bold">{formatDate(entry.date)}</span>
-                            <span className="text-[10px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {(w?.available ?? 0) <= 0 ? (
-                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
-                    ⚠️ No week-off balance available for {woSummary?.monthName} {woSummary?.year}. You have taken or reserved all eligible days for this month.
-                  </div>
-                ) : woDate ? (
-                  <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
-                    Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your monthly entitlement upon final manager approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
-                  </div>
-                ) : null}
+              {/* Duration Mode: Single Day vs Consecutive Range */}
+              <div className="flex items-center gap-2 border-b border-emerald-200 pb-2.5">
+                <span className="text-xs font-semibold text-emerald-950">Option:</span>
+                <div className="inline-flex rounded-lg border border-emerald-300 bg-white p-0.5 text-xs shadow-2xs">
+                  <button
+                    type="button"
+                    className={cx(
+                      'rounded-md px-3 py-1 font-semibold transition-all',
+                      woMode === 'single' ? 'bg-emerald-600 text-white shadow-xs' : 'text-emerald-900 hover:bg-emerald-50',
+                    )}
+                    onClick={() => {
+                      setWoMode('single');
+                      if (woStartDate) setWoDate(woStartDate);
+                    }}
+                  >
+                    Single Day
+                  </button>
+                  <button
+                    type="button"
+                    className={cx(
+                      'rounded-md px-3 py-1 font-semibold transition-all',
+                      woMode === 'range' ? 'bg-emerald-600 text-white shadow-xs' : 'text-emerald-900 hover:bg-emerald-50',
+                    )}
+                    onClick={() => {
+                      setWoMode('range');
+                      if (woDate) {
+                        setWoStartDate(woDate);
+                        setWoEndDate(woDate);
+                      }
+                    }}
+                  >
+                    Consecutive Days (Range)
+                  </button>
+                </div>
+                <span className="text-[11px] text-emerald-700 italic">
+                  {woMode === 'single' ? 'Take 1 week off' : 'Take accumulated week offs across continuous days'}
+                </span>
               </div>
+
+              {/* Date Selection */}
+              {woMode === 'single' ? (
+                <div className="space-y-2">
+                  <Field label="Select Week-Off Date" hint="Eligible on any calendar date in the month, including weekdays">
+                    <input
+                      type="date"
+                      className="input font-bold text-sm text-ink-900"
+                      value={woDate}
+                      min={localToday()}
+                      max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
+                      onChange={(e) => setWoDate(e.target.value)}
+                      required
+                    />
+                  </Field>
+
+                  {woSummary && (
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-semibold text-ink-500">Quick Pick Month Sundays:</span>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Quick pick Sunday">
+                        {woSummary.sundays.map((entry) => {
+                          const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
+                          const selected = woDate === entry.date;
+                          return (
+                            <button
+                              key={entry.date}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              disabled={!selectable}
+                              onClick={() => setWoDate(entry.date)}
+                              className={cx(
+                                'rounded-lg border px-2.5 py-2 text-left text-xs transition-all',
+                                selected
+                                  ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
+                                  : selectable
+                                    ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
+                                    : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
+                              )}
+                            >
+                              <span className="block font-bold">{formatDate(entry.date)}</span>
+                              <span className="text-[10px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {(w?.available ?? 0) <= 0 ? (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
+                      ⚠️ No week-off balance available for {woSummary?.monthName} {woSummary?.year}. You have taken or reserved all eligible days for this month.
+                    </div>
+                  ) : woDate ? (
+                    <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
+                      Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your monthly entitlement upon final manager approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="Start Date" required>
+                      <input
+                        type="date"
+                        className="input font-bold text-sm text-ink-900"
+                        value={woStartDate}
+                        min={localToday()}
+                        onChange={(e) => {
+                          setWoStartDate(e.target.value);
+                          if (!woEndDate || woEndDate < e.target.value) setWoEndDate(e.target.value);
+                        }}
+                        required
+                      />
+                    </Field>
+                    <Field label="End Date" required>
+                      <input
+                        type="date"
+                        className="input font-bold text-sm text-ink-900"
+                        value={woEndDate}
+                        min={woStartDate || localToday()}
+                        onChange={(e) => setWoEndDate(e.target.value)}
+                        required
+                      />
+                    </Field>
+                  </div>
+
+                  {(() => {
+                    const count = getWoDaysCount();
+                    if (!woStartDate || !woEndDate || count <= 0) return null;
+                    const avail = w?.available ?? 0;
+                    const remainingAfter = Math.max(0, (w?.remaining ?? 0) - count);
+                    if (count > avail) {
+                      return (
+                        <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-xs text-red-800 font-medium">
+                          ⚠️ Insufficient week-off balance! You requested <strong>{count} consecutive days</strong> ({formatDate(woStartDate)} to {formatDate(woEndDate)}), but you only have <strong>{avail} day(s)</strong> available this month.
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-950 font-medium">
+                        ✓ Selected: <strong>{count} consecutive day(s)</strong> ({formatDate(woStartDate)} to {formatDate(woEndDate)}) · Exactly <strong>{count} day(s)</strong> will be deducted from your monthly entitlement upon manager approval (Remaining: <strong>{remainingAfter}</strong>). All {count} dates will be marked as WEEK OFF in attendance.
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           ) : requestType === 'regular' ? (
             <div className="space-y-3">
@@ -957,10 +1073,19 @@ export default function Leave() {
                 <select
                   className="input font-medium"
                   value={selectedLeaveTypeId}
-                  onChange={(e) => setSelectedLeaveTypeId(e.target.value)}
+                  onChange={(e) => {
+                    if (e.target.value === 'WO_SHORTCUT') {
+                      setRequestType('weekly_off');
+                      return;
+                    }
+                    setSelectedLeaveTypeId(e.target.value);
+                  }}
                   required
                 >
                   <option value="">Select leave type</option>
+                  <option value="WO_SHORTCUT" className="font-bold text-emerald-700">
+                    ⭐ Saved Week-Off ({w?.available ?? 0} days available this month)
+                  </option>
                   {types.map((t) => {
                     const bal = balances.find((b) => b.leaveTypeId === t.id);
                     let label = t.name;
@@ -1032,7 +1157,14 @@ export default function Leave() {
                             className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
                             onClick={() => {
                               setRequestType('weekly_off');
-                              setWoDate(startDate);
+                              if (startDate === endDate) {
+                                setWoMode('single');
+                                setWoDate(startDate);
+                              } else {
+                                setWoMode('range');
+                                setWoStartDate(startDate);
+                                setWoEndDate(endDate);
+                              }
                             }}
                           >
                             <Icon name="calendar" size={12} />
