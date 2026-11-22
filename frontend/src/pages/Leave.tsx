@@ -518,6 +518,15 @@ export default function Leave() {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-800 shadow-xs hover:bg-brand-100 hover:border-brand-400 transition-colors"
+                          onClick={() => setViewingFlowLeave(leave)}
+                          title="Open interactive application flow"
+                        >
+                          <Icon name="activity" size={13} className="text-brand-700" />
+                          Flow View
+                        </button>
+                        <button
+                          type="button"
                           className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-700 shadow-xs hover:bg-ink-50 hover:border-brand-300 transition-colors"
                           onClick={() => setViewingLeave(leave)}
                         >

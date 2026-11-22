@@ -27,8 +27,8 @@ async function person(email: string): Promise<AuthUser> {
 }
 
 async function approve(id: number) {
-  await LeaveService.decide(id, manager, { approve: true, stage: 'manager' }, {});
   await LeaveService.decide(id, hr, { approve: true, stage: 'hr' }, {});
+  await LeaveService.decide(id, manager, { approve: true, stage: 'manager' }, {});
 }
 
 beforeAll(async () => {
@@ -54,6 +54,9 @@ beforeAll(async () => {
   }
   allSundays = sundaysInMonth(year, month);
   eligible = allSundays.slice(1);
+  await execute('DELETE FROM leave_requests WHERE employee_id = ?', [employee.id]);
+  await execute('DELETE FROM attendance WHERE employee_id = ? AND work_date >= ?', [employee.id, allSundays[0]]);
+  await execute('DELETE FROM weekly_off_allocations WHERE employee_id = ? AND alloc_year = ? AND alloc_month = ?', [employee.id, year, month]);
   await execute('UPDATE employees SET joining_date = ?, weekly_off_day = 0 WHERE id = ?', [eligible[0], employee.id]);
   // First working day (Mon–Sat) after joining.
   halfDayDate = dateRange(eligible[0], isoDate(year, month, daysInMonth(year, month))).find((d) => weekdayOf(d) !== 0)!;
@@ -87,17 +90,17 @@ describe('weekly-off allocation and requests', () => {
     let balance = await WeeklyOffService.monthBalance(employee.id, year, month);
     expect(balance).toMatchObject({ allocated: 4, taken: 0, pending: 1, remaining: 4, available: 3 });
 
-    await LeaveService.decide(created.id, manager, { approve: true, stage: 'manager' }, {});
-    expect(await queryOne('SELECT status FROM leave_requests WHERE id = ?', [created.id])).toMatchObject({ status: 'pending_hr' });
+    await LeaveService.decide(created.id, hr, { approve: true, stage: 'hr' }, {});
+    expect(await queryOne('SELECT status FROM leave_requests WHERE id = ?', [created.id])).toMatchObject({ status: 'pending_manager' });
     balance = await WeeklyOffService.monthBalance(employee.id, year, month);
     expect(balance.taken).toBe(0);
 
-    await LeaveService.decide(created.id, hr, { approve: true, stage: 'hr' }, {});
+    await LeaveService.decide(created.id, manager, { approve: true, stage: 'manager' }, {});
     balance = await WeeklyOffService.monthBalance(employee.id, year, month);
     expect(balance).toMatchObject({ allocated: 4, taken: 1, remaining: 3 });
     expect(await queryOne('SELECT status FROM attendance WHERE employee_id = ? AND work_date = ?', [employee.id, eligible[0]])).toMatchObject({ status: 'weekly_off' });
     const history = await query<{ action: string }>('SELECT action FROM leave_request_history WHERE leave_request_id = ? ORDER BY id', [created.id]);
-    expect(history.map((h) => h.action)).toEqual(['submitted', 'manager_approved', 'hr_approved']);
+    expect(history.map((h) => h.action)).toEqual(['submitted', 'hr_approved', 'manager_approved']);
     expect(await queryOne('SELECT taken FROM weekly_off_allocations WHERE employee_id = ? AND alloc_year = ? AND alloc_month = ?', [employee.id, year, month])).toMatchObject({ taken: 1 });
   });
 
@@ -113,7 +116,7 @@ describe('weekly-off allocation and requests', () => {
     expect(balance.dates.find((d) => d.date === eligible[2])?.status).toBe('available');
     // The cancelled date can be applied for again (history is kept).
     const again = await LeaveService.applyWeeklyOff(employee.id, { date: eligible[2], hrApproverId: hr.id });
-    await LeaveService.decide(again.id, manager, { approve: false, stage: 'manager', note: 'Store stock-take that day' }, {});
+    await LeaveService.decide(again.id, hr, { approve: false, stage: 'hr', note: 'Store stock-take that day' }, {});
     expect(await queryOne('SELECT status FROM leave_requests WHERE id = ?', [again.id])).toMatchObject({ status: 'rejected' });
     expect(await WeeklyOffService.monthBalance(employee.id, year, month)).toMatchObject({ taken: 2, remaining: 2 });
   });
@@ -156,9 +159,9 @@ describe('half-day leave', () => {
 
   it('deducts 0.5 from the leave balance only after HR approval and never touches weekly offs', async () => {
     const before = (await LeaveService.balances(employee.id, year)).find((b) => b.code === 'CL')!;
-    await LeaveService.decide(firstHalfId, manager, { approve: true, stage: 'manager' }, {});
-    expect((await LeaveService.balances(employee.id, year)).find((b) => b.code === 'CL')!.used).toBe(before.used);
     await LeaveService.decide(firstHalfId, hr, { approve: true, stage: 'hr' }, {});
+    expect((await LeaveService.balances(employee.id, year)).find((b) => b.code === 'CL')!.used).toBe(before.used);
+    await LeaveService.decide(firstHalfId, manager, { approve: true, stage: 'manager' }, {});
     const after = (await LeaveService.balances(employee.id, year)).find((b) => b.code === 'CL')!;
     expect(after.used).toBeCloseTo(before.used + 0.5);
     const summary = await WeeklyOffService.monthSummary(employee.id, year, month);

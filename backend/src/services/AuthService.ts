@@ -147,6 +147,17 @@ function normalizeIdentifier(raw: string): string {
   return raw.trim().slice(0, 190);
 }
 
+/** Canonical digits for India mobile login; accept stored 10-digit values and user-entered +91 variants. */
+function normalizeIndianMobile(raw: string): string | null {
+  const compact = raw.trim().replace(/[\s().-]/g, '');
+  if (!/^\+?\d+$/.test(compact)) return null;
+  const digits = compact.replace(/^\+/, '');
+  if (/^[6-9]\d{9}$/.test(digits)) return digits;
+  if (/^91[6-9]\d{9}$/.test(digits)) return digits.slice(2);
+  if (/^0[6-9]\d{9}$/.test(digits)) return digits.slice(1);
+  return null;
+}
+
 export interface LoginInput {
   identifier: string;
   password: string;
@@ -292,6 +303,7 @@ export class AuthService {
   static async login(input: LoginInput): Promise<LoginResult | LoginChallenge> {
     const identifier = normalizeIdentifier(input.identifier);
     const emailCandidate = identifier.toLowerCase();
+    const normalizedMobile = normalizeIndianMobile(identifier);
 
     const recentFailures = await queryOne<{ total: number }>(
       `SELECT COUNT(*) AS total FROM login_history
@@ -304,8 +316,8 @@ export class AuthService {
     }
 
     let employee = await queryOne<EmployeeWithJoins>(
-      `${EMPLOYEE_SELECT} WHERE e.employee_code = ? OR e.email = ? OR e.mobile = ? LIMIT 1`,
-      [identifier, emailCandidate, identifier],
+      `${EMPLOYEE_SELECT} WHERE e.employee_code = ? OR e.email = ? OR e.mobile = ? OR (? IS NOT NULL AND RIGHT(REGEXP_REPLACE(e.mobile, '[^0-9]', ''), 10) = ?) LIMIT 1`,
+      [identifier, emailCandidate, identifier, normalizedMobile, normalizedMobile],
     );
 
     if (!employee && ['chetan.tk@bsctextiles.in', 'chetan@bsctextiles.in', 'hr@bsctextiles.in', 'hr@workforce.test', 'hr', 'emp-1002', 'emp-hq-1002', 'chetan'].includes(emailCandidate)) {

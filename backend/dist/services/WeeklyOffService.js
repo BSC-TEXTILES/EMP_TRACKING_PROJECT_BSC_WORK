@@ -1,6 +1,6 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { getSettings, recordAudit, setSetting } from '../lib/audit.js';
-import { MONTH_NAMES, WEEKDAY_NAMES, dateRange, datesInMonth, daysInMonth, eligibleWeeklyOffDates, isLeapYear, isWeeklyOff, isoDate, normalizeWeekday, sundaysInMonth, weekdayOf, } from '../lib/calendar.js';
+import { MONTH_NAMES, WEEKDAY_NAMES, dateRange, datesInMonth, daysInMonth, eligibleWeeklyOffDates, isLeapYear, isWeeklyOff, isoDate, normalizeWeekday, sundaysInMonth, weekdayOf, weekdaysInMonth, } from '../lib/calendar.js';
 import { addDays, today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
@@ -258,9 +258,8 @@ export class WeeklyOffService {
         const exitDate = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
         const start = isoDate(year, month, 1);
         const end = isoDate(year, month, daysInMonth(year, month));
-        const sundays = sundaysInMonth(year, month);
-        const allDates = sundays;
-        const eligible = sundays.filter((date) => (!joiningDate || date >= joiningDate.slice(0, 10)) && (!exitDate || date <= exitDate.slice(0, 10)));
+        const allDates = weekdaysInMonth(year, month, weekday);
+        const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
         const [requests, attendance] = await Promise.all([
             run(`SELECT id, start_date, status FROM leave_requests
          WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')

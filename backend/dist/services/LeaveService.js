@@ -280,8 +280,12 @@ export class LeaveService {
             if (input.date < today()) {
                 throw ApiError.badRequest('Week-off cannot be requested for past dates.');
             }
-            if (balance.joiningDate && input.date < balance.joiningDate) {
-                throw ApiError.badRequest(`${input.date} is before your joining date (${balance.joiningDate}).`);
+            if (!balance.allDates.includes(input.date)) {
+                throw ApiError.badRequest(`${input.date} is not your scheduled weekly-off day.`);
+            }
+            const entry = balance.dates.find((d) => d.date === input.date);
+            if (entry?.status === 'not_eligible' || (balance.joiningDate && input.date < balance.joiningDate)) {
+                throw ApiError.badRequest(`${input.date} is not eligible for weekly off (prior to joining date).`);
             }
             if (balance.takenDates?.includes(input.date)) {
                 throw ApiError.conflict(`A week off on ${input.date} has already been approved.`);
@@ -432,8 +436,8 @@ export class LeaveService {
             preview = await LeaveService.halfDayPreview(employeeId, input.date, input.slot);
             await LeaveService.assertNoHalfDayConflict(employeeId, input.date, input.slot, conn);
             const [result] = await conn.query(`INSERT INTO leave_requests (employee_id, leave_type_id, request_kind, start_date, end_date, days, weekly_off_days, holiday_days, reason, document_file_id, status, manager_id, request_location_id, hr_approver_id, is_half_day, half_day_slot)
-         VALUES (?, ?, 'half_day', ?, ?, 0.5, 0, 0, ?, ?, 'pending_manager', ?, ?, ?, 1, ?)`, [employeeId, preview.deductFrom.leaveTypeId, input.date, input.date, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, input.slot]);
-            await recordHistory(conn, result.insertId, 'submitted', null, 'pending_manager', employeeId);
+         VALUES (?, ?, 'half_day', ?, ?, 0.5, 0, 0, ?, ?, 'pending_hr', ?, ?, ?, 1, ?)`, [employeeId, preview.deductFrom.leaveTypeId, input.date, input.date, reason, input.documentFileId ?? null, routing.manager.id, routing.locationId, hr.id, input.slot]);
+            await recordHistory(conn, result.insertId, 'submitted', null, 'pending_hr', employeeId);
             return Number(result.insertId);
         });
         await recordAudit({
@@ -616,14 +620,23 @@ export class LeaveService {
                         throw ApiError.conflict('This request was already processed.');
                     await recordHistory(conn, leaveId, 'manager_approved', 'pending_manager', 'approved', actor.id, input.note);
                     const date = String(leave.start_date).slice(0, 10);
-                    // Mark attendance on this date as weekly_off
-                    await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, 'weekly_off', 'Approved weekly off')
-             ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, 'weekly_off', status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, date]);
+                    if (leave.request_kind !== 'weekly_off') {
+                        const yr = Number(date.slice(0, 4));
+                        await conn.query(`INSERT INTO leave_balances (employee_id, leave_type_id, balance_year, allocated, used)
+               VALUES (?, ?, ?, (SELECT annual_quota FROM leave_types WHERE id = ?), ?)
+               ON DUPLICATE KEY UPDATE used = used + VALUES(used)`, [leave.employee_id, leave.leave_type_id, yr, leave.leave_type_id, leave.days]);
+                    }
+                    const attStatus = leave.request_kind === 'weekly_off' ? 'weekly_off' : Boolean(leave.is_half_day) ? 'half_day' : 'on_leave';
+                    const attNotes = leave.request_kind === 'weekly_off' ? 'Approved weekly off' : Boolean(leave.is_half_day) ? 'Approved half-day leave' : 'Approved leave';
+                    await conn.query(`INSERT INTO attendance (employee_id, work_date, status, notes) VALUES (?, ?, ?, ?)
+             ON DUPLICATE KEY UPDATE status = IF(check_in_at IS NULL, VALUES(status), status), notes = IF(check_in_at IS NULL, VALUES(notes), notes)`, [leave.employee_id, date, attStatus, attNotes]);
                 });
-                const date = String(leave.start_date).slice(0, 10);
-                const year = Number(date.slice(0, 4));
-                const month = Number(date.slice(5, 7));
-                await WeeklyOffService.persistAllocation(Number(leave.employee_id), year, month);
+                if (leave.request_kind === 'weekly_off') {
+                    const date = String(leave.start_date).slice(0, 10);
+                    const year = Number(date.slice(0, 4));
+                    const month = Number(date.slice(5, 7));
+                    await WeeklyOffService.persistAllocation(Number(leave.employee_id), year, month);
+                }
             }
             else {
                 if (!input.note)

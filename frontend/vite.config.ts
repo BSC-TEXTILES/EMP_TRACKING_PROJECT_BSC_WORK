@@ -20,7 +20,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    emptyOutDir: false,
+    emptyOutDir: true,
     sourcemap: false,
     modulePreload: { polyfill: true },
   },

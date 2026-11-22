@@ -70,6 +70,20 @@ export function osFromUserAgent(ua) {
 function normalizeIdentifier(raw) {
     return raw.trim().slice(0, 190);
 }
+/** Canonical digits for India mobile login; accept stored 10-digit values and user-entered +91 variants. */
+function normalizeIndianMobile(raw) {
+    const compact = raw.trim().replace(/[\s().-]/g, '');
+    if (!/^\+?\d+$/.test(compact))
+        return null;
+    const digits = compact.replace(/^\+/, '');
+    if (/^[6-9]\d{9}$/.test(digits))
+        return digits;
+    if (/^91[6-9]\d{9}$/.test(digits))
+        return digits.slice(2);
+    if (/^0[6-9]\d{9}$/.test(digits))
+        return digits.slice(1);
+    return null;
+}
 export class AuthService {
     /** Loads the canonical auth principal for an employee, including permissions. */
     static async buildUser(employeeId, sessionId = 0) {
@@ -160,13 +174,14 @@ export class AuthService {
     static async login(input) {
         const identifier = normalizeIdentifier(input.identifier);
         const emailCandidate = identifier.toLowerCase();
+        const normalizedMobile = normalizeIndianMobile(identifier);
         const recentFailures = await queryOne(`SELECT COUNT(*) AS total FROM login_history
        WHERE success = 0 AND created_at > DATE_SUB(NOW(3), INTERVAL 15 MINUTE)
          AND (identifier = ? OR ip = ?)`, [identifier, input.ip]);
         if (Number(recentFailures?.total ?? 0) >= 20) {
             throw ApiError.tooMany('Too many failed attempts. Please wait 15 minutes before trying again.');
         }
-        let employee = await queryOne(`${EMPLOYEE_SELECT} WHERE e.employee_code = ? OR e.email = ? OR e.mobile = ? LIMIT 1`, [identifier, emailCandidate, identifier]);
+        let employee = await queryOne(`${EMPLOYEE_SELECT} WHERE e.employee_code = ? OR e.email = ? OR e.mobile = ? OR (? IS NOT NULL AND RIGHT(REGEXP_REPLACE(e.mobile, '[^0-9]', ''), 10) = ?) LIMIT 1`, [identifier, emailCandidate, identifier, normalizedMobile, normalizedMobile]);
         if (!employee && ['chetan.tk@bsctextiles.in', 'chetan@bsctextiles.in', 'hr@bsctextiles.in', 'hr@workforce.test', 'hr', 'emp-1002', 'emp-hq-1002', 'chetan'].includes(emailCandidate)) {
             employee = await queryOne(`${EMPLOYEE_SELECT} WHERE e.full_name LIKE '%Chetan%' LIMIT 1`);
         }

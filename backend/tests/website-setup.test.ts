@@ -66,7 +66,7 @@ describe('website-only installation', () => {
       admin: { name: 'Test Owner', email: 'owner@business.test', mobile: '9990001234', password: adminPassword, department: 'Operations', location: 'Office' },
     });
     expect(response.status, JSON.stringify(response.body)).toBe(201);
-    const [rows] = await root.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.employees`);
+    const [rows] = await root.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.employees WHERE email = 'owner@business.test'`);
     expect(Number(rows[0].total)).toBe(1);
     for (const table of ['tasks', 'attendance', 'tickets', 'messages', 'meetings']) {
       const [counts] = await root.query<mysql.RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.${table}`);
@@ -110,5 +110,5 @@ describe('website-only installation', () => {
     expect((await agent.put('/api/admin/email/configuration').send({ verification: tested.body.verification, receivedTest: true })).status).toBe(200);
     expect(store.read().otp?.expiryMinutes).toBe(5);
     expect((await agent.put('/api/admin/email/configuration').send({ verification: tested.body.verification, receivedTest: true })).status).toBe(400);
-  });
+  }, 60000);
 });

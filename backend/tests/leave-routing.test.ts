@@ -13,6 +13,7 @@ beforeAll(async () => {
   hr = await person('hr.manager@workforce.test');
   other = await person('store.manager@workforce.test');
   await execute('INSERT IGNORE INTO employee_locations (employee_id, location_id) VALUES (?, ?)', [hr.id, employee.locationId]);
+  await execute('DELETE FROM leave_requests WHERE employee_id = ?', [employee.id]);
 });
 afterAll(closePool);
 describe('location leave approval workflow', () => {
@@ -35,12 +36,12 @@ describe('location leave approval workflow', () => {
     const row = await queryOne('SELECT manager_id, hr_approver_id, request_location_id FROM leave_requests WHERE id = ?', [requestId]);
     expect(row).toMatchObject({ manager_id: manager.id, hr_approver_id: hr.id, request_location_id: employee.locationId });
   });
-  it('blocks cross-location and out-of-order approval, then completes manager → HR exactly once', async () => {
-    await expect(LeaveService.decide(requestId, other, { approve: true, stage: 'manager' }, {})).rejects.toMatchObject({ status: 403 });
-    await expect(LeaveService.decide(requestId, hr, { approve: true, stage: 'hr' }, {})).rejects.toMatchObject({ status: 409 });
-    await LeaveService.decide(requestId, manager, { approve: true, stage: 'manager' }, {});
+  it('blocks cross-location and out-of-order approval, then completes HR → manager exactly once', async () => {
+    await expect(LeaveService.decide(requestId, other, { approve: true, stage: 'hr' }, {})).rejects.toMatchObject({ status: 403 });
+    await expect(LeaveService.decide(requestId, manager, { approve: true, stage: 'manager' }, {})).rejects.toMatchObject({ status: 409 });
     await LeaveService.decide(requestId, hr, { approve: true, stage: 'hr' }, {});
     await expect(LeaveService.decide(requestId, hr, { approve: true, stage: 'hr' }, {})).rejects.toMatchObject({ status: 409 });
+    await LeaveService.decide(requestId, manager, { approve: true, stage: 'manager' }, {});
     expect(await queryOne('SELECT status FROM leave_requests WHERE id = ?', [requestId])).toMatchObject({ status: 'approved' });
   });
 });

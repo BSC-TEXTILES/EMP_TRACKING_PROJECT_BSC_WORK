@@ -1479,9 +1479,20 @@ export default function DailyReports() {
                     {open.tasksCompleted} / {open.tasksInProgress} / {open.tasksPending}
                   </p>
                 </div>
-                <div className="rounded-lg bg-ink-50 p-2.5">
-                  <p className="text-xs text-ink-500">Status</p>
-                  <StatusBadge status={open.status} />
+                <div className="rounded-lg bg-ink-50 p-2.5 flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-xs text-ink-500">Status</p>
+                    <StatusBadge status={open.status} />
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-brand-300 bg-brand-50 px-2 py-1 text-xs font-semibold text-brand-800 hover:bg-brand-100 transition-colors shadow-2xs"
+                    onClick={() => startEditing(open)}
+                    title="Edit work report and update status"
+                  >
+                    <Icon name="edit" size={12} className="text-brand-700" />
+                    Edit
+                  </button>
                 </div>
               </div>
 

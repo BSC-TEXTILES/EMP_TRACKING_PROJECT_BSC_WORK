@@ -376,11 +376,8 @@ export class WeeklyOffService {
     const exitDate = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
     const start = isoDate(year, month, 1);
     const end = isoDate(year, month, daysInMonth(year, month));
-    const sundays = sundaysInMonth(year, month);
-    const allDates = sundays;
-    const eligible = sundays.filter(
-      (date) => (!joiningDate || date >= joiningDate.slice(0, 10)) && (!exitDate || date <= exitDate.slice(0, 10)),
-    );
+    const allDates = weekdaysInMonth(year, month, weekday);
+    const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
 
     const [requests, attendance] = await Promise.all([
       run<{ id: number; start_date: string; status: string }>(
