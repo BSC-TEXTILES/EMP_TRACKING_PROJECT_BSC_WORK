@@ -173,7 +173,15 @@ export class MeetingService {
     );
     if (!meeting) throw ApiError.notFound('Meeting not found');
     const isParticipant = Boolean(meeting.my_response) || Number(meeting.organizer_id) === user.id;
-    if (!isParticipant && !user.permissions.includes('meetings.manage')) throw ApiError.forbidden('You are not invited to this meeting.');
+    if (!isParticipant) {
+      // Auto-register employee so they can join via code or direct meeting link
+      await execute(
+        `INSERT INTO meeting_participants (meeting_id, employee_id, response, joined_at, attended)
+         VALUES (?, ?, 'accepted', NOW(3), 0)
+         ON DUPLICATE KEY UPDATE response = 'accepted'`,
+        [meetingId, user.id],
+      );
+    }
 
     const [participants, actionItems, messages] = await Promise.all([
       query<{
@@ -271,6 +279,13 @@ export class MeetingService {
     emitToEmployees([Number(meeting?.organizer_id ?? 0), user.id], 'meeting:response', { id: meetingId, employeeId: user.id, response });
   }
 
+  static async detailByCode(code: string, user: AuthUser) {
+    const cleanCode = code.trim().toUpperCase();
+    const row = await queryOne<{ id: number }>('SELECT id FROM meetings WHERE UPPER(meeting_code) = ?', [cleanCode]);
+    if (!row) throw ApiError.notFound('Meeting with this code was not found.');
+    return this.detail(Number(row.id), user);
+  }
+
   static async markJoined(meetingId: number, user: AuthUser) {
     const meeting = await queryOne<{ meeting_code: string; organizer_id: number }>('SELECT meeting_code, organizer_id FROM meetings WHERE id = ?', [meetingId]);
     if (!meeting) throw ApiError.notFound('Meeting not found');
@@ -278,15 +293,100 @@ export class MeetingService {
       'SELECT id FROM meeting_participants WHERE meeting_id = ? AND employee_id = ?',
       [meetingId, user.id],
     );
-    if (!isParticipant && Number(meeting.organizer_id) !== user.id) throw ApiError.forbidden('You are not invited to this meeting.');
-    await execute(
-      `UPDATE meeting_participants SET joined_at = COALESCE(joined_at, NOW(3)), attended = 1, response = IF(response = 'declined', 'accepted', response)
-       WHERE meeting_id = ? AND employee_id = ?`,
-      [meetingId, user.id],
-    );
+    if (!isParticipant) {
+      await execute(
+        `INSERT INTO meeting_participants (meeting_id, employee_id, response, joined_at, attended)
+         VALUES (?, ?, 'accepted', NOW(3), 1)
+         ON DUPLICATE KEY UPDATE joined_at = COALESCE(joined_at, NOW(3)), attended = 1, response = 'accepted'`,
+        [meetingId, user.id],
+      );
+    } else {
+      await execute(
+        `UPDATE meeting_participants SET joined_at = COALESCE(joined_at, NOW(3)), attended = 1, response = IF(response = 'declined', 'accepted', response)
+         WHERE meeting_id = ? AND employee_id = ?`,
+        [meetingId, user.id],
+      );
+    }
     await execute("UPDATE meetings SET status = IF(status = 'scheduled', 'ongoing', status) WHERE id = ?", [meetingId]);
     emitToMeeting(meeting.meeting_code, 'meeting:attendance', { meetingId, employeeId: user.id, joined: true });
     return meeting.meeting_code;
+  }
+
+  static async endMeeting(meetingId: number, user: AuthUser) {
+    const meeting = await queryOne<{ organizer_id: number; meeting_code: string; title: string }>(
+      'SELECT organizer_id, meeting_code, title FROM meetings WHERE id = ?',
+      [meetingId],
+    );
+    if (!meeting) throw ApiError.notFound('Meeting not found');
+    if (Number(meeting.organizer_id) !== user.id && !user.permissions.includes('meetings.manage')) {
+      throw ApiError.forbidden('Only the organizer or an administrator can end the meeting.');
+    }
+    await execute("UPDATE meetings SET status = 'completed', end_at = NOW(3) WHERE id = ?", [meetingId]);
+    emitToMeeting(meeting.meeting_code, 'meeting:ended', { meetingId, title: meeting.title, endedBy: user.fullName });
+  }
+
+  static async createInstant(
+    user: AuthUser,
+    input: { title?: string; participantIds?: number[] },
+    meta: { ip?: string; userAgent?: string } = {},
+  ) {
+    const raw = crypto.randomUUID().replace(/-/g, '').slice(0, 9).toUpperCase();
+    const formattedCode = `BSC-${raw.slice(0, 3)}-${raw.slice(3, 6)}`;
+    const now = new Date();
+    const end = new Date(now.getTime() + 60 * 60 * 1000);
+    const title = input.title?.trim() || `Instant Meeting · ${user.fullName}`;
+
+    const result = await execute(
+      `INSERT INTO meetings (title, description, agenda, organizer_id, start_at, end_at, status, location_type, room_name, meeting_code)
+       VALUES (?, ?, ?, ?, NOW(3), DATE_ADD(NOW(3), INTERVAL 1 HOUR), 'ongoing', 'online', ?, ?)`,
+      [
+        title,
+        `Instant real-time meeting started by ${user.fullName}`,
+        'Live collaboration, discussion and screen sharing',
+        user.id,
+        `Room ${formattedCode}`,
+        formattedCode,
+      ],
+    );
+    const meetingId = Number(result.insertId);
+
+    // Add organizer
+    await execute(
+      `INSERT INTO meeting_participants (meeting_id, employee_id, response, joined_at, attended)
+       VALUES (?, ?, 'accepted', NOW(3), 1)`,
+      [meetingId, user.id],
+    );
+
+    if (input.participantIds && input.participantIds.length > 0) {
+      const distinct = [...new Set(input.participantIds.filter((id) => id !== user.id))];
+      for (const pid of distinct) {
+        await execute(
+          `INSERT INTO meeting_participants (meeting_id, employee_id, response) VALUES (?, ?, 'invited')
+           ON DUPLICATE KEY UPDATE response = response`,
+          [meetingId, pid],
+        );
+      }
+      await NotificationService.notify({
+        employeeIds: distinct,
+        type: 'meeting',
+        title: 'Meeting invitation',
+        body: `${user.fullName} invites you to instant meeting "${title}".`,
+        link: `/meetings/${meetingId}/room`,
+        actorId: user.id,
+      });
+    }
+
+    return {
+      id: meetingId,
+      meetingCode: formattedCode,
+      title,
+      roomName: `Room ${formattedCode}`,
+      status: 'ongoing',
+      startAt: now.toISOString(),
+      endAt: end.toISOString(),
+      organizerId: user.id,
+      organizerName: user.fullName,
+    };
   }
 
   static async addActionItem(meetingId: number, user: AuthUser, input: { title: string; assigneeId?: number | null; dueDate?: string | null }) {

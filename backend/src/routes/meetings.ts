@@ -52,10 +52,46 @@ meetingsRouter.post(
 );
 
 meetingsRouter.get(
+  '/by-code/:code',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const code = String(req.params.code).trim().toUpperCase();
+    res.json(await MeetingService.detailByCode(code, currentUser(req)));
+  }),
+);
+
+meetingsRouter.post(
+  '/instant',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const body = parseBody(
+      z.object({
+        title: z.string().min(2).max(200).optional(),
+        participantIds: z.array(z.number().int().positive()).optional(),
+      }),
+      req.body ?? {},
+    );
+    const created = await MeetingService.createInstant(user, body, {
+      ip: clientIp(req),
+      userAgent: req.get('user-agent') ?? undefined,
+    });
+    res.status(201).json(created);
+  }),
+);
+
+meetingsRouter.get(
   '/:id',
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
     res.json(await MeetingService.detail(id, currentUser(req)));
+  }),
+);
+
+meetingsRouter.post(
+  '/:id/end',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    await MeetingService.endMeeting(id, currentUser(req));
+    res.json({ ok: true });
   }),
 );
 

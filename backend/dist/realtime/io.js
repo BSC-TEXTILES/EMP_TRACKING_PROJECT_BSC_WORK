@@ -1,6 +1,6 @@
 import { Server } from 'socket.io';
 import { config } from '../config.js';
-import { query, queryOne } from '../db/index.js';
+import { execute, query, queryOne } from '../db/index.js';
 import { AuthService } from '../services/AuthService.js';
 import { PresenceService } from '../services/PresenceService.js';
 import { cancelDisconnectEnd, markDelivered, scheduleDisconnectEnd, takeMissedWhileAway } from '../services/CallService.js';
@@ -353,19 +353,38 @@ export function initRealtime(server) {
         });
         socket.on('meeting:join', async (payload, ack) => {
             try {
-                const code = String(payload?.code ?? '');
+                const code = String(payload?.code ?? '').trim().toUpperCase();
                 if (!code)
                     throw new Error('invalid code');
-                const rows = await query(`SELECT m.id FROM meetings m
-           JOIN meeting_participants mp ON mp.meeting_id = m.id
-           WHERE m.meeting_code = ? AND mp.employee_id = ?`, [code, user.id]);
+                const rows = await query(`SELECT m.id FROM meetings m WHERE UPPER(m.meeting_code) = ?`, [code]);
                 if (rows.length === 0)
-                    throw new Error('not a participant');
+                    throw new Error('Meeting not found');
+                const meetingId = Number(rows[0].id);
+                // Auto ensure participant record exists
+                await execute(`INSERT INTO meeting_participants (meeting_id, employee_id, response, joined_at, attended)
+           VALUES (?, ?, 'accepted', NOW(3), 1)
+           ON DUPLICATE KEY UPDATE joined_at = COALESCE(joined_at, NOW(3)), attended = 1, response = 'accepted'`, [meetingId, user.id]);
+                socket.data.meetingMeta = {
+                    micOn: payload.micOn ?? true,
+                    cameraOn: payload.cameraOn ?? false,
+                    sharing: false,
+                    speaking: false,
+                };
                 await socket.join(`meeting:${code}`);
                 const sockets = await io.in(`meeting:${code}`).fetchSockets();
                 const participants = sockets.map((s) => {
                     const u = s.data.user;
-                    return { socketId: s.id, employeeId: u.id, name: u.fullName };
+                    const meta = s.data.meetingMeta ?? { micOn: true, cameraOn: false, sharing: false, speaking: false };
+                    return {
+                        socketId: s.id,
+                        employeeId: u.id,
+                        name: u.fullName,
+                        photoUrl: u.photoUrl ?? null,
+                        micOn: Boolean(meta.micOn),
+                        cameraOn: Boolean(meta.cameraOn),
+                        sharing: Boolean(meta.sharing),
+                        speaking: Boolean(meta.speaking),
+                    };
                 });
                 io.to(`meeting:${code}`).emit('meeting:participants', participants);
                 refreshPresence(user.id);
@@ -373,6 +392,59 @@ export function initRealtime(server) {
             }
             catch (error) {
                 ack?.({ ok: false, error: error instanceof Error ? error.message : 'failed' });
+            }
+        });
+        socket.on('meeting:state', (payload) => {
+            const code = String(payload?.code ?? '').trim().toUpperCase();
+            if (!code)
+                return;
+            socket.data.meetingMeta = {
+                ...(socket.data.meetingMeta ?? {}),
+                ...(payload.micOn !== undefined ? { micOn: payload.micOn } : {}),
+                ...(payload.cameraOn !== undefined ? { cameraOn: payload.cameraOn } : {}),
+                ...(payload.sharing !== undefined ? { sharing: payload.sharing } : {}),
+                ...(payload.speaking !== undefined ? { speaking: payload.speaking } : {}),
+            };
+            io?.to(`meeting:${code}`).emit('meeting:state_changed', {
+                socketId: socket.id,
+                employeeId: user.id,
+                name: user.fullName,
+                state: socket.data.meetingMeta,
+            });
+        });
+        socket.on('meeting:message', async (payload, ack) => {
+            try {
+                const code = String(payload?.code ?? '').trim().toUpperCase();
+                const text = String(payload?.text ?? '').trim();
+                if (!code || !text)
+                    throw new Error('Invalid message');
+                const { MeetingService } = await import('../services/MeetingService.js');
+                const saved = await MeetingService.addMessage(payload.meetingId, user, text);
+                io?.to(`meeting:${code}`).emit('meeting:chat', saved);
+                ack?.({ ok: true, message: saved });
+            }
+            catch (err) {
+                ack?.({ ok: false, error: err instanceof Error ? err.message : 'Failed to send' });
+            }
+        });
+        socket.on('meeting:host_action', async (payload) => {
+            const code = String(payload?.code ?? '').trim().toUpperCase();
+            if (!code)
+                return;
+            const meeting = await queryOne('SELECT organizer_id FROM meetings WHERE id = ?', [payload.meetingId]);
+            const isHost = meeting && (Number(meeting.organizer_id) === user.id || user.permissions.includes('meetings.manage'));
+            if (!isHost)
+                return;
+            if (payload.action === 'end') {
+                const { MeetingService } = await import('../services/MeetingService.js');
+                await MeetingService.endMeeting(payload.meetingId, user);
+                io?.to(`meeting:${code}`).emit('meeting:ended', { meetingId: payload.meetingId, endedBy: user.fullName });
+            }
+            else if (payload.action === 'mute' && payload.targetSocketId) {
+                io?.to(payload.targetSocketId).emit('meeting:muted_by_host', { by: user.fullName });
+            }
+            else if (payload.action === 'kick' && payload.targetSocketId) {
+                io?.to(payload.targetSocketId).emit('meeting:kicked', { by: user.fullName });
             }
         });
         socket.on('meeting:signal', (payload) => {
@@ -386,7 +458,7 @@ export function initRealtime(server) {
             });
         });
         socket.on('meeting:leave', async (payload) => {
-            const code = String(payload?.code ?? '');
+            const code = String(payload?.code ?? '').trim().toUpperCase();
             if (!code)
                 return;
             socket.leave(`meeting:${code}`);
@@ -394,7 +466,17 @@ export function initRealtime(server) {
             const sockets = await io.in(`meeting:${code}`).fetchSockets();
             io.to(`meeting:${code}`).emit('meeting:participants', sockets.map((s) => {
                 const u = s.data.user;
-                return { socketId: s.id, employeeId: u.id, name: u.fullName };
+                const meta = s.data.meetingMeta ?? { micOn: true, cameraOn: false, sharing: false, speaking: false };
+                return {
+                    socketId: s.id,
+                    employeeId: u.id,
+                    name: u.fullName,
+                    photoUrl: u.photoUrl ?? null,
+                    micOn: Boolean(meta.micOn),
+                    cameraOn: Boolean(meta.cameraOn),
+                    sharing: Boolean(meta.sharing),
+                    speaking: Boolean(meta.speaking),
+                };
             }));
         });
         // socket.rooms is already empty inside 'disconnect', so capture the meeting
@@ -443,7 +525,17 @@ export function initRealtime(server) {
                     .then((sockets) => {
                     io.to(code).emit('meeting:participants', sockets.map((s) => {
                         const u = s.data.user;
-                        return { socketId: s.id, employeeId: u.id, name: u.fullName };
+                        const meta = s.data.meetingMeta ?? { micOn: true, cameraOn: false, sharing: false, speaking: false };
+                        return {
+                            socketId: s.id,
+                            employeeId: u.id,
+                            name: u.fullName,
+                            photoUrl: u.photoUrl ?? null,
+                            micOn: Boolean(meta.micOn),
+                            cameraOn: Boolean(meta.cameraOn),
+                            sharing: Boolean(meta.sharing),
+                            speaking: Boolean(meta.speaking),
+                        };
                     }));
                 })
                     .catch((error) => console.error('[realtime] participant refresh failed', error));

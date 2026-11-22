@@ -74,11 +74,9 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-ink-100 px-4 py-12 sm:px-6 lg:px-8">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-700 mb-4">
-            <Icon name="briefcase" size={28} className="text-white" />
-          </div>
-          <h1 className="text-2xl font-bold text-ink-900">Workforce</h1>
-          <p className="mt-1 text-sm text-ink-500">Enterprise Workforce Management</p>
+          <img src="/icons/icon.svg" alt="BSC Textiles" className="inline-block w-16 h-16 rounded-2xl shadow-lg mb-3 object-cover" />
+          <h1 className="text-2xl font-bold text-ink-900 tracking-tight">BSC Textiles</h1>
+          <p className="text-xs font-semibold text-emerald-700 uppercase tracking-wider mt-0.5">Enterprise Workforce & Communication</p>
         </div>
 
         <div className="card p-6 sm:p-8">

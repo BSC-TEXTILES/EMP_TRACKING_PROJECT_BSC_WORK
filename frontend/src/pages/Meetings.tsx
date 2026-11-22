@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, errorMessage } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,10 +23,14 @@ export default function Meetings() {
   useDocumentTitle('Meetings');
   const { user, has } = useAuth();
   const toast = useToast();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [meetings, setMeetings] = useState<MeetingSummary[] | null>(null);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [startingInstant, setStartingInstant] = useState(false);
   const [employees, setEmployees] = useState<PickerEmployee[]>([]);
   const [message, setMessage] = useState('');
   const [actionItem, setActionItem] = useState({ title: '', assigneeId: '', dueDate: '' });
@@ -40,6 +44,37 @@ export default function Meetings() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const startInstantMeeting = async () => {
+    setStartingInstant(true);
+    try {
+      const res = await api.post<{ id: number; meetingCode: string }>('/meetings/instant', {});
+      toast.success('Instant meeting created!');
+      navigate(`/meetings/${res.id}/room`);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setStartingInstant(false);
+    }
+  };
+
+  const handleJoinByCode = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = joinCodeInput.trim();
+    if (!clean) return;
+    const match = clean.match(/meet\/([a-zA-Z0-9-]+)/) || clean.match(/([a-zA-Z0-9-]+)$/);
+    const code = match ? match[1] : clean;
+    setJoinModalOpen(false);
+    navigate(`/meet/${code}`);
+  };
+
+  const copyMeetingLink = (meetingCode: string) => {
+    const url = `${window.location.origin}/meet/${meetingCode}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => toast.success('Meeting link copied to clipboard!'))
+      .catch(() => toast.error('Failed to copy link.'));
+  };
 
   useEffect(() => {
     void load();
@@ -82,13 +117,30 @@ export default function Meetings() {
     <div className="space-y-5">
       <PageHeader
         title="Meetings"
-        description="Schedule, invite, join with real WebRTC audio/video, record outcomes and assign action items."
+        description="Instant video calls, scheduled conferences, real WebRTC screen sharing, and meeting records."
         actions={
-          has('meetings.create') ? (
-            <button type="button" className="btn-primary btn-sm" onClick={() => setCreateOpen(true)}>
-              <Icon name="plus" size={15} /> Schedule meeting
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setJoinModalOpen(true)}
+            >
+              <Icon name="link" size={14} /> Join with Code
             </button>
-          ) : undefined
+            <button
+              type="button"
+              className="btn-secondary btn-sm text-brand-700 bg-brand-50 border-brand-200 hover:bg-brand-100 font-semibold"
+              onClick={() => void startInstantMeeting()}
+              disabled={startingInstant}
+            >
+              <Icon name="video" size={14} /> {startingInstant ? 'Starting…' : 'Instant Meeting'}
+            </button>
+            {has('meetings.create') && (
+              <button type="button" className="btn-primary btn-sm" onClick={() => setCreateOpen(true)}>
+                <Icon name="plus" size={14} /> Schedule Meeting
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -108,24 +160,48 @@ export default function Meetings() {
             <Skeleton lines={6} />
           </div>
         ) : visible.length === 0 ? (
-          <EmptyState title={tab === 'upcoming' ? 'No upcoming meetings' : 'No past meetings'} description="Meetings you organise or are invited to appear here." />
+          <EmptyState
+            title={tab === 'upcoming' ? 'No upcoming meetings' : 'No past meetings'}
+            description="Meetings you organise or are invited to appear here."
+            action={
+              <button
+                type="button"
+                className="btn-primary btn-sm mt-3"
+                onClick={() => void startInstantMeeting()}
+                disabled={startingInstant}
+              >
+                <Icon name="video" size={14} /> Start Instant Meeting
+              </button>
+            }
+          />
         ) : (
           <div className="divide-y divide-ink-100">
             {visible.map((meeting) => (
-              <div key={meeting.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3">
+              <div key={meeting.id} className="flex flex-wrap items-start justify-between gap-3 px-4 py-3 hover:bg-ink-50/40 transition-colors">
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => void openDetail(meeting.id)}>
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-semibold text-ink-900">{meeting.title}</p>
                     <StatusBadge status={meeting.status} />
                     {meeting.myResponse === 'accepted' && <Badge tone="success">Accepted</Badge>}
                     {meeting.myResponse === 'declined' && <Badge tone="danger">Declined</Badge>}
+                    <span className="font-mono text-[11px] text-ink-500 bg-ink-100 px-1.5 py-0.5 rounded">
+                      {meeting.meetingCode}
+                    </span>
                   </div>
                   <p className="mt-1 text-xs text-ink-500">
                     {formatDateTime(meeting.startAt)} – {formatTime(meeting.endAt)} · {meeting.organizerName} · {meeting.participantCount} participants ({meeting.acceptedCount} accepted)
                   </p>
                   {meeting.description && <p className="mt-1 line-clamp-1 text-sm text-ink-600">{meeting.description}</p>}
                 </button>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm text-ink-600 hover:text-brand-700"
+                    onClick={() => copyMeetingLink(meeting.meetingCode)}
+                    title="Copy invite link"
+                  >
+                    <Icon name="copy" size={13} />
+                  </button>
                   {meeting.myResponse !== 'accepted' && meeting.status !== 'cancelled' && (
                     <button type="button" className="btn-secondary btn-sm" onClick={() => void respond(meeting.id, 'accepted')}>
                       Accept
@@ -145,6 +221,37 @@ export default function Meetings() {
           </div>
         )}
       </Card>
+
+      {/* Join Meeting By Code Modal */}
+      <Modal
+        open={joinModalOpen}
+        onClose={() => setJoinModalOpen(false)}
+        title="Join Meeting by Code or Link"
+        description="Enter the meeting ID (e.g. BSC-ABC-123) or paste the complete meeting URL."
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setJoinModalOpen(false)}>
+              Cancel
+            </button>
+            <button type="submit" form="join-by-code-form" className="btn-primary" disabled={!joinCodeInput.trim()}>
+              Join Meeting
+            </button>
+          </>
+        }
+      >
+        <form id="join-by-code-form" onSubmit={handleJoinByCode} className="space-y-4">
+          <Field label="Meeting Code or URL" required hint="Example: BSC-1A2-3B4 or https://emptrack.bsctextiles.in/meet/BSC-1A2-3B4">
+            <input
+              className="input font-mono font-bold text-sm"
+              value={joinCodeInput}
+              onChange={(e) => setJoinCodeInput(e.target.value)}
+              placeholder="BSC-XXX-XXX"
+              required
+              autoFocus
+            />
+          </Field>
+        </form>
+      </Modal>
 
       <CreateMeeting open={createOpen} onClose={() => setCreateOpen(false)} employees={employees} onCreated={() => { setCreateOpen(false); void load(); }} />
 

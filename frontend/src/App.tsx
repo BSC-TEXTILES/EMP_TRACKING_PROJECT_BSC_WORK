@@ -150,6 +150,7 @@ export function App() {
           <Route path="calendar" element={<Calendar />} />
           <Route path="meetings" element={<Meetings />} />
           <Route path="meetings/:id/room" element={<MeetingRoom />} />
+          <Route path="meet/:code" element={<MeetingRoom />} />
           <Route path="kpi" element={<Kpi />} />
           <Route path="activity" element={<Activity />} />
           <Route path="leave" element={<Leave />} />

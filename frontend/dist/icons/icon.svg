@@ -1,15 +1,82 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Background -->
-  <rect width="512" height="512" rx="96" fill="#1d4ed8"/>
-  
-  <!-- Main "W" letter -->
-  <path d="M108 404L156 108h8L212 304h16l56-196h8l48 296h-8l-16-64h-16l-56 196h-8l-48-296h8l16 64h16l56-196h-8z" fill="white"/>
-  
-  <!-- Accent line -->
-  <path d="M156 108h200" stroke="white" stroke-width="16" stroke-linecap="round" opacity="0.3"/>
-  
-  <!-- Subtle dots for textile feel -->
-  <circle cx="380" cy="140" r="8" fill="white" opacity="0.2"/>
-  <circle cx="420" cy="180" r="6" fill="white" opacity="0.15"/>
-  <circle cx="360" cy="200" r="4" fill="white" opacity="0.1"/>
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bscBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0c1938"/>
+      <stop offset="50%" stop-color="#172e6b"/>
+      <stop offset="100%" stop-color="#080e1e"/>
+    </linearGradient>
+
+    <!-- Ribbon / Fiber Gradient 1 (Textile Cyan to Sapphire) -->
+    <linearGradient id="fiberPrimary" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563eb"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+
+    <!-- Ribbon / Fiber Gradient 2 (Textile Emerald to Mint) -->
+    <linearGradient id="fiberAccent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="60%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+
+    <!-- Ribbon Highlight -->
+    <linearGradient id="fiberWhite" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#e0e7ff" stop-opacity="0.8"/>
+    </linearGradient>
+
+    <!-- Drop Shadows -->
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0284c7" flood-opacity="0.35"/>
+    </filter>
+    <filter id="emeraldGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#10b981" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <!-- Container Squircle Background -->
+  <rect width="512" height="512" rx="118" fill="url(#bscBg)"/>
+
+  <!-- Subtle Inner Border Highlight -->
+  <rect x="4" y="4" width="504" height="504" rx="114" fill="none" stroke="#3b82f6" stroke-opacity="0.25" stroke-width="4"/>
+
+  <!-- Geometric Textile Weave / Communication Monogram 'BSC' -->
+  <g filter="url(#softGlow)" transform="translate(0, 4)">
+    <!-- Vertical Spine (Loom Warp / Strong Backbone) -->
+    <rect x="136" y="118" width="48" height="276" rx="24" fill="url(#fiberWhite)"/>
+
+    <!-- Upper Loom Loop (Letter B top loop + Video Wave) -->
+    <path d="M160 118 H276 C334 118 380 156 380 206 C380 256 334 294 276 294 H160"
+          fill="none"
+          stroke="url(#fiberPrimary)"
+          stroke-width="44"
+          stroke-linecap="round"
+          stroke-linejoin="round"/>
+
+    <!-- Lower Loom Interlocking Loop (Textile Flow + Meeting Connect) -->
+    <path d="M160 264 H290 C352 264 402 304 402 352 C402 400 352 440 290 440 H160"
+          fill="none"
+          stroke="url(#fiberAccent)"
+          stroke-width="44"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          filter="url(#emeraldGlow)"/>
+
+    <!-- Weave Cross-Fiber (Interlacing Weft thread) -->
+    <path d="M112 284 C190 284 320 284 398 284"
+          fill="none"
+          stroke="#ffffff"
+          stroke-width="18"
+          stroke-linecap="round"
+          stroke-dasharray="24 16"
+          opacity="0.9"/>
+
+    <!-- Live Active Pulse Beacon (Smart Connected Workforce indicator) -->
+    <circle cx="282" cy="206" r="26" fill="#ffffff" filter="url(#emeraldGlow)"/>
+    <circle cx="282" cy="206" r="15" fill="#0284c7"/>
+    <circle cx="294" cy="352" r="22" fill="#ffffff"/>
+    <circle cx="294" cy="352" r="13" fill="#10b981"/>
+  </g>
 </svg>

@@ -413,11 +413,11 @@ export function AppShell() {
   const renderSidebar = (collapsedMode: boolean) => (
     <aside className={cx('flex h-full shrink-0 flex-col bg-ink-900 text-white', collapsedMode ? 'w-[72px]' : 'w-64')}>
       <div className={cx('flex items-center py-5', collapsedMode ? 'flex-col gap-2 px-2' : 'gap-2.5 px-5')}>
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-sm font-bold text-white">W</span>
+        <img src="/icons/icon.svg" alt="BSC Textiles" className="h-9 w-9 shrink-0 rounded-xl shadow-xs object-cover" />
         {!collapsedMode && (
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-tight">Workforce</p>
-            <p className="text-[11px] text-ink-400">Enterprise Suite</p>
+            <p className="text-sm font-bold leading-tight tracking-wide text-white">BSC Textiles</p>
+            <p className="text-[11px] font-semibold text-emerald-400">Workforce & Meet</p>
           </div>
         )}
         <button
