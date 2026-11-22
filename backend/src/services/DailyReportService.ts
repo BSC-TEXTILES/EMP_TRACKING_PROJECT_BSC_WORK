@@ -2,7 +2,7 @@ import { execute, query, queryOne } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { locationEmployeeClause, subtreeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { emitToEmployee } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 import type { AuthUser } from './AuthService.js';
@@ -296,6 +296,7 @@ export class DailyReportService {
     const params: unknown[] = [...scope.params];
 
     if (filters.employeeId) {
+      await assertEmployeeAccess(user, filters.employeeId, 'reports');
       clauses.push('r.employee_id = ?');
       params.push(filters.employeeId);
     }
@@ -345,6 +346,10 @@ export class DailyReportService {
   }
 
   static async detail(reportId: number, user: AuthUser) {
+    const existing = await queryOne<{ id: number; employee_id: number }>('SELECT id, employee_id FROM daily_work_reports WHERE id = ?', [reportId]);
+    if (!existing) throw ApiError.notFound('Report not found');
+    await assertEmployeeAccess(user, existing.employee_id, 'reports');
+
     const scope = await DailyReportService.scopeClause(user);
     const row = await queryOne<ReportRow>(
       `SELECT r.*, e.full_name, e.employee_code, d.name AS department_name, dg.title AS designation_title,
@@ -408,6 +413,10 @@ export class DailyReportService {
     input: { approve: boolean; note?: string },
     context: { ip?: string; userAgent?: string },
   ) {
+    const existing = await queryOne<{ id: number; employee_id: number }>('SELECT id, employee_id FROM daily_work_reports WHERE id = ?', [reportId]);
+    if (!existing) throw ApiError.notFound('Report not found');
+    await assertEmployeeAccess(reviewer, existing.employee_id, 'reports');
+
     const scope = await DailyReportService.scopeClause(reviewer);
     const report = await queryOne<{ id: number; employee_id: number; report_date: string; status: string; full_name: string; summary: string }>(
       `SELECT r.id, r.employee_id, r.report_date, r.status, r.summary, e.full_name

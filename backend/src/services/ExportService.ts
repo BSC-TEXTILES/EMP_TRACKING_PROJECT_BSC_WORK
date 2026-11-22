@@ -3,7 +3,7 @@ import PDFDocument from 'pdfkit';
 import { query } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { addDays, endOfMonth, startOfMonth, today } from '../lib/dates.js';
-import { allowedLocationIds, requestedLocation, subtreeIds } from '../lib/scope.js';
+import { allowedLocationIds, assertEmployeeAccess, requestedLocation, subtreeIds } from '../lib/scope.js';
 import type { AuthUser } from './AuthService.js';
 
 export type ExportType = 'attendance' | 'tasks' | 'kpi' | 'tickets' | 'leave' | 'daily-reports' | 'employees' | 'collections';
@@ -47,11 +47,22 @@ export class ExportService {
     const from = filters.from ?? startOfMonth(today());
     const to = filters.to ?? endOfMonth(today());
 
+    if (filters.employeeId) {
+      await assertEmployeeAccess(user, filters.employeeId, 'reports');
+    }
+
     let targetLocationId: number | null = null;
     if (filters.locationId) {
       targetLocationId = await requestedLocation(user, filters.locationId);
     }
     const allowedLocs = await allowedLocationIds(user);
+    const locCondition = targetLocationId
+      ? `AND e.location_id = ${targetLocationId}`
+      : allowedLocs !== null
+        ? allowedLocs.length > 0
+          ? `AND (e.location_id IN (${allowedLocs.join(',')}) OR e.location_id IS NULL)`
+          : 'AND 1=0'
+        : '';
 
     switch (type) {
       case 'attendance': {
@@ -70,6 +81,7 @@ export class ExportService {
              ${placeholders ? `AND a.employee_id IN (${placeholders})` : ''}
              ${filters.employeeId ? 'AND a.employee_id = ?' : ''}
              ${filters.departmentId ? 'AND e.department_id = ?' : ''}
+             ${locCondition}
            ORDER BY a.work_date DESC, e.full_name`,
           [from, to, ...(placeholders ? teamIds! : []), ...(filters.employeeId ? [filters.employeeId] : []), ...(filters.departmentId ? [filters.departmentId] : [])],
         );
@@ -193,6 +205,7 @@ export class ExportService {
            JOIN leave_types lt ON lt.id = l.leave_type_id
            WHERE l.start_date BETWEEN ? AND ?
              ${placeholders ? `AND l.employee_id IN (${placeholders})` : ''}
+             ${locCondition}
            ORDER BY l.start_date DESC`,
           [from, to, ...(placeholders ? teamIds! : [])],
         );
@@ -221,6 +234,7 @@ export class ExportService {
            LEFT JOIN departments d ON d.id = e.department_id
            WHERE r.report_date BETWEEN ? AND ?
              ${placeholders ? `AND r.employee_id IN (${placeholders})` : ''}
+             ${locCondition}
            ORDER BY r.report_date DESC`,
           [from, to, ...(placeholders ? teamIds! : [])],
         );

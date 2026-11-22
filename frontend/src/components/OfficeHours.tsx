@@ -8,7 +8,15 @@ import { Icon } from './icons';
 export interface Hours {
   workStart: string;
   workEnd: string;
+  breakStart?: string | null;
+  breakEnd?: string | null;
+  secondBreakStart?: string | null;
+  secondBreakEnd?: string | null;
+  totalWorkingHours?: number | null;
+  weeklyWorkingDays?: number[];
+  weeklyOffDay?: number | null;
   graceMinutes: number;
+  earlyDepartureThresholdMinutes?: number | null;
 }
 
 export interface OfficeHoursData {
@@ -98,7 +106,20 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
         default: def,
         locations: locs.map((l) => (l.usesDefault
           ? { locationId: l.locationId, inherit: true }
-          : { locationId: l.locationId, workStart: l.workStart, workEnd: l.workEnd, graceMinutes: l.graceMinutes })),
+          : {
+              locationId: l.locationId,
+              workStart: l.workStart,
+              workEnd: l.workEnd,
+              breakStart: l.breakStart ?? null,
+              breakEnd: l.breakEnd ?? null,
+              secondBreakStart: l.secondBreakStart ?? null,
+              secondBreakEnd: l.secondBreakEnd ?? null,
+              totalWorkingHours: l.totalWorkingHours ?? null,
+              weeklyWorkingDays: l.weeklyWorkingDays ?? null,
+              weeklyOffDay: l.weeklyOffDay ?? null,
+              graceMinutes: l.graceMinutes,
+              earlyDepartureThresholdMinutes: l.earlyDepartureThresholdMinutes ?? null,
+            })),
       });
       toast.success('Office hours saved. They apply from the next check-in.');
       onSaved(result);
@@ -114,9 +135,43 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
     <>
       <input type="time" className="input" value={h.workStart} disabled={disabled} onChange={(e) => set({ ...h, workStart: e.target.value })} aria-label="Login time" />
       <input type="time" className="input" value={h.workEnd} disabled={disabled} onChange={(e) => set({ ...h, workEnd: e.target.value })} aria-label="Logout time" />
+      <input type="time" className="input" value={h.breakStart ?? ''} disabled={disabled} onChange={(e) => set({ ...h, breakStart: e.target.value || null })} aria-label="Break start time" />
+      <input type="time" className="input" value={h.breakEnd ?? ''} disabled={disabled} onChange={(e) => set({ ...h, breakEnd: e.target.value || null })} aria-label="Break end time" />
       <input type="number" min={0} max={120} className="input" value={h.graceMinutes} disabled={disabled}
         onChange={(e) => set({ ...h, graceMinutes: Math.max(0, Math.min(120, Number(e.target.value) || 0)) })} aria-label="Grace minutes" />
     </>
+  );
+
+  const scheduleInputs = (h: Hours, set: (h: Hours) => void, disabled = false) => (
+    <>
+      <input type="number" min={0.25} max={24} step={0.25} className="input" value={h.totalWorkingHours ?? ''} disabled={disabled}
+        onChange={(e) => set({ ...h, totalWorkingHours: e.target.value ? Math.max(0.25, Math.min(24, Number(e.target.value))) : null })} aria-label="Total working hours" />
+      <input type="number" min={0} max={480} className="input" value={h.earlyDepartureThresholdMinutes ?? ''} disabled={disabled}
+        onChange={(e) => set({ ...h, earlyDepartureThresholdMinutes: e.target.value ? Math.max(0, Math.min(480, Number(e.target.value))) : null })} aria-label="Early departure threshold (minutes)" />
+      <input type="number" min={0} max={6} className="input" value={h.weeklyOffDay ?? ''} disabled={disabled}
+        onChange={(e) => set({ ...h, weeklyOffDay: e.target.value ? Math.max(0, Math.min(6, Number(e.target.value))) : null })} aria-label="Weekly off day (0=Sun, 6=Sat)" />
+    </>
+  );
+
+  const weeklyDaysSelector = (h: Hours, set: (h: Hours) => void, disabled = false) => (
+    <div className="flex flex-wrap gap-1" role="group" aria-label="Weekly working days">
+      {[0, 1, 2, 3, 4, 5, 6].map((day) => (
+        <label key={day} className="inline-flex items-center gap-1 px-2 py-1 rounded border text-xs cursor-pointer transition"
+          style={{
+            backgroundColor: h.weeklyWorkingDays?.includes(day) ? '#3b82f6' : '#f3f4f6',
+            color: h.weeklyWorkingDays?.includes(day) ? 'white' : '#374151',
+            borderColor: h.weeklyWorkingDays?.includes(day) ? '#3b82f6' : '#d1d5db',
+          }}>
+          <input type="checkbox"
+            checked={h.weeklyWorkingDays?.includes(day) ?? false}
+            disabled={disabled}
+            onChange={(e) => set({ ...h, weeklyWorkingDays: e.target.checked
+              ? [...(h.weeklyWorkingDays ?? []), day]
+              : (h.weeklyWorkingDays ?? []).filter((d) => d !== day) })} />
+          <span>{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day]}</span>
+        </label>
+      ))}
+    </div>
   );
 
   return (
@@ -124,11 +179,11 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
       open
       onClose={onClose}
       size="lg"
-      title="Office hours"
-      description="Checking in after login time + grace is marked Late. Checking out before logout time is an early departure. Changes apply from the next check-in; today's records are not recalculated."
+      title="Location Office Timings"
+      description="Configure office start/end times, breaks, working hours, weekly offs, and grace periods per location. Changes apply from the next check-in; today's records are not recalculated."
       footer={<>
         <button type="button" className="btn-secondary" onClick={onClose}>Cancel</button>
-        <button type="button" className="btn-primary" disabled={saving || hasError} onClick={() => void save()}>{saving ? 'Saving…' : 'Save office hours'}</button>
+        <button type="button" className="btn-primary" disabled={saving || hasError} onClick={() => void save()}>{saving ? 'Saving…' : 'Save office timings'}</button>
       </>}
     >
       <div className="space-y-5">
@@ -137,6 +192,14 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
             {timeInputs(def, setDef)}
           </div>
           <div className="mt-1 grid grid-cols-3 gap-2 text-[11px] text-ink-400"><span>Login</span><span>Logout</span><span>Grace (min)</span></div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {scheduleInputs(def, setDef)}
+          </div>
+          <div className="mt-1 grid grid-cols-3 gap-2 text-[11px] text-ink-400"><span>Work hrs/day</span><span>Early dep. (min)</span><span>Weekly off (0=Sun)</span></div>
+          <div className="mt-2">
+            <label className="label">Weekly working days</label>
+            {weeklyDaysSelector(def, setDef)}
+          </div>
           {invalid(def) && <p className="mt-1 text-xs text-red-600">Logout must be after login, grace 0–120 minutes.</p>}
         </Field>
 
@@ -152,13 +215,20 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
                     <label className="inline-flex items-center gap-2 text-xs text-ink-600">
                       <input type="checkbox" checked={l.usesDefault}
                         onChange={(e) => setLocs((prev) => prev.map((p, j) => (j === i ? { ...p, usesDefault: e.target.checked, ...(e.target.checked ? def : {}) } : p)))} />
-                      Use company hours
+                      Use company defaults
                     </label>
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     {timeInputs(l.usesDefault ? def : l, set, l.usesDefault)}
                   </div>
-                  {!l.usesDefault && invalid(l) && <p className="mt-1 text-xs text-red-600">Logout must be after login, grace 0–120 minutes.</p>}
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {scheduleInputs(l.usesDefault ? def : l, set, l.usesDefault)}
+                  </div>
+                  <div className="mt-2">
+                    <label className="label">Weekly working days</label>
+                    {weeklyDaysSelector(l.usesDefault ? def : l, set, l.usesDefault)}
+                  </div>
+                  {!l.usesDefault && invalid(l) && <p className="mt-1 text-xs text-red-600">Invalid schedule: logout must be after login, grace 0–120 minutes.</p>}
                 </li>
               );
             })}
@@ -168,3 +238,14 @@ function OfficeHoursModal({ data, onClose, onSaved }: { data: OfficeHoursData; o
     </Modal>
   );
 }
+
+const scheduleInputs = (h: Hours, set: (h: Hours) => void, disabled = false) => (
+  <>
+    <input type="number" min={0.25} max={24} step={0.25} className="input" value={h.totalWorkingHours ?? ''} disabled={disabled}
+      onChange={(e) => set({ ...h, totalWorkingHours: e.target.value ? Math.max(0.25, Math.min(24, Number(e.target.value))) : null })} aria-label="Total working hours per day" />
+    <input type="number" min={0} max={480} className="input" value={h.earlyDepartureThresholdMinutes ?? ''} disabled={disabled}
+      onChange={(e) => set({ ...h, earlyDepartureThresholdMinutes: e.target.value ? Math.max(0, Math.min(480, Number(e.target.value))) : null })} aria-label="Early departure threshold (minutes)" />
+    <input type="number" min={0} max={6} className="input" value={h.weeklyOffDay ?? ''} disabled={disabled}
+      onChange={(e) => set({ ...h, weeklyOffDay: e.target.value ? Math.max(0, Math.min(6, Number(e.target.value))) : null })} aria-label="Weekly off day (0=Sun, 6=Sat)" />
+  </>
+);

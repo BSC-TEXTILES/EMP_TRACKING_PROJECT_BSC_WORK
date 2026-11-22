@@ -159,6 +159,7 @@ export function AppShell() {
       [/^\/analytics/, 'Reports'],
       [/^\/admin/, 'Administration'],
       [/^\/organization/, 'Administration'],
+      [/^\/activity-tracking/, 'User Activity Tracking'],
       [/^\/activity/, 'Activity Monitoring'],
       [/^\/$/, 'Dashboard'],
     ];
@@ -273,6 +274,12 @@ export function AppShell() {
       },
       ...(isHrOrAdmin
         ? [
+            {
+              label: 'User Activity Tracking',
+              items: [
+                { to: '/activity-tracking', label: 'User Activity Tracking', icon: 'activity', show: true },
+              ],
+            },
             {
               label: 'Human Resources',
               items: [
@@ -538,18 +545,20 @@ export function AppShell() {
               </p>
             </div>
 
-            <form onSubmit={submitSearch} className="ml-auto hidden max-w-xs flex-1 md:block">
-              <div className="relative">
-                <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
-                <input
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search employees…"
-                  className="input pl-9 py-1.5 text-sm"
-                  aria-label="Search employees"
-                />
-              </div>
-            </form>
+            {canAny('employees.view.team', 'employees.view.all') && (
+              <form onSubmit={submitSearch} className="ml-auto hidden max-w-xs flex-1 md:block">
+                <div className="relative">
+                  <Icon name="search" size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+                  <input
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                    placeholder="Search employees…"
+                    className="input pl-9 py-1.5 text-sm"
+                    aria-label="Search employees"
+                  />
+                </div>
+              </form>
+            )}
 
             <div className="ml-auto flex items-center gap-1.5 md:ml-0">
               <button

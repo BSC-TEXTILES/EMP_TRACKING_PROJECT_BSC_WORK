@@ -8,6 +8,8 @@ import { ActivityService } from '../services/ActivityService.js';
 import { ActivityAnalyticsService } from '../services/ActivityAnalyticsService.js';
 import { ActivityDeletionService } from '../services/ActivityDeletionService.js';
 import { DeviceTelemetryService } from '../services/DeviceTelemetryService.js';
+import { EmployeeActivityDetailsService } from '../services/EmployeeActivityDetailsService.js';
+import { UserActivityTrackingService } from '../services/UserActivityTrackingService.js';
 import { today } from '../lib/dates.js';
 export const activityRouter = Router();
 function requireDevice(req, _res, next) {
@@ -108,8 +110,182 @@ activityRouter.post('/client-error', rateLimit({ windowMs: 60000, max: 60, keyPr
     });
     res.json({ recorded: Boolean(recorded), clientEventId });
 }));
+// ----------------------- Agent Downloads & Scripts -----------------------
+activityRouter.get('/agent/download/android', asyncHandler(async (_req, res) => {
+    res.redirect('/api/downloads/apk/release');
+}));
+activityRouter.get('/agent/installer.bat', asyncHandler(async (req, res) => {
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || 'localhost:3000';
+    const serverUrl = `${protocol}://${host}`;
+    const token = req.query.token ? String(req.query.token) : '';
+    const batScript = `@echo off
+setlocal enabledelayedexpansion
+title BSC Textiles - Activity Tracking Agent Installer
+echo ======================================================================
+echo BSC TEXTILES - WORKFORCE MONITORING AGENT INSTALLER
+echo Davanagere (DAV) | Shivamogga (SHI) | Belagavi (BEL) | Head Office (HQ)
+echo ======================================================================
+echo.
+
+set "SERVER_URL=${serverUrl}"
+set "DEVICE_TOKEN=${token}"
+
+where node >nul 2>nul
+if %errorlevel% neq 0 (
+  echo [INFO] Node.js runtime not found. Attempting install via winget...
+  winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
+  where node >nul 2>nul
+  if !errorlevel! neq 0 (
+    echo [ERROR] Please install Node.js v18 or later from https://nodejs.org
+    echo Once installed, rerun this installer.
+    pause
+    exit /b 1
+  )
+)
+
+cd /d "%~dp0"
+if not exist "agent-data" mkdir "agent-data"
+if not exist "logs" mkdir "logs"
+
+echo [1/3] Writing agent configuration...
+echo {"serverUrl":"%SERVER_URL%","deviceToken":"%DEVICE_TOKEN%"} > agent-data\\config.json
+
+echo [2/3] Registering auto-start on Windows boot...
+set "STARTUP_FOLDER=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+set "VBS_PATH=%~dp0run-agent-hidden.vbs"
+set "LNK_PATH=%STARTUP_FOLDER%\\BSCTextilesAgent.lnk"
+
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_PATH%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_PATH%\"'; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 7; $s.Save()" >nul 2>nul
+
+echo [3/3] Launching background agent...
+start "" wscript.exe "%VBS_PATH%"
+
+echo ======================================================================
+echo [SUCCESS] BSC Workforce Activity Tracking Agent is installed and running!
+echo Status: Connected to %SERVER_URL%
+echo Logs:   %~dp0logs\\agent.log
+echo ======================================================================
+timeout /t 5
+`;
+    res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="install-agent.bat"');
+    res.send(batScript);
+}));
+activityRouter.get('/agent/installer.ps1', asyncHandler(async (req, res) => {
+    const protocol = req.protocol || 'http';
+    const host = req.get('host') || 'localhost:3000';
+    const serverUrl = `${protocol}://${host}`;
+    const token = req.query.token ? String(req.query.token) : '';
+    const ps1Script = `# BSC Textiles Activity Tracking Agent Installer (PowerShell)
+param(
+  [string]$ServerUrl = "${serverUrl}",
+  [string]$DeviceToken = "${token}",
+  [switch]$Silent
+)
+
+$ErrorActionPreference = 'Stop'
+Write-Host "======================================================================" -ForegroundColor Cyan
+Write-Host "BSC TEXTILES - WORKFORCE MONITORING AGENT INSTALLER" -ForegroundColor Cyan
+Write-Host "======================================================================" -ForegroundColor Cyan
+
+$agentDir = $PSScriptRoot
+if (-not $agentDir) { $agentDir = (Get-Location).Path }
+Set-Location $agentDir
+
+# Check Node.js
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  Write-Host "[INFO] Node.js not found in PATH. Trying winget install..." -ForegroundColor Yellow
+  try {
+    Start-Process winget -ArgumentList "install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements" -Wait -NoNewWindow
+  } catch {}
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Error "Node.js v18+ is required. Please install from https://nodejs.org"
+  }
+}
+
+New-Item -ItemType Directory -Force -Path (Join-Path $agentDir "agent-data") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $agentDir "logs") | Out-Null
+
+$configPath = Join-Path $agentDir "agent-data\\config.json"
+$configData = @{ serverUrl = $ServerUrl; deviceToken = $DeviceToken } | ConvertTo-Json
+Set-Content -Path $configPath -Value $configData -Encoding UTF8
+Write-Host "[1/3] Configuration saved." -ForegroundColor Green
+
+# Register startup
+$startupFolder = [Environment]::GetFolderPath('Startup')
+$shortcutPath = Join-Path $startupFolder "BSCTextilesAgent.lnk"
+$vbsPath = Join-Path $agentDir "run-agent-hidden.vbs"
+
+$ws = New-Object -ComObject WScript.Shell
+$shortcut = $ws.CreateShortcut($shortcutPath)
+$shortcut.TargetPath = "wscript.exe"
+$shortcut.Arguments = "\`"$vbsPath\`""
+$shortcut.WorkingDirectory = $agentDir
+$shortcut.WindowStyle = 7
+$shortcut.Save()
+Write-Host "[2/3] Auto-start registered in Windows Startup." -ForegroundColor Green
+
+# Start agent
+Start-Process "wscript.exe" -ArgumentList "\`"$vbsPath\`"" -WorkingDirectory $agentDir
+Write-Host "[3/3] Background tracking agent launched." -ForegroundColor Green
+Write-Host "======================================================================" -ForegroundColor Cyan
+Write-Host "Installation Complete! Connected to $ServerUrl" -ForegroundColor Green
+Write-Host "======================================================================" -ForegroundColor Cyan
+`;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="install-agent.ps1"');
+    res.send(ps1Script);
+}));
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
+// ----------------- User Activity Tracking (Admin & HR) -----------------
+activityRouter.get('/employees-tracking', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const data = await UserActivityTrackingService.getTrackingDashboard(user, {
+        search: req.query.search ? String(req.query.search) : undefined,
+        locationId: req.query.locationId ? intParam(String(req.query.locationId)) : undefined,
+        departmentId: req.query.departmentId ? intParam(String(req.query.departmentId)) : undefined,
+        status: req.query.status,
+        agentInstalled: req.query.agentInstalled === 'true' ? true : (req.query.agentInstalled === 'false' ? false : undefined),
+        sortBy: req.query.sortBy,
+        sortOrder: req.query.sortOrder === 'asc' ? 'asc' : 'desc',
+        page: req.query.page ? intParam(String(req.query.page)) : 1,
+        limit: req.query.limit ? intParam(String(req.query.limit)) : 25,
+        date: req.query.date ? String(req.query.date) : undefined,
+    });
+    res.json(data);
+}));
+activityRouter.get('/employee/:id/details', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const employeeId = intParam(req.params.id);
+    const data = await UserActivityTrackingService.getEmployeeDetailedActivity(user, employeeId, {
+        from: req.query.from ? String(req.query.from) : undefined,
+        to: req.query.to ? String(req.query.to) : undefined,
+        date: req.query.date ? String(req.query.date) : undefined,
+    });
+    res.json(data);
+}));
+activityRouter.get('/export/report', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const format = (String(req.query.format || 'xlsx').toLowerCase());
+    const employeeId = req.query.employeeId ? intParam(String(req.query.employeeId)) : undefined;
+    const locationId = req.query.locationId ? intParam(String(req.query.locationId)) : undefined;
+    const departmentId = req.query.departmentId ? intParam(String(req.query.departmentId)) : undefined;
+    const from = String(req.query.from || today());
+    const to = String(req.query.to || today());
+    const result = await UserActivityTrackingService.exportReport(user, {
+        format,
+        employeeId,
+        locationId,
+        departmentId,
+        from,
+        to,
+    });
+    res.setHeader('Content-Type', result.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.send(result.buffer);
+}));
 // LiveGuard Pro System Guardian & Hardware Telemetry endpoints
 activityRouter.get('/liveguard/metrics', asyncHandler(async (req, res) => {
     const user = currentUser(req);
@@ -494,5 +670,72 @@ activityRouter.get('/meetings-overview', asyncHandler(async (req, res) => {
     const user = currentUser(req);
     const date = dateParam(req.query.date);
     res.json(await ActivityAnalyticsService.meetingsOverview(user, date));
+}));
+// ---------------------- Comprehensive User Details ------------------------
+activityRouter.get('/user-details/:id', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id);
+    const date = dateParam(req.query.date);
+    const data = await EmployeeActivityDetailsService.getComprehensiveDashboard(user, id, date, req.ip);
+    res.json(data);
+}));
+activityRouter.post('/user-details/:id/sync-events', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id);
+    if (user.id !== id && !user.permissions.includes('activity.view.all')) {
+        throw ApiError.forbidden('Cannot push events for another employee without administrative privileges.');
+    }
+    const events = Array.isArray(req.body?.events) ? req.body.events : [req.body];
+    const result = await EmployeeActivityDetailsService.ingestAgentEvents(id, events);
+    res.json(result);
+}));
+activityRouter.get('/user-details/:id/export', asyncHandler(async (req, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id);
+    const date = dateParam(req.query.date);
+    const data = await EmployeeActivityDetailsService.getComprehensiveDashboard(user, id, date, req.ip);
+    // CSV format output
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="activity-report-${data.profile.employeeCode}-${date}.csv"`);
+    const lines = [];
+    lines.push(`"Employee Activity Report","BSC Textiles HRMS"`);
+    lines.push(`"Generated At","${new Date().toISOString()}"`);
+    lines.push(`"Target Date","${date}"`);
+    lines.push('');
+    lines.push(`"Employee ID","${data.profile.employeeCode}"`);
+    lines.push(`"Full Name","${data.profile.fullName}"`);
+    lines.push(`"Department","${data.profile.departmentName ?? ''}"`);
+    lines.push(`"Designation","${data.profile.designationTitle ?? ''}"`);
+    lines.push(`"Location","${data.profile.locationName ?? ''}"`);
+    lines.push(`"Reporting Manager","${data.profile.managerName ?? ''}"`);
+    lines.push(`"HR Manager","${data.profile.hrName ?? ''}"`);
+    lines.push('');
+    lines.push(`"Summary Metrics"`);
+    lines.push(`"Total Working Duration","${data.reports.periodSummary.workedHours}"`);
+    lines.push(`"Total Active Working Time","${data.reports.periodSummary.activeHours}"`);
+    lines.push(`"Total Idle Time","${data.reports.periodSummary.idleHours}"`);
+    lines.push(`"Application Time","${data.reports.periodSummary.appHours}"`);
+    lines.push(`"Website Time","${data.reports.periodSummary.webHours}"`);
+    lines.push(`"Active/Idle Ratio","${data.metrics.activeToIdleRatio}"`);
+    lines.push(`"Productivity Score","${data.reports.periodSummary.productivityScore}%"`);
+    lines.push('');
+    lines.push(`"Applications Usage"`);
+    lines.push(`"Application","Category","Duration (Mins)","Launches","Last Used"`);
+    for (const app of data.applications.daily) {
+        lines.push(`"${app.appName}","${app.appCategory}","${app.totalMinutes}","${app.launchCount}","${app.lastUsedAt ?? ''}"`);
+    }
+    lines.push('');
+    lines.push(`"Websites Usage"`);
+    lines.push(`"Domain","Category","Duration (Mins)","Visits","Browser"`);
+    for (const site of data.websites.daily) {
+        lines.push(`"${site.domain}","${site.category}","${site.totalMinutes}","${site.visitCount}","${site.browserName}"`);
+    }
+    lines.push('');
+    lines.push(`"Idle Sessions"`);
+    lines.push(`"Started At","Ended At","Duration (Mins)","Type","Reason"`);
+    for (const idle of data.idle.sessions) {
+        lines.push(`"${idle.startedAt}","${idle.endedAt ?? 'Ongoing'}","${idle.durationMinutes}","${idle.idleType}","${idle.reason ?? 'Inactive'}"`);
+    }
+    res.send(lines.join('\n'));
 }));
 //# sourceMappingURL=activity.js.map

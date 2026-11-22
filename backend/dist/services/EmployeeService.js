@@ -3,7 +3,7 @@ import { recordAudit } from '../lib/audit.js';
 import { hashPassword, passwordIssues } from '../lib/crypto.js';
 import { toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { allowedLocationIds, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
+import { allowedLocationIds, assertEmployeeAccess, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ChatService } from './ChatService.js';
 import { GroupService } from './GroupService.js';
@@ -161,6 +161,7 @@ export class EmployeeService {
         };
     }
     static async detail(employeeId, user) {
+        await assertEmployeeAccess(user, employeeId, 'employees');
         const scope = await employeeScope(user);
         const row = await queryOne(`SELECT e.*, d.name AS department_name, dg.title AS designation_title, r.name AS role_name, r.slug AS role_slug,
               m.full_name AS manager_name, hr_rep.full_name AS hr_representative_name,
@@ -264,6 +265,7 @@ export class EmployeeService {
         };
     }
     static async update(employeeId, actor, input) {
+        await assertEmployeeAccess(actor, employeeId, 'employees');
         const target = await queryOne('SELECT * FROM employees WHERE id = ?', [employeeId]);
         if (!target)
             throw ApiError.notFound('Employee not found');
@@ -842,15 +844,44 @@ export class EmployeeService {
             status: r.status,
         }));
     }
-    static async picker(employeeId) {
-        // Used for assignee/participant pickers: all active employees are visible organisation-wide
-        // by design (names + designations only), never confidential records.
+    static async picker(user) {
+        let whereClause = "e.status = 'active'";
+        const params = [];
+        if (user.roleSlug === 'super_admin' || (user.roleLevel ?? 0) >= 100 || user.permissions.includes('employees.view.all')) {
+            const allowed = await allowedLocationIds(user);
+            if (allowed !== null) {
+                if (allowed.length === 0) {
+                    whereClause += ' AND e.id = ?';
+                    params.push(user.id);
+                }
+                else {
+                    whereClause += ` AND e.location_id IN (${allowed.map(() => '?').join(',')})`;
+                    params.push(...allowed);
+                }
+            }
+        }
+        else if (user.permissions.includes('employees.view.team')) {
+            const ids = await subtreeIds(user.id);
+            if (ids.length === 0) {
+                whereClause += ' AND e.id = ?';
+                params.push(user.id);
+            }
+            else {
+                whereClause += ` AND e.id IN (${ids.map(() => '?').join(',')})`;
+                params.push(...ids);
+            }
+        }
+        else {
+            // Ordinary employee: only themselves, their reporting manager, and their HR representative
+            whereClause += ' AND (e.id = ? OR e.id = (SELECT manager_id FROM employees WHERE id = ?) OR e.id = (SELECT hr_representative_id FROM employees WHERE id = ?))';
+            params.push(user.id, user.id, user.id);
+        }
         return query(`SELECT e.id, e.full_name, e.employee_code, dg.title AS designation_title, d.name AS department_name, e.manager_id
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active'
-       ORDER BY e.full_name`, []);
+       WHERE ${whereClause}
+       ORDER BY e.full_name`, params);
     }
     static async structure() {
         const [departments, designations, locations, roles] = await Promise.all([

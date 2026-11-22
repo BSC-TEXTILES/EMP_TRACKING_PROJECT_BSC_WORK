@@ -1,5 +1,6 @@
 import { query, queryOne, execute, transaction } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
+import { allowedLocationIds, subtreeIds } from '../lib/scope.js';
 import { emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 export class IssueService {
@@ -425,8 +426,22 @@ export class IssueService {
         if (!issue)
             throw ApiError.notFound('Issue not found.');
         // Security check
-        if (!isSuperAdmin && !isManager && issue.reporter_id !== actor.id && issue.assigned_to !== actor.id) {
-            throw ApiError.forbidden('You do not have permission to view this issue.');
+        if (!isSuperAdmin) {
+            const isDirectlyInvolved = issue.reporter_id === actor.id || issue.assigned_to === actor.id;
+            if (!isDirectlyInvolved) {
+                if (isManager) {
+                    const ids = await subtreeIds(actor.id);
+                    const allowed = await allowedLocationIds(actor);
+                    const reporterInTeam = ids.includes(Number(issue.reporter_id)) || ids.includes(Number(issue.assigned_to));
+                    const sameStore = allowed !== null && issue.location_id && allowed.includes(Number(issue.location_id));
+                    if (!reporterInTeam && !sameStore) {
+                        throw ApiError.forbidden('You do not have permission to view this issue.');
+                    }
+                }
+                else {
+                    throw ApiError.forbidden('You do not have permission to view this issue.');
+                }
+            }
         }
         const canSeeInternal = isManager || isSuperAdmin;
         // Fetch comments

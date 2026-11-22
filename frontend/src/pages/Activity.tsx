@@ -16,6 +16,7 @@ import { SystemMonitor } from '../components/liveguard/SystemMonitor';
 import { ForensicReportModal } from '../components/liveguard/ForensicReportModal';
 import { LiveDevicesPanel } from '../components/LiveDevicesPanel';
 import { AppIcon } from '../components/AppIcon';
+import { EmployeeActivityDetailsModal } from '../components/EmployeeActivityDetailsModal';
 
 // Modular Activity Components
 import { ActivityOverview } from './activity/ActivityOverview';
@@ -102,6 +103,7 @@ export default function Activity() {
   // Modals & Panels
   const [forensicReportOpen, setForensicReportOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
+  const [selectedUserDetailsId, setSelectedUserDetailsId] = useState<number | null>(null);
   const [detail, setDetail] = useState<{
     employeeId: number;
     daily: DailySummary;
@@ -389,15 +391,8 @@ export default function Activity() {
     }
   };
 
-  const openEmployee = async (row: TeamRow) => {
-    try {
-      const result = await api.get<{ daily: DailySummary; weekly: WeeklyReport[] }>(
-        `/activity/employee/${row.id}?date=${date}`
-      );
-      setDetail({ employeeId: row.id, ...result, name: row.name });
-    } catch (caught) {
-      toast.error(errorMessage(caught));
-    }
+  const openEmployee = (row: TeamRow) => {
+    setSelectedUserDetailsId(row.id);
   };
 
   const handleRevokeDevice = async (device: Device) => {
@@ -2075,6 +2070,16 @@ export default function Activity() {
         onConfirm={() => void handleConfirmPermanentPurge()}
         busy={busy}
       />
+
+      {/* COMPREHENSIVE USER DETAILS & ACTIVITY DASHBOARD */}
+      {selectedUserDetailsId && (
+        <EmployeeActivityDetailsModal
+          open={Boolean(selectedUserDetailsId)}
+          onClose={() => setSelectedUserDetailsId(null)}
+          employeeId={selectedUserDetailsId}
+          initialDate={date}
+        />
+      )}
     </div>
   );
 }

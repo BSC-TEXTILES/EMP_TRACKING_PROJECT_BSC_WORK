@@ -24,6 +24,7 @@ const Meetings = lazyWithRetry(() => import('./pages/Meetings'), 'meetings');
 const MeetingRoom = lazyWithRetry(() => import('./pages/MeetingRoom'), 'meeting-room');
 const Kpi = lazyWithRetry(() => import('./pages/Kpi'), 'kpi');
 const Activity = lazyWithRetry(() => import('./pages/Activity'), 'activity');
+const UserActivityTracking = lazyWithRetry(() => import('./pages/UserActivityTracking'), 'user-activity-tracking');
 const Leave = lazyWithRetry(() => import('./pages/Leave'), 'leave');
 const Projects = lazyWithRetry(() => import('./pages/Projects'), 'projects');
 const Collections = lazyWithRetry(() => import('./pages/Collections'), 'collections');
@@ -153,6 +154,7 @@ export function App() {
           <Route path="meet/:code" element={<MeetingRoom />} />
           <Route path="kpi" element={<Kpi />} />
           <Route path="activity" element={<Activity />} />
+          <Route path="activity-tracking" element={<RequireAdmin><UserActivityTracking /></RequireAdmin>} />
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
           <Route path="collections" element={<Collections />} />

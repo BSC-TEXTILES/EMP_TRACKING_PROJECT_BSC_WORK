@@ -1,4 +1,5 @@
 import { execute, query, queryOne, transaction } from '../db/index.js';
+import { assertEmployeeAccess } from '../lib/scope.js';
 import { getSettings, recordAudit } from '../lib/audit.js';
 import { ApiError } from '../lib/http.js';
 import { addDays, daysBetween, endOfMonth, localDate, localTime, parseUtc, startOfMonth, today, toIso, toSqlTimestamp } from '../lib/dates.js';
@@ -103,32 +104,116 @@ interface ShiftConfig {
 
 const SETTING_KEYS = ['work_start_time', 'work_end_time', 'late_grace_minutes', 'half_day_hours', 'full_day_hours', 'overtime_after_hours'];
 
+/**
+ * Gets the effective office schedule for a location on a specific date.
+ * Falls back to company default if no location-specific schedule exists.
+ */
+async function getLocationSchedule(locationId: number | null | undefined, date = today()): Promise<{
+  workStart: string;
+  workEnd: string;
+  breakStart: string | null;
+  breakEnd: string | null;
+  secondBreakStart: string | null;
+  secondBreakEnd: string | null;
+  totalWorkingHours: number;
+  weeklyWorkingDays: number[];
+  weeklyOffDay: number | null;
+  graceMinutes: number;
+  earlyDepartureThresholdMinutes: number;
+} | null> {
+  if (!locationId) return null;
+
+  // Find the most recent schedule effective on or before the given date
+  const schedule = await queryOne<{
+    work_start_time: string;
+    work_end_time: string;
+    break_start_time: string | null;
+    break_end_time: string | null;
+    second_break_start_time: string | null;
+    second_break_end_time: string | null;
+    total_working_hours: number;
+    weekly_working_days: string;
+    weekly_off_day: number | null;
+    grace_minutes: number;
+    early_departure_threshold_minutes: number;
+    is_active: number;
+  }>(
+    `SELECT work_start_time, work_end_time, break_start_time, break_end_time,
+            second_break_start_time, second_break_end_time, total_working_hours,
+            weekly_working_days, weekly_off_day, grace_minutes,
+            early_departure_threshold_minutes, is_active
+     FROM location_office_schedules
+     WHERE location_id = ? AND effective_date <= ? AND is_active = 1
+     ORDER BY effective_date DESC LIMIT 1`,
+    [locationId, date],
+  );
+
+  if (!schedule) return null;
+
+  let weeklyWorkingDays: number[] = [1, 2, 3, 4, 5, 6];
+  try {
+    weeklyWorkingDays = JSON.parse(schedule.weekly_working_days);
+  } catch {
+    // Use default
+  }
+
+  return {
+    workStart: schedule.work_start_time.slice(0, 5),
+    workEnd: schedule.work_end_time.slice(0, 5),
+    breakStart: schedule.break_start_time?.slice(0, 5) ?? null,
+    breakEnd: schedule.break_end_time?.slice(0, 5) ?? null,
+    secondBreakStart: schedule.second_break_start_time?.slice(0, 5) ?? null,
+    secondBreakEnd: schedule.second_break_end_time?.slice(0, 5) ?? null,
+    totalWorkingHours: Number(schedule.total_working_hours),
+    weeklyWorkingDays,
+    weeklyOffDay: schedule.weekly_off_day ?? null,
+    graceMinutes: Number(schedule.grace_minutes),
+    earlyDepartureThresholdMinutes: Number(schedule.early_departure_threshold_minutes),
+  };
+}
+
 async function shiftConfig(locationId?: number | null): Promise<ShiftConfig> {
   const s = await getSettings(SETTING_KEYS);
   let workStart = s.work_start_time || '09:30';
   let workEnd = s.work_end_time || '18:30';
   let graceMinutes = Number(s.late_grace_minutes || 10);
+  let halfDayHours = Number(s.half_day_hours || 4);
+  let fullDayHours = Number(s.full_day_hours || 9);
+  let overtimeAfterHours = Number(s.overtime_after_hours || 9);
 
   if (locationId) {
-    const locSettings = await getSettings([
-      `loc_work_start_${locationId}`,
-      `loc_work_end_${locationId}`,
-      `loc_grace_${locationId}`,
-      'location_shifts_json',
-    ]);
-    if (locSettings[`loc_work_start_${locationId}`]) workStart = locSettings[`loc_work_start_${locationId}`];
-    if (locSettings[`loc_work_end_${locationId}`]) workEnd = locSettings[`loc_work_end_${locationId}`];
-    if (locSettings[`loc_grace_${locationId}`]) graceMinutes = Number(locSettings[`loc_grace_${locationId}`]);
+    const schedule = await getLocationSchedule(locationId);
+    if (schedule) {
+      workStart = schedule.workStart;
+      workEnd = schedule.workEnd;
+      graceMinutes = schedule.graceMinutes;
+      // Use schedule's totalWorkingHours if available, otherwise fall back to settings
+      if (schedule.totalWorkingHours > 0) {
+        fullDayHours = schedule.totalWorkingHours;
+        halfDayHours = schedule.totalWorkingHours / 2;
+      }
+    } else {
+      // Fallback to legacy system_settings approach for backward compatibility
+      const locSettings = await getSettings([
+        `loc_work_start_${locationId}`,
+        `loc_work_end_${locationId}`,
+        `loc_grace_${locationId}`,
+        'location_shifts_json',
+      ]);
+      if (locSettings[`loc_work_start_${locationId}`]) workStart = locSettings[`loc_work_start_${locationId}`];
+      if (locSettings[`loc_work_end_${locationId}`]) workEnd = locSettings[`loc_work_end_${locationId}`];
+      if (locSettings[`loc_grace_${locationId}`]) graceMinutes = Number(locSettings[`loc_grace_${locationId}`]);
 
-    if (locSettings.location_shifts_json) {
-      try {
-        const parsed = JSON.parse(locSettings.location_shifts_json) as Record<string, { workStartTime?: string; workEndTime?: string; lateGraceMinutes?: number }>;
-        const match = parsed[String(locationId)];
-        if (match?.workStartTime) workStart = match.workStartTime;
-        if (match?.workEndTime) workEnd = match.workEndTime;
-        if (match?.lateGraceMinutes != null) graceMinutes = Number(match.lateGraceMinutes);
-      } catch {
-        // Fallback to location keys or general defaults
+      if (locSettings.location_shifts_json) {
+        try {
+          const parsed = JSON.parse(locSettings.location_shifts_json) as Record<string, { workStartTime?: string; workEndTime?: string; lateGraceMinutes?: number }>;
+          const match = parsed[String(locationId)];
+          if (match?.workStartTime) workStart = match.workStartTime;
+          if (match?.workEndTime) workEnd = match.workEndTime;
+          if (match?.lateGraceMinutes != null) graceMinutes = Number(match.lateGraceMinutes);
+        } catch {
+          // Fallback to location keys or general defaults
+        }
       }
     }
   }
@@ -137,9 +222,9 @@ async function shiftConfig(locationId?: number | null): Promise<ShiftConfig> {
     workStart,
     workEnd,
     graceMinutes,
-    halfDayHours: Number(s.half_day_hours || 4),
-    fullDayHours: Number(s.full_day_hours || 9),
-    overtimeAfterHours: Number(s.overtime_after_hours || 9),
+    halfDayHours,
+    fullDayHours,
+    overtimeAfterHours,
   };
 }
 
@@ -161,49 +246,95 @@ const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 export interface OfficeHours {
   workStart: string;
   workEnd: string;
+  breakStart?: string | null;
+  breakEnd?: string | null;
+  secondBreakStart?: string | null;
+  secondBreakEnd?: string | null;
+  totalWorkingHours?: number;
+  weeklyWorkingDays?: number[];
+  weeklyOffDay?: number | null;
   graceMinutes: number;
+  earlyDepartureThresholdMinutes?: number;
 }
 
 export interface OfficeHoursUpdate {
   default?: OfficeHours;
-  /** `inherit: true` removes the location's own hours so it follows the default. */
+  /** `inherit: true` removes the location's own schedule so it follows the company default. */
   locations?: ({ locationId: number; inherit: true } | ({ locationId: number; inherit?: false } & OfficeHours))[];
 }
 
 function assertHours(h: OfficeHours, label: string): void {
   if (!TIME_RE.test(h.workStart) || !TIME_RE.test(h.workEnd)) throw ApiError.badRequest(`${label}: times must be HH:MM (24-hour).`);
   if (minutesOfDay(h.workEnd) <= minutesOfDay(h.workStart)) throw ApiError.badRequest(`${label}: logout time must be after login time.`);
+  if (h.breakStart && h.breakEnd && minutesOfDay(h.breakEnd) <= minutesOfDay(h.breakStart)) throw ApiError.badRequest(`${label}: break end must be after break start.`);
+  if (h.secondBreakStart && h.secondBreakEnd && minutesOfDay(h.secondBreakEnd) <= minutesOfDay(h.secondBreakStart)) throw ApiError.badRequest(`${label}: second break end must be after second break start.`);
   if (!Number.isInteger(h.graceMinutes) || h.graceMinutes < 0 || h.graceMinutes > 120) throw ApiError.badRequest(`${label}: grace must be 0–120 minutes.`);
+  if (h.earlyDepartureThresholdMinutes !== undefined && (h.earlyDepartureThresholdMinutes < 0 || h.earlyDepartureThresholdMinutes > 480)) throw ApiError.badRequest(`${label}: early departure threshold must be 0–480 minutes.`);
+  if (h.totalWorkingHours !== undefined && (h.totalWorkingHours <= 0 || h.totalWorkingHours > 24)) throw ApiError.badRequest(`${label}: total working hours must be 0.25–24.`);
+  if (h.weeklyOffDay !== undefined && h.weeklyOffDay !== null && (h.weeklyOffDay < 0 || h.weeklyOffDay > 6)) throw ApiError.badRequest(`${label}: weekly off day must be 0–6 (Sunday=0).`);
 }
 
 /**
- * Office (login / logout) hours: one company default plus optional per-location
- * hours. These drive the Late badge at check-in and early-departure at check-out.
+ * Office (login / logout) hours: company default plus optional per-location
+ * schedules with effective dates, breaks, working hours, and weekly offs.
+ * These drive the Late badge at check-in, early-departure at check-out,
+ * working hours calculations, and overtime.
  */
 export const OfficeHoursService = {
   async get() {
+    // Get company default from system_settings
     const s = await getSettings(['work_start_time', 'work_end_time', 'late_grace_minutes']);
     const def: OfficeHours = {
       workStart: s.work_start_time || '09:30',
       workEnd: s.work_end_time || '18:30',
       graceMinutes: Number(s.late_grace_minutes || 10),
     };
+
     const locations = await query<{ id: number; code: string; name: string }>(
       'SELECT id, code, name FROM locations WHERE is_active = 1 ORDER BY name',
     );
+
     const rows = await Promise.all(locations.map(async (l) => {
-      const effective = await shiftConfig(Number(l.id));
-      const own = effective.workStart !== def.workStart || effective.workEnd !== def.workEnd || effective.graceMinutes !== def.graceMinutes;
+      const schedule = await getLocationSchedule(Number(l.id));
+      if (schedule) {
+        return {
+          locationId: Number(l.id),
+          code: l.code,
+          name: l.name,
+          workStart: schedule.workStart,
+          workEnd: schedule.workEnd,
+          breakStart: schedule.breakStart,
+          breakEnd: schedule.breakEnd,
+          secondBreakStart: schedule.secondBreakStart,
+          secondBreakEnd: schedule.secondBreakEnd,
+          totalWorkingHours: schedule.totalWorkingHours,
+          weeklyWorkingDays: schedule.weeklyWorkingDays,
+          weeklyOffDay: schedule.weeklyOffDay,
+          graceMinutes: schedule.graceMinutes,
+          earlyDepartureThresholdMinutes: schedule.earlyDepartureThresholdMinutes,
+          usesDefault: false,
+        };
+      }
+      // No location-specific schedule, use default
       return {
         locationId: Number(l.id),
         code: l.code,
         name: l.name,
-        workStart: effective.workStart,
-        workEnd: effective.workEnd,
-        graceMinutes: effective.graceMinutes,
-        usesDefault: !own,
+        workStart: def.workStart,
+        workEnd: def.workEnd,
+        breakStart: null,
+        breakEnd: null,
+        secondBreakStart: null,
+        secondBreakEnd: null,
+        totalWorkingHours: Number(s.full_day_hours || 9),
+        weeklyWorkingDays: [1, 2, 3, 4, 5, 6],
+        weeklyOffDay: 0,
+        graceMinutes: def.graceMinutes,
+        earlyDepartureThresholdMinutes: 0,
+        usesDefault: true,
       };
     }));
+
     return { default: def, locations: rows };
   },
 
@@ -215,6 +346,7 @@ export const OfficeHoursService = {
       if (!loc.inherit) assertHours(loc, `Location ${loc.locationId}`);
     }
     const before = await OfficeHoursService.get();
+    const def = before.default;
 
     await transaction(async (conn) => {
       const put = (key: string, value: string) => conn.query(
@@ -228,29 +360,55 @@ export const OfficeHoursService = {
         await put('late_grace_minutes', String(input.default.graceMinutes));
       }
       if (input.locations?.length) {
-        // The older JSON map takes precedence over per-location keys; drop the
-        // edited locations from it so the values saved here are the ones used.
-        const [jsonRows] = await conn.query("SELECT setting_value FROM system_settings WHERE setting_key = 'location_shifts_json' FOR UPDATE");
-        const raw = (jsonRows as { setting_value: string | null }[])[0]?.setting_value;
-        let map: Record<string, unknown> = {};
-        try { map = raw ? JSON.parse(raw) : {}; } catch { map = {}; }
         for (const loc of input.locations) {
-          delete map[String(loc.locationId)];
-          const keys = [`loc_work_start_${loc.locationId}`, `loc_work_end_${loc.locationId}`, `loc_grace_${loc.locationId}`];
           if (loc.inherit) {
-            await conn.query('DELETE FROM system_settings WHERE setting_key IN (?, ?, ?)', keys);
+            // Remove any existing schedule for this location
+            await conn.query('DELETE FROM location_office_schedules WHERE location_id = ?', [loc.locationId]);
           } else {
-            await put(keys[0], loc.workStart);
-            await put(keys[1], loc.workEnd);
-            await put(keys[2], String(loc.graceMinutes));
+            // Upsert the schedule with today as effective date
+            const todayStr = today();
+            await conn.query(
+              `INSERT INTO location_office_schedules
+               (location_id, effective_date, work_start_time, work_end_time,
+                break_start_time, break_end_time, total_working_hours,
+                weekly_working_days, weekly_off_day, grace_minutes,
+                early_departure_threshold_minutes, is_active, created_by, updated_by)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+               ON DUPLICATE KEY UPDATE
+                 work_start_time = VALUES(work_start_time),
+                 work_end_time = VALUES(work_end_time),
+                 break_start_time = VALUES(break_start_time),
+                 break_end_time = VALUES(break_end_time),
+                 total_working_hours = VALUES(total_working_hours),
+                 weekly_working_days = VALUES(weekly_working_days),
+                 weekly_off_day = VALUES(weekly_off_day),
+                 grace_minutes = VALUES(grace_minutes),
+                 early_departure_threshold_minutes = VALUES(early_departure_threshold_minutes),
+                 is_active = VALUES(is_active),
+                 updated_by = VALUES(updated_by),
+                 updated_at = CURRENT_TIMESTAMP(3)`,
+              [
+                loc.locationId, todayStr,
+                loc.workStart || def.workStart,
+                loc.workEnd || def.workEnd,
+                loc.breakStart ?? null,
+                loc.breakEnd ?? null,
+                loc.totalWorkingHours ?? 9,
+                JSON.stringify(loc.weeklyWorkingDays ?? [1, 2, 3, 4, 5, 6]),
+                loc.weeklyOffDay ?? 0,
+                loc.graceMinutes ?? def.graceMinutes,
+                loc.earlyDepartureThresholdMinutes ?? 0,
+                actor.id,
+                actor.id,
+              ],
+            );
           }
         }
-        if (raw !== undefined && raw !== null) await put('location_shifts_json', JSON.stringify(map));
       }
     });
 
     const after = await OfficeHoursService.get();
-    await recordAudit({ actorId: actor.id, action: 'office_hours.updated', entityType: 'system_settings', before, after, ip });
+    await recordAudit({ actorId: actor.id, action: 'office_hours.updated', entityType: 'location_office_schedules', before, after, ip });
     return after;
   },
 };
@@ -725,6 +883,7 @@ export class AttendanceService {
       status: string;
     }>('SELECT * FROM attendance_corrections WHERE id = ?', [correctionId]);
     if (!correction) throw ApiError.notFound('Correction request not found');
+    await assertEmployeeAccess(reviewer, correction.employee_id, 'attendance');
     if (correction.status !== 'pending') throw ApiError.conflict('This correction has already been reviewed.');
 
     if (approve) {

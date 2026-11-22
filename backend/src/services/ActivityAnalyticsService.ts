@@ -1,7 +1,7 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ActivityService, cleanText, parseJson } from './ActivityService.js';
 import type { AuthUser } from './AuthService.js';
@@ -41,12 +41,7 @@ const KPI_WEIGHTS = {
 
 export class ActivityAnalyticsService {
   private static async assertAccess(user: AuthUser, employeeId: number): Promise<void> {
-    if (employeeId === user.id || user.permissions.includes('activity.view.all')) return;
-    if (user.permissions.includes('activity.view.team')) {
-      const ids = await subtreeIds(user.id);
-      if (ids.includes(employeeId)) return;
-    }
-    throw ApiError.forbidden('You do not have access to this employee activity.');
+    await assertEmployeeAccess(user, employeeId, 'activity');
   }
 
   static async employeeSummaries(ids: number[], date: string) {
@@ -761,9 +756,10 @@ export class ActivityAnalyticsService {
   }
 
   static async selfDashboard(user: AuthUser, date: string, targetEmployeeId?: number) {
-    const targetId = (targetEmployeeId && (user.permissions.includes('activity.view.team') || user.permissions.includes('activity.view.all') || (user.roleLevel && user.roleLevel >= 70)))
-      ? targetEmployeeId
-      : user.id;
+    if (targetEmployeeId && targetEmployeeId !== user.id) {
+      await ActivityAnalyticsService.assertAccess(user, targetEmployeeId);
+    }
+    const targetId = targetEmployeeId ?? user.id;
 
     const targetEmployee = targetId === user.id ? null : await queryOne<{
       id: number;

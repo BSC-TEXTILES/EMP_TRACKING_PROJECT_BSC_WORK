@@ -2,7 +2,7 @@ import { execute, nextSequence, query, queryOne, transaction, txQuery, txQueryOn
 import { recordAudit } from '../lib/audit.js';
 import { addDays, today, toIso } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { assertCanAllocateTo, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
+import { assertCanAllocateTo, assertEmployeeAccess, locationEmployeeClause, subtreeIds } from '../lib/scope.js';
 import { emitToEmployee, emitToEmployees } from '../realtime/io.js';
 import { NotificationService } from './NotificationService.js';
 export const TASK_STATUSES = [
@@ -82,15 +82,18 @@ const SORTS = {
     slot: ["FIELD(t.time_slot, 'morning','operations','evening','closing')"],
 };
 export class TaskService {
-    /** Throws 404 unless the task exists and is inside the user's task scope (role + location). */
+    /** Throws 404 if not found, or 403 unless the task is inside the user's task scope (role + location). */
     static async assertAccess(taskId, user) {
+        const existing = await queryOne('SELECT id FROM tasks WHERE id = ? AND archived_at IS NULL', [taskId]);
+        if (!existing)
+            throw ApiError.notFound('Task not found');
         const access = await taskAccessClause(user);
         const row = await queryOne(`SELECT t.id FROM tasks t WHERE t.id = ? AND t.archived_at IS NULL ${access.clause}`, [
             taskId,
             ...access.params,
         ]);
         if (!row)
-            throw ApiError.notFound('Task not found or you do not have access to it.');
+            throw ApiError.forbidden('You do not have access to this task.');
     }
     static async create(input, actor, context) {
         if (input.assigneeIds.length === 0)
@@ -205,6 +208,7 @@ export class TaskService {
             params.push(filters.priority);
         }
         if (filters.assigneeId) {
+            await assertEmployeeAccess(user, filters.assigneeId, 'tasks');
             clauses.push('EXISTS (SELECT 1 FROM task_assignments ta3 WHERE ta3.task_id = t.id AND ta3.employee_id = ?)');
             params.push(filters.assigneeId);
         }

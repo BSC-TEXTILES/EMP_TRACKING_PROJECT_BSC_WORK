@@ -26,7 +26,12 @@ export async function visibleEmployeeIds(user, module) {
     return [user.id];
 }
 export function canViewAll(user, module) {
-    return user.permissions.includes(`${module}.view.all`);
+    const perms = user.permissions ?? [];
+    return (user.roleSlug === 'super_admin' ||
+        (user.roleLevel ?? 0) >= 100 ||
+        perms.includes(`${module}.view.all`) ||
+        perms.includes('*') ||
+        (module === 'employees' && perms.includes('employees.manage')));
 }
 /**
  * Asserts the actor may act on the target employee's data. Managers are limited
@@ -35,13 +40,14 @@ export function canViewAll(user, module) {
 export async function assertEmployeeAccess(user, targetId, module = 'employees') {
     if (targetId === user.id)
         return;
+    const perms = user.permissions ?? [];
     if (canViewAll(user, module)) {
         const ids = await locationEmployeeIds(user);
         if (ids === null || ids.includes(targetId))
             return;
         throw ApiError.forbidden('This employee belongs to a location outside your access.');
     }
-    if (user.permissions.includes(`${module}.view.team`)) {
+    if (perms.includes(`${module}.view.team`)) {
         if (await isInSubtree(user.id, targetId))
             return;
     }

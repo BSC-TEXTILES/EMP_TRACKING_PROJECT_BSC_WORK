@@ -515,7 +515,6 @@ export class ActivityService {
     context: DeviceContext,
     info?: { currentApp?: string; currentCategory?: string; isIdle?: boolean; idleSeconds?: number; isLocked?: boolean; windowTitle?: string },
   ) {
-    if (!context.sessionId) throw ApiError.badRequest('No active work session. Start attendance and monitoring first.');
     const app = info?.currentApp ? cleanText(info.currentApp, 120) : null;
     const cat = info?.currentCategory ? cleanText(info.currentCategory, 60) : null;
     const isLocked = Boolean(info?.isLocked);
@@ -523,21 +522,65 @@ export class ActivityService {
       ? Math.max(0, Math.floor(Number(info?.idleSeconds)))
       : (info?.isIdle ? 300 : 0);
 
-    await execute(
-      `UPDATE monitoring_sessions 
-       SET last_heartbeat_at = NOW(3), 
-           current_app = COALESCE(?, current_app), 
-           current_category = COALESCE(?, current_category), 
-           idle_seconds = ?,
-           is_locked = ?
-       WHERE id = ?`,
-      [app, cat, idleSec, isLocked ? 1 : 0, context.sessionId],
-    );
+    let sessionId = context.sessionId;
+    if (!sessionId) {
+      const activeSession = await queryOne<{ id: number; status: string }>(
+        `SELECT id, status FROM monitoring_sessions WHERE employee_id = ? AND status IN ('active','paused') ORDER BY id DESC LIMIT 1`,
+        [context.employeeId],
+      );
+      if (activeSession) {
+        sessionId = activeSession.id;
+        context.sessionId = sessionId;
+        context.sessionStatus = activeSession.status as 'active' | 'paused';
+      }
+    }
+
+    if (sessionId) {
+      await execute(
+        `UPDATE monitoring_sessions 
+         SET last_heartbeat_at = NOW(3), 
+             current_app = COALESCE(?, current_app), 
+             current_category = COALESCE(?, current_category), 
+             idle_seconds = ?,
+             is_locked = ?
+         WHERE id = ?`,
+        [app, cat, idleSec, isLocked ? 1 : 0, sessionId],
+      );
+    }
+
     await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [context.deviceId]);
+
+    try {
+      await execute(
+        `INSERT INTO employee_tracking_status (employee_id, is_online, current_status, last_active_at, last_heartbeat_at, current_app, current_window, is_idle, idle_duration_seconds, device_id)
+         VALUES (?, 1, ?, NOW(3), NOW(3), ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           is_online = 1,
+           current_status = VALUES(current_status),
+           last_active_at = IF(VALUES(is_idle) = 0, NOW(3), last_active_at),
+           last_heartbeat_at = NOW(3),
+           current_app = VALUES(current_app),
+           current_window = VALUES(current_window),
+           is_idle = VALUES(is_idle),
+           idle_duration_seconds = VALUES(idle_duration_seconds),
+           device_id = VALUES(device_id)`,
+        [
+          context.employeeId,
+          info?.isIdle ? 'idle' : 'active',
+          app,
+          info?.windowTitle ? cleanText(info.windowTitle, 255) : null,
+          info?.isIdle ? 1 : 0,
+          idleSec,
+          context.deviceId,
+        ],
+      );
+    } catch {
+      // Ignore if table schema differs
+    }
 
     await ActivityService.notifyWatchers(context.employeeId, 'activity:heartbeat', {
       employeeId: context.employeeId,
-      sessionId: context.sessionId,
+      sessionId: sessionId ?? null,
       currentApp: app,
       currentCategory: cat,
       isIdle: Boolean(info?.isIdle),
@@ -547,7 +590,11 @@ export class ActivityService {
       serverNow: new Date().toISOString(),
     });
 
-    return { sessionId: context.sessionId, status: context.sessionStatus, serverNow: new Date().toISOString() };
+    return {
+      sessionId: sessionId ?? null,
+      status: context.sessionStatus ?? (sessionId ? 'active' : 'standby'),
+      serverNow: new Date().toISOString(),
+    };
   }
 
   /** Configuration the agent needs: catalogue, exclusions and policy thresholds. Never returns other employees' data. */
@@ -664,7 +711,53 @@ export class ActivityService {
               started.value, ended.value, seconds, idleSeconds, foregroundSeconds, isLocked ? 1 : 0, windowTitle, ended.value, eventId,
             ],
           );
-          if (result.affectedRows > 0) accepted += 1; else duplicates += 1;
+          if (result.affectedRows > 0) {
+            accepted += 1;
+            try {
+              const workDate = started.value ? started.value.slice(0, 10) : today();
+              await execute(
+                `INSERT INTO employee_application_usage
+                  (employee_id, session_id, work_date, app_name, app_category, window_title, launched_at, closed_at, total_seconds, launch_count)
+                 VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, NOW(3)), ?, ?, 1)`,
+                [
+                  context.employeeId, context.sessionId, workDate, appName, category, windowTitle,
+                  started.value, ended.value, seconds,
+                ],
+              );
+              await execute(
+                `INSERT INTO employee_activity_events
+                  (employee_id, session_id, event_type, event_category, title, details, source, duration_seconds, occurred_at)
+                 VALUES (?, ?, 'app_focus', ?, ?, ?, 'desktop_agent', ?, COALESCE(?, NOW(3)))`,
+                [
+                  context.employeeId, context.sessionId, category, `Used ${appName}`, windowTitle, seconds, started.value,
+                ],
+              );
+              if (idleSeconds >= 300) {
+                const idleType = idleSeconds >= 1800 ? 'long_idle' : idleSeconds >= 900 ? 'extended_idle' : 'short_idle';
+                await execute(
+                  `INSERT INTO employee_idle_sessions
+                    (employee_id, session_id, work_date, started_at, ended_at, duration_seconds, idle_type, reason)
+                   VALUES (?, ?, ?, COALESCE(?, NOW(3)), ?, ?, ?, ?)`,
+                  [
+                    context.employeeId, context.sessionId, workDate, started.value, ended.value, idleSeconds, idleType,
+                    isLocked ? 'Screen Locked' : 'No keyboard/mouse activity',
+                  ],
+                );
+              }
+              await execute(
+                `INSERT INTO employee_tracking_status (employee_id, is_online, is_active, is_idle, current_app, last_event_at, last_heartbeat_at)
+                 VALUES (?, 1, 1, 0, ?, NOW(3), NOW(3))
+                 ON DUPLICATE KEY UPDATE
+                   is_online = 1, is_active = 1, is_idle = 0, current_app = VALUES(current_app),
+                   last_event_at = NOW(3), last_heartbeat_at = NOW(3)`,
+                [context.employeeId, appName],
+              );
+            } catch {
+              // Ignore duplicate keys on daily aggregation
+            }
+          } else {
+            duplicates += 1;
+          }
         } else if (event.type === 'browser') {
           const domain = cleanText(event.domain, 190).toLowerCase().replace(/^www\./, '');
           if (!domain || (!allowedDomains.has(domain) && ![...allowedDomains].some((allowed) => domain.endsWith(`.${allowed}`)))) { reject('unapproved_domain'); continue; }

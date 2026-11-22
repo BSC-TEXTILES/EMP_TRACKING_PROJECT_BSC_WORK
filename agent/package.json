@@ -1,10 +1,12 @@
 {
-  "name": "workforce-monitoring-agent",
-  "version": "1.0.0",
+  "name": "bsc-workforce-agent",
+  "version": "2.0.0",
+  "description": "BSC Textiles Employee Activity & Hardware Monitoring Agent",
   "private": true,
   "type": "module",
-  "description": "Transparent Windows desktop monitoring agent for the Workforce platform",
   "scripts": {
-    "start": "tsx src/index.ts"
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/agent.cjs",
+    "start": "node dist/agent.cjs",
+    "dev": "tsx src/index.ts"
   }
 }

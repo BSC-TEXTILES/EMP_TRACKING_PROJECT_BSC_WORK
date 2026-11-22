@@ -1,31 +1,28 @@
 @echo off
 setlocal
-title BSC Textiles Workforce Monitoring Agent
+title BSC Textiles - Workforce Monitoring Agent
 cd /d "%~dp0"
-
-if not defined WORKFORCE_URL (
-  set "WORKFORCE_URL=https://emptrack.bsctextiles.in"
-)
 
 echo ======================================================================
 echo BSC TEXTILES - WORKFORCE MONITORING AGENT
-echo Server: %WORKFORCE_URL%
+echo Davanagere (DAV) | Shivamogga (SHI) | Belagavi (BEL) | Head Office (HQ)
 echo ======================================================================
 echo.
 
-if not defined WORKFORCE_DEVICE_TOKEN (
-  if not defined WORKFORCE_EMAIL (
-    set /p WORKFORCE_EMAIL="Enter BSC Employee Email / Code: "
-  )
-  if not defined WORKFORCE_PASSWORD (
-    set /p WORKFORCE_PASSWORD="Enter Password: "
-  )
+where node >nul 2>nul
+if %errorlevel% neq 0 (
+  echo [ERROR] Node.js is not found in PATH.
+  echo Please install Node.js v18 or later.
+  pause
+  exit /b 1
 )
 
-echo Starting agent monitoring in background...
-call npx tsx src/index.ts
+if not exist "logs" mkdir "logs"
+if not exist "agent-data" mkdir "agent-data"
+
+echo Starting tracking agent...
+node dist\agent.cjs
 if %errorlevel% neq 0 (
-  echo.
-  echo [ERROR] Agent stopped with error code %errorlevel%.
+  echo [ERROR] Agent exited with code %errorlevel%.
   pause
 )

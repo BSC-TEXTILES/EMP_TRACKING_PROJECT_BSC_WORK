@@ -1,7 +1,7 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
-import { subtreeIds, visibleEmployeeIds } from '../lib/scope.js';
+import { assertEmployeeAccess, visibleEmployeeIds } from '../lib/scope.js';
 import { NotificationService } from './NotificationService.js';
 import { ActivityService, cleanText, parseJson } from './ActivityService.js';
 function number(value) {
@@ -38,14 +38,7 @@ const KPI_WEIGHTS = {
 };
 export class ActivityAnalyticsService {
     static async assertAccess(user, employeeId) {
-        if (employeeId === user.id || user.permissions.includes('activity.view.all'))
-            return;
-        if (user.permissions.includes('activity.view.team')) {
-            const ids = await subtreeIds(user.id);
-            if (ids.includes(employeeId))
-                return;
-        }
-        throw ApiError.forbidden('You do not have access to this employee activity.');
+        await assertEmployeeAccess(user, employeeId, 'activity');
     }
     static async employeeSummaries(ids, date) {
         if (ids.length === 0)
@@ -634,9 +627,10 @@ export class ActivityAnalyticsService {
         return rows.map((row) => ActivityAnalyticsService.mapWeekly(row));
     }
     static async selfDashboard(user, date, targetEmployeeId) {
-        const targetId = (targetEmployeeId && (user.permissions.includes('activity.view.team') || user.permissions.includes('activity.view.all') || (user.roleLevel && user.roleLevel >= 70)))
-            ? targetEmployeeId
-            : user.id;
+        if (targetEmployeeId && targetEmployeeId !== user.id) {
+            await ActivityAnalyticsService.assertAccess(user, targetEmployeeId);
+        }
+        const targetId = targetEmployeeId ?? user.id;
         const targetEmployee = targetId === user.id ? null : await queryOne(`SELECT e.id, e.full_name, e.email, e.employee_code, d.name AS department_name, dg.title AS designation_title, l.name AS location_name
        FROM employees e
        LEFT JOIN departments d ON d.id = e.department_id

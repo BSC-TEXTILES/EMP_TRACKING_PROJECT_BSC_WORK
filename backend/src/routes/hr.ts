@@ -23,15 +23,19 @@ hrRouter.get(
 // Employee Documents Management
 hrRouter.get(
   '/documents',
-  requireAny('employees.view.all', 'employees.view.team', 'employees.manage'),
+  requireAny('employees.view.all', 'employees.view.team', 'employees.manage', 'employees.view.own'),
   asyncHandler(async (req: AuthedRequest, res) => {
-    const data = await HrService.listDocuments({
-      employeeId: req.query.employeeId ? Number(req.query.employeeId) : undefined,
-      locationId: req.query.locationId ? Number(req.query.locationId) : undefined,
-      status: req.query.status ? String(req.query.status) : undefined,
-      documentType: req.query.documentType ? String(req.query.documentType) : undefined,
-      search: req.query.search ? String(req.query.search) : undefined,
-    });
+    const user = currentUser(req);
+    const data = await HrService.listDocuments(
+      {
+        employeeId: req.query.employeeId ? Number(req.query.employeeId) : undefined,
+        locationId: req.query.locationId ? Number(req.query.locationId) : undefined,
+        status: req.query.status ? String(req.query.status) : undefined,
+        documentType: req.query.documentType ? String(req.query.documentType) : undefined,
+        search: req.query.search ? String(req.query.search) : undefined,
+      },
+      user,
+    );
     res.json({ documents: data });
   }),
 );
@@ -53,7 +57,7 @@ hrRouter.post(
       }),
       req.body,
     );
-    const result = await HrService.uploadDocument(user.id, body);
+    const result = await HrService.uploadDocument(user, body);
     res.status(201).json(result);
   }),
 );
@@ -71,7 +75,7 @@ hrRouter.patch(
       }),
       req.body,
     );
-    res.json(await HrService.verifyDocument(id, user.id, body.status, body.notes));
+    res.json(await HrService.verifyDocument(id, user, body.status, body.notes));
   }),
 );
 
@@ -80,20 +84,26 @@ hrRouter.delete(
   requireAny('employees.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
-    res.json(await HrService.deleteDocument(id));
+    const user = currentUser(req);
+    res.json(await HrService.deleteDocument(id, user));
   }),
 );
 
 // Employee Salaries Management
 hrRouter.get(
   '/salaries',
-  requireAny('employees.manage', 'org.manage'),
+  requireAny('employees.manage', 'org.manage', 'employees.view.own'),
   asyncHandler(async (req: AuthedRequest, res) => {
-    const data = await HrService.listSalaries({
-      locationId: req.query.locationId ? Number(req.query.locationId) : undefined,
-      departmentId: req.query.departmentId ? Number(req.query.departmentId) : undefined,
-      search: req.query.search ? String(req.query.search) : undefined,
-    });
+    const user = currentUser(req);
+    const data = await HrService.listSalaries(
+      {
+        employeeId: req.query.employeeId ? Number(req.query.employeeId) : undefined,
+        locationId: req.query.locationId ? Number(req.query.locationId) : undefined,
+        departmentId: req.query.departmentId ? Number(req.query.departmentId) : undefined,
+        search: req.query.search ? String(req.query.search) : undefined,
+      },
+      user,
+    );
     res.json({ salaries: data });
   }),
 );
@@ -103,6 +113,7 @@ hrRouter.put(
   requireAny('employees.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const employeeId = intParam(req.params.employeeId);
+    const user = currentUser(req);
     const body = parseBody(
       z.object({
         basicSalary: z.number().nonnegative(),
@@ -123,22 +134,24 @@ hrRouter.put(
       }),
       req.body,
     );
-    res.json(await HrService.updateSalary(employeeId, body));
+    res.json(await HrService.updateSalary(employeeId, body, user));
   }),
 );
 
 // Monthly Payroll Management
 hrRouter.get(
   '/payroll',
-  requireAny('employees.manage', 'org.manage'),
+  requireAny('employees.manage', 'org.manage', 'employees.view.own'),
   asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
     const now = new Date();
     const month = req.query.month ? Number(req.query.month) : now.getMonth() + 1;
     const year = req.query.year ? Number(req.query.year) : now.getFullYear();
     const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
+    const employeeId = req.query.employeeId ? Number(req.query.employeeId) : undefined;
     const paymentStatus = req.query.paymentStatus ? String(req.query.paymentStatus) : undefined;
 
-    const data = await HrService.listPayrollRecords({ month, year, locationId, paymentStatus });
+    const data = await HrService.listPayrollRecords({ month, year, locationId, employeeId, paymentStatus }, user);
     res.json(data);
   }),
 );
@@ -147,6 +160,7 @@ hrRouter.post(
   '/payroll/generate',
   requireAny('employees.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
     const body = parseBody(
       z.object({
         month: z.number().int().min(1).max(12),
@@ -155,7 +169,7 @@ hrRouter.post(
       }),
       req.body,
     );
-    const result = await HrService.generateMonthlyPayroll(body.month, body.year, body.locationId);
+    const result = await HrService.generateMonthlyPayroll(body.month, body.year, user, body.locationId);
     res.json(result);
   }),
 );
@@ -165,6 +179,7 @@ hrRouter.patch(
   requireAny('employees.manage', 'org.manage'),
   asyncHandler(async (req: AuthedRequest, res) => {
     const id = intParam(req.params.id);
+    const user = currentUser(req);
     const body = parseBody(
       z.object({
         paymentStatus: z.enum(['draft', 'processed', 'paid', 'on_hold']),
@@ -173,6 +188,6 @@ hrRouter.patch(
       }),
       req.body,
     );
-    res.json(await HrService.updatePayrollStatus(id, body));
+    res.json(await HrService.updatePayrollStatus(id, body, user));
   }),
 );

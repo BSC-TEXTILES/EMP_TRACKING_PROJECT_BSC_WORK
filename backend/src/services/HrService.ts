@@ -1,5 +1,6 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
+import { allowedLocationIds, assertEmployeeAccess, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
 import type { AuthUser } from './AuthService.js';
 
 export interface HrDashboardMetrics {
@@ -40,9 +41,25 @@ export interface HrDashboardMetrics {
 export class HrService {
   /** Live HR dashboard statistics calculated directly from operational database records */
   static async getDashboard(user: AuthUser, locationId?: number): Promise<HrDashboardMetrics> {
-    const locParam = locationId ? Number(locationId) : null;
-    const locFilter = locParam ? 'AND e.location_id = ?' : '';
-    const locParams = locParam ? [locParam] : [];
+    const allowed = await allowedLocationIds(user);
+    let locFilter = '';
+    const locParams: unknown[] = [];
+
+    if (locationId) {
+      const validLoc = await requestedLocation(user, locationId);
+      if (validLoc) {
+        locFilter = 'AND e.location_id = ?';
+        locParams.push(validLoc);
+      }
+    } else if (allowed !== null) {
+      if (allowed.length === 0) {
+        locFilter = 'AND e.id = ?';
+        locParams.push(user.id);
+      } else {
+        locFilter = `AND e.location_id IN (${allowed.map(() => '?').join(',')})`;
+        locParams.push(...allowed);
+      }
+    }
 
     // Total, Active, Inactive, New Joinings
     const empMetrics = await queryOne<{
@@ -125,13 +142,19 @@ export class HrService {
     );
 
     // Location Breakdown
+    const locFilterWhere = allowed !== null && allowed.length > 0
+      ? `WHERE l.id IN (${allowed.map(() => '?').join(',')})`
+      : "WHERE l.code IN ('BEL', 'DAV', 'SHI', 'HQ')";
+    const locRowsParams = allowed !== null && allowed.length > 0 ? allowed : [];
+
     const locRows = await query<{ id: number; code: string; name: string; count: number }>(
       `SELECT l.id, l.code, l.name, COUNT(e.id) AS count
        FROM locations l
        LEFT JOIN employees e ON e.location_id = l.id AND e.status = 'active'
-       WHERE l.code IN ('BEL', 'DAV', 'SHI', 'HQ')
+       ${locFilterWhere}
        GROUP BY l.id, l.code, l.name
        ORDER BY l.name ASC`,
+      locRowsParams,
     );
 
     // Recent Joinings
@@ -221,23 +244,53 @@ export class HrService {
   }
 
   /** Employee Document management */
-  static async listDocuments(filters: {
-    employeeId?: number;
-    locationId?: number;
-    status?: string;
-    documentType?: string;
-    search?: string;
-  }) {
+  static async listDocuments(
+    filters: {
+      employeeId?: number;
+      locationId?: number;
+      status?: string;
+      documentType?: string;
+      search?: string;
+    },
+    user: AuthUser,
+  ) {
+    const isSuperAdmin = user.roleSlug === 'super_admin' || (user.roleLevel ?? 0) >= 100;
+    const isHr = user.permissions.includes('employees.manage') || user.permissions.includes('employees.view.all');
+    const isManager = user.permissions.includes('employees.view.team');
+
+    if (filters.employeeId) {
+      await assertEmployeeAccess(user, filters.employeeId, 'employees');
+    }
+
     const where: string[] = ['1=1'];
     const params: unknown[] = [];
 
     if (filters.employeeId) {
       where.push('ed.employee_id = ?');
       params.push(filters.employeeId);
+    } else if (!isSuperAdmin && !isHr && !isManager) {
+      // Ordinary employee: strictly own documents
+      where.push('ed.employee_id = ?');
+      params.push(user.id);
+    } else if (isManager && !isSuperAdmin && !isHr) {
+      // Manager: reporting subtree
+      const ids = await subtreeIds(user.id);
+      if (ids.length === 0) return [];
+      where.push(`ed.employee_id IN (${ids.map(() => '?').join(',')})`);
+      params.push(...ids);
+    } else if (isHr && !isSuperAdmin) {
+      // Location HR: allowed locations
+      const locClause = await locationEmployeeClause(user, 'ed.employee_id');
+      where.push(locClause.clause);
+      params.push(...locClause.params);
     }
+
     if (filters.locationId) {
-      where.push('e.location_id = ?');
-      params.push(filters.locationId);
+      const validLoc = await requestedLocation(user, filters.locationId);
+      if (validLoc) {
+        where.push('e.location_id = ?');
+        params.push(validLoc);
+      }
     }
     if (filters.status) {
       where.push('ed.status = ?');
@@ -308,7 +361,7 @@ export class HrService {
   }
 
   static async uploadDocument(
-    actorId: number,
+    actor: AuthUser,
     data: {
       employeeId: number;
       documentType: string;
@@ -319,6 +372,7 @@ export class HrService {
       notes?: string;
     },
   ) {
+    await assertEmployeeAccess(actor, data.employeeId, 'employees');
     const res = await execute(
       `INSERT INTO employee_documents (employee_id, document_type, title, file_url, file_size_bytes, file_type, notes, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`,
@@ -337,35 +391,78 @@ export class HrService {
 
   static async verifyDocument(
     documentId: number,
-    verifierId: number,
+    actor: AuthUser,
     status: 'verified' | 'rejected',
     notes?: string,
   ) {
-    const doc = await queryOne<{ id: number }>('SELECT id FROM employee_documents WHERE id = ?', [documentId]);
+    const doc = await queryOne<{ id: number; employee_id: number }>('SELECT id, employee_id FROM employee_documents WHERE id = ?', [documentId]);
     if (!doc) throw ApiError.notFound('Document record not found');
+    await assertEmployeeAccess(actor, doc.employee_id, 'employees');
 
     await execute(
       `UPDATE employee_documents
        SET status = ?, verified_by = ?, verified_at = NOW(3), notes = COALESCE(?, notes)
        WHERE id = ?`,
-      [status, verifierId, notes?.trim() ?? null, documentId],
+      [status, actor.id, notes?.trim() ?? null, documentId],
     );
     return { ok: true };
   }
 
-  static async deleteDocument(documentId: number) {
+  static async deleteDocument(documentId: number, actor: AuthUser) {
+    const doc = await queryOne<{ id: number; employee_id: number }>('SELECT id, employee_id FROM employee_documents WHERE id = ?', [documentId]);
+    if (!doc) throw ApiError.notFound('Document record not found');
+    await assertEmployeeAccess(actor, doc.employee_id, 'employees');
     await execute('DELETE FROM employee_documents WHERE id = ?', [documentId]);
     return { ok: true };
   }
 
   /** Employee Salaries management */
-  static async listSalaries(filters: { locationId?: number; departmentId?: number; search?: string }) {
+  static async listSalaries(
+    filters: {
+      employeeId?: number;
+      locationId?: number;
+      departmentId?: number;
+      search?: string;
+    },
+    user: AuthUser,
+  ) {
+    const isSuperAdmin = user.roleSlug === 'super_admin' || (user.roleLevel ?? 0) >= 100;
+    const isHr = user.permissions.includes('employees.manage') || user.permissions.includes('org.manage') || user.permissions.includes('employees.view.all');
+    const isManager = user.permissions.includes('employees.view.team');
+
+    if (filters.employeeId) {
+      await assertEmployeeAccess(user, filters.employeeId, 'employees');
+    }
+
     const where: string[] = ['e.status = "active"'];
     const params: unknown[] = [];
 
+    if (filters.employeeId) {
+      where.push('e.id = ?');
+      params.push(filters.employeeId);
+    } else if (!isSuperAdmin && !isHr && !isManager) {
+      // Ordinary employee: strictly own salary
+      where.push('e.id = ?');
+      params.push(user.id);
+    } else if (isManager && !isSuperAdmin && !isHr) {
+      // Manager: reporting subtree
+      const ids = await subtreeIds(user.id);
+      if (ids.length === 0) return [];
+      where.push(`e.id IN (${ids.map(() => '?').join(',')})`);
+      params.push(...ids);
+    } else if (isHr && !isSuperAdmin) {
+      // Location HR: allowed locations
+      const locClause = await locationEmployeeClause(user, 'e.id');
+      where.push(locClause.clause);
+      params.push(...locClause.params);
+    }
+
     if (filters.locationId) {
-      where.push('e.location_id = ?');
-      params.push(filters.locationId);
+      const validLoc = await requestedLocation(user, filters.locationId);
+      if (validLoc) {
+        where.push('e.location_id = ?');
+        params.push(validLoc);
+      }
     }
     if (filters.departmentId) {
       where.push('e.department_id = ?');
@@ -478,7 +575,9 @@ export class HrService {
       uanNumber?: string;
       effectiveFrom?: string;
     },
+    actor: AuthUser,
   ) {
+    await assertEmployeeAccess(actor, employeeId, 'employees');
     const basic = Number(data.basicSalary) || 0;
     const hra = Number(data.hra) || 0;
     const special = Number(data.specialAllowance) || 0;
@@ -545,18 +644,55 @@ export class HrService {
   }
 
   /** Monthly Payroll Records generation & listing */
-  static async listPayrollRecords(params: {
-    month: number;
-    year: number;
-    locationId?: number;
-    paymentStatus?: string;
-  }) {
+  static async listPayrollRecords(
+    params: {
+      month: number;
+      year: number;
+      locationId?: number;
+      paymentStatus?: string;
+      employeeId?: number;
+    },
+    user: AuthUser,
+  ) {
+    const isSuperAdmin = user.roleSlug === 'super_admin' || (user.roleLevel ?? 0) >= 100;
+    const isHr = user.permissions.includes('employees.manage') || user.permissions.includes('org.manage') || user.permissions.includes('employees.view.all');
+    const isManager = user.permissions.includes('employees.view.team');
+
+    if (params.employeeId) {
+      await assertEmployeeAccess(user, params.employeeId, 'employees');
+    }
+
     const where: string[] = ['pr.month = ?', 'pr.year = ?'];
     const sqlParams: unknown[] = [params.month, params.year];
 
+    if (params.employeeId) {
+      where.push('pr.employee_id = ?');
+      sqlParams.push(params.employeeId);
+    } else if (!isSuperAdmin && !isHr && !isManager) {
+      // Ordinary employee: strictly own payroll records
+      where.push('pr.employee_id = ?');
+      sqlParams.push(user.id);
+    } else if (isManager && !isSuperAdmin && !isHr) {
+      // Manager: reporting subtree
+      const ids = await subtreeIds(user.id);
+      if (ids.length === 0) {
+        return { records: [], summary: { totalGross: 0, totalDeductions: 0, totalNetPay: 0, totalCount: 0, paidCount: 0 } };
+      }
+      where.push(`pr.employee_id IN (${ids.map(() => '?').join(',')})`);
+      sqlParams.push(...ids);
+    } else if (isHr && !isSuperAdmin) {
+      // Location HR: allowed locations
+      const locClause = await locationEmployeeClause(user, 'pr.employee_id');
+      where.push(locClause.clause);
+      sqlParams.push(...locClause.params);
+    }
+
     if (params.locationId) {
-      where.push('e.location_id = ?');
-      sqlParams.push(params.locationId);
+      const validLoc = await requestedLocation(user, params.locationId);
+      if (validLoc) {
+        where.push('e.location_id = ?');
+        sqlParams.push(validLoc);
+      }
     }
     if (params.paymentStatus) {
       where.push('pr.payment_status = ?');
@@ -644,9 +780,22 @@ export class HrService {
     };
   }
 
-  static async generateMonthlyPayroll(month: number, year: number, locationId?: number) {
-    const locFilter = locationId ? 'AND e.location_id = ?' : '';
-    const locParams = locationId ? [locationId] : [];
+  static async generateMonthlyPayroll(month: number, year: number, actor: AuthUser, locationId?: number) {
+    const allowed = await allowedLocationIds(actor);
+    let targetLoc = locationId;
+    if (allowed !== null) {
+      if (targetLoc && !allowed.includes(targetLoc)) {
+        throw ApiError.forbidden('You do not have access to generate payroll for this location');
+      }
+    }
+    const locFilter = targetLoc
+      ? 'AND e.location_id = ?'
+      : allowed !== null && allowed.length > 0
+        ? `AND e.location_id IN (${allowed.join(',')})`
+        : allowed !== null && allowed.length === 0
+          ? 'AND 1=0'
+          : '';
+    const locParams = targetLoc ? [targetLoc] : [];
 
     const employees = await query<{
       id: number;
@@ -742,7 +891,12 @@ export class HrService {
       referenceNo?: string;
       notes?: string;
     },
+    actor: AuthUser,
   ) {
+    const rec = await queryOne<{ id: number; employee_id: number }>('SELECT id, employee_id FROM payroll_records WHERE id = ?', [id]);
+    if (!rec) throw ApiError.notFound('Payroll record not found');
+    await assertEmployeeAccess(actor, rec.employee_id, 'employees');
+
     const paidAt = data.paymentStatus === 'paid' ? 'NOW(3)' : 'NULL';
     await execute(
       `UPDATE payroll_records

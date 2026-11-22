@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, Pagination, SectionHeader, Skeleton, StatCard, StatusBadge, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
+import { EmployeeActivityDetailsModal } from '../components/EmployeeActivityDetailsModal';
 import { cx, formatDate, formatDateTime, minutesToHours, titleize } from '../lib/format';
 import type { EmployeeRow } from '../lib/types';
 
@@ -57,6 +58,7 @@ export default function Employees() {
   const [structure, setStructure] = useState<Structure | null>(null);
   const [detail, setDetail] = useState<EmployeeDetail | null>(null);
   const [modalTab, setModalTab] = useState<'overview' | 'edit' | 'performance'>('overview');
+  const [selectedActivityEmployeeId, setSelectedActivityEmployeeId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [orgEdit, setOrgEdit] = useState(false);
   const [orgForm, setOrgForm] = useState({
@@ -399,10 +401,10 @@ export default function Employees() {
                           <span className={cx(
                             'inline-flex items-center gap-1 font-mono font-extrabold text-xs px-2.5 py-0.5 rounded-md border w-fit shadow-2xs',
                             employee.locationCode === 'BEL' ? 'bg-blue-50 text-blue-900 border-blue-300' :
-                            employee.locationCode === 'DAV' ? 'bg-purple-50 text-purple-900 border-purple-300' :
-                            employee.locationCode === 'SHI' ? 'bg-emerald-50 text-emerald-900 border-emerald-300' :
-                            employee.locationCode === 'ALL' ? 'bg-amber-100 text-amber-900 border-amber-300 font-black' :
-                            'bg-slate-100 text-slate-800 border-slate-300'
+                              employee.locationCode === 'DAV' ? 'bg-purple-50 text-purple-900 border-purple-300' :
+                                employee.locationCode === 'SHI' ? 'bg-emerald-50 text-emerald-900 border-emerald-300' :
+                                  employee.locationCode === 'ALL' ? 'bg-amber-100 text-amber-900 border-amber-300 font-black' :
+                                    'bg-slate-100 text-slate-800 border-slate-300'
                           )}>
                             <Icon name="building" size={11} />
                             {employee.locationCode === 'ALL' ? 'ALL 3 STORES' : (employee.locationCode || employee.locationName || 'Unassigned')}
@@ -454,6 +456,18 @@ export default function Employees() {
                               </button>
                             </>
                           )}
+                          <button
+                            type="button"
+                            title="User Details & Activity Tracking"
+                            className="btn-secondary btn-xs inline-flex items-center gap-1 font-semibold !text-brand-800 !bg-brand-50 !border-brand-300 hover:!bg-brand-100 cursor-pointer shadow-2xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedActivityEmployeeId(employee.id);
+                            }}
+                          >
+                            <Icon name="activity" size={13} className="text-brand-700" />
+                            <span>User Details</span>
+                          </button>
                           <button
                             type="button"
                             title="View full details"
@@ -556,10 +570,20 @@ export default function Employees() {
                 })()}>{detail.status === 'active' ? 'Deactivate' : 'Reactivate'}</button>
               )}
               {modalTab === 'overview' ? (
-                <button type="button" className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={() => setModalTab('edit')}>
-                  <Icon name="edit" size={14} />
-                  <span>Edit employee</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary btn-sm inline-flex items-center gap-1.5 !text-brand-800 !bg-brand-50 !border-brand-300 hover:!bg-brand-100 shadow-2xs"
+                    onClick={() => setSelectedActivityEmployeeId(detail.id)}
+                  >
+                    <Icon name="activity" size={14} className="text-brand-700" />
+                    <span>User Details & Activity</span>
+                  </button>
+                  <button type="button" className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={() => setModalTab('edit')}>
+                    <Icon name="edit" size={14} />
+                    <span>Edit employee</span>
+                  </button>
+                </>
               ) : (
                 <button type="button" className="btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => setModalTab('overview')}>
                   <Icon name="eye" size={14} />
@@ -1257,6 +1281,14 @@ export default function Employees() {
           </Field>
         </form>
       </Modal>
+
+      {selectedActivityEmployeeId && (
+        <EmployeeActivityDetailsModal
+          open={Boolean(selectedActivityEmployeeId)}
+          onClose={() => setSelectedActivityEmployeeId(null)}
+          employeeId={selectedActivityEmployeeId}
+        />
+      )}
     </div>
   );
 }

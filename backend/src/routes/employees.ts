@@ -4,6 +4,7 @@ import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/ht
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { EmployeeService } from '../services/EmployeeService.js';
 import { recordAudit } from '../lib/audit.js';
+import { query } from '../db/index.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
 export const employeesRouter = Router();
@@ -24,7 +25,7 @@ employeesRouter.get(
   '/picker',
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
-    res.json({ employees: await EmployeeService.picker(user.id) });
+    res.json({ employees: await EmployeeService.picker(user) });
   }),
 );
 
@@ -54,6 +55,16 @@ employeesRouter.get(
   asyncHandler(async (req: AuthedRequest, res) => {
     const user = currentUser(req);
     res.json({ locations: await EmployeeService.getUserAllowedLocations(user) });
+  }),
+);
+
+employeesRouter.get(
+  '/locations',
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const locations = await query<{ id: number; code: string; name: string; is_active: number }>(
+      'SELECT id, code, name, is_active FROM locations WHERE is_active = 1 ORDER BY name',
+    );
+    res.json({ locations: locations.map((l) => ({ id: l.id, code: l.code, name: l.name, isActive: Boolean(l.is_active) })) });
   }),
 );
 
