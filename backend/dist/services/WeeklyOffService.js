@@ -1,6 +1,6 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { getSettings, recordAudit, setSetting } from '../lib/audit.js';
-import { MONTH_NAMES, WEEKDAY_NAMES, dateRange, datesInMonth, daysInMonth, eligibleWeeklyOffDates, isLeapYear, isWeeklyOff, isoDate, normalizeWeekday, sundaysInMonth, weekdayOf, weekdaysInMonth, } from '../lib/calendar.js';
+import { MONTH_NAMES, WEEKDAY_NAMES, dateRange, datesInMonth, daysInMonth, eligibleWeeklyOffDates, isLeapYear, isWeeklyOff, isoDate, normalizeWeekday, sundaysInMonth, weekdayOf, } from '../lib/calendar.js';
 import { addDays, today } from '../lib/dates.js';
 import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
@@ -258,8 +258,9 @@ export class WeeklyOffService {
         const exitDate = employee.deactivated_at ? String(employee.deactivated_at).slice(0, 10) : null;
         const start = isoDate(year, month, 1);
         const end = isoDate(year, month, daysInMonth(year, month));
-        const allDates = weekdaysInMonth(year, month, weekday);
-        const eligible = eligibleWeeklyOffDates(year, month, weekday, joiningDate, exitDate);
+        const sundays = sundaysInMonth(year, month);
+        const allDates = sundays;
+        const eligible = sundays.filter((date) => (!joiningDate || date >= joiningDate.slice(0, 10)) && (!exitDate || date <= exitDate.slice(0, 10)));
         const [requests, attendance] = await Promise.all([
             run(`SELECT id, start_date, status FROM leave_requests
          WHERE employee_id = ? AND request_kind = 'weekly_off' AND status IN ('pending_manager','pending_hr','approved')
@@ -270,7 +271,10 @@ export class WeeklyOffService {
         const pending = new Map();
         for (const row of requests) {
             const date = String(row.start_date).slice(0, 10);
-            (row.status === 'approved' ? approved : pending).set(date, Number(row.id));
+            if (row.status === 'approved')
+                approved.set(date, Number(row.id));
+            else if (row.status === 'pending_manager' || row.status === 'pending_hr')
+                pending.set(date, Number(row.id));
         }
         const markedOff = new Set();
         const worked = new Set();
@@ -278,8 +282,11 @@ export class WeeklyOffService {
             const date = String(row.work_date).slice(0, 10);
             if (row.check_in_at)
                 worked.add(date);
-            else if (row.status === 'weekly_off')
+            else if (row.status === 'weekly_off') {
                 markedOff.add(date);
+                if (!approved.has(date))
+                    approved.set(date, 0);
+            }
         }
         const now = today();
         const currentMonthStart = `${now.slice(0, 7)}-01`;
@@ -303,8 +310,11 @@ export class WeeklyOffService {
             return { date, day: Number(date.slice(8, 10)), status, requestId: approved.get(date) ?? pending.get(date) ?? null };
         });
         const allocated = eligible.length;
-        const taken = dates.filter((d) => d.status === 'taken').length;
-        const pendingCount = dates.filter((d) => d.status === 'pending').length;
+        // Count all approved weekly offs in this month (including those taken on weekdays)
+        const taken = approved.size;
+        const pendingCount = pending.size;
+        const takenDates = Array.from(approved.keys()).sort();
+        const pendingDates = Array.from(pending.keys()).sort();
         return {
             weekday,
             weekdayName: WEEKDAY_NAMES[weekday],
@@ -318,8 +328,12 @@ export class WeeklyOffService {
             pending: pendingCount,
             remaining: Math.max(0, allocated - taken),
             available: Math.max(0, allocated - taken - pendingCount),
-            worked: dates.filter((d) => d.status === 'worked').length,
-            notEligible: dates.filter((d) => d.status === 'not_eligible').length,
+            worked: worked.size,
+            notEligible: Math.max(0, allDates.length - eligible.length),
+            takenDates,
+            pendingDates,
+            sundays: allDates,
+            sundaysCount: allDates.length,
         };
     }
     /** Stores the monthly allocation snapshot (employee × month) so HR reports read persisted figures. */

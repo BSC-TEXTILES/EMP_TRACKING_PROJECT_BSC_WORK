@@ -74,8 +74,8 @@ interface HalfDayPreview {
 
 /** Workflow wording shown to every role (employee, manager, HR, admin). */
 const STATUS_LABEL: Record<string, string> = {
-  pending_manager: 'Pending Manager Approval',
-  pending_hr: 'Approved by Manager · Pending HR Approval',
+  pending_hr: 'Pending Location HR Verification',
+  pending_manager: 'Verified by HR · Pending Manager Approval',
   approved: 'Approved',
   rejected: 'Rejected',
   cancelled: 'Cancelled',
@@ -83,10 +83,10 @@ const STATUS_LABEL: Record<string, string> = {
 
 const HISTORY_LABEL: Record<string, string> = {
   submitted: 'Submitted',
-  manager_approved: 'Approved by manager',
-  manager_rejected: 'Rejected by manager',
-  hr_approved: 'Approved by HR',
-  hr_rejected: 'Rejected by HR',
+  hr_approved: 'Verified by Location HR',
+  hr_rejected: 'Rejected by Location HR',
+  manager_approved: 'Approved by Manager',
+  manager_rejected: 'Rejected by Manager',
   cancelled: 'Cancelled',
 };
 
@@ -111,9 +111,7 @@ function localToday(): string {
 }
 
 function requestTitle(leave: LeaveItem): string {
-  if (leave.requestKind === 'weekly_off') return 'Weekly Off';
-  if (leave.requestKind === 'half_day' || leave.isHalfDay) return `Half-Day Leave · ${leave.leaveType}`;
-  return leave.leaveType;
+  return 'Week Off';
 }
 
 export default function Leave() {
@@ -281,13 +279,9 @@ export default function Leave() {
   }, [applyOpen]);
 
   const canSubmit =
-    Boolean(routing?.canApply && hrApproverId) &&
+    Boolean(routing?.canApply && hrApproverId && woDate) &&
     !busy &&
-    (requestType === 'weekly_off'
-      ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) > 0
-      : requestType === 'half_day'
-        ? Boolean(hdDate && halfPreview)
-        : Boolean(selectedLeaveTypeId && startDate && endDate && endDate >= startDate && (breakdown?.chargedDays ?? 0) > 0));
+    (woSummary?.weeklyOffs.available ?? 0) > 0;
 
   const apply = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -295,36 +289,16 @@ export default function Leave() {
     setBusy(true);
     try {
       const trimmed = reason.trim();
-      let documentFileId: number | undefined;
-      if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
-
-      if (requestType === 'weekly_off') {
-        if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
-          toast.error('You have no saved weekly offs available to take.');
-          return;
-        }
-        await api.post('/leave/weekly-off', { date: woDate, reason: trimmed || undefined, hrApproverId: Number(hrApproverId) });
-        toast.success(`Weekly off request for ${formatDate(woDate)} submitted for approval.`);
-      } else if (requestType === 'half_day') {
-        await api.post('/leave/half-day', {
-          date: hdDate,
-          slot: hdSlot,
-          reason: trimmed || undefined,
-          documentFileId,
-          hrApproverId: Number(hrApproverId),
-        });
-        toast.success(`Half-day leave (${SLOT_LABEL[hdSlot]}) for ${formatDate(hdDate)} submitted for approval.`);
-      } else {
-        await api.post('/leave', {
-          leaveTypeId: Number(selectedLeaveTypeId),
-          hrApproverId: Number(hrApproverId),
-          startDate,
-          endDate,
-          reason: trimmed || undefined,
-          documentFileId,
-        });
-        toast.success('Leave request submitted for approval.');
+      if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
+        toast.error('You have no saved weekly offs available to take this month.');
+        return;
       }
+      await api.post('/leave/weekly-off', {
+        date: woDate,
+        reason: trimmed || undefined,
+        hrApproverId: Number(hrApproverId),
+      });
+      toast.success(`Week-off request for ${formatDate(woDate)} submitted to Location HR for verification.`);
       setApplyOpen(false);
       resetForm();
       await load();
@@ -341,7 +315,13 @@ export default function Leave() {
     if (!approve && !note) return;
     try {
       await api.post(`/leave/${id}/decide`, { approve, note: note || undefined, stage });
-      toast.success(approve ? (stage === 'manager' ? 'Approved and sent to HR.' : 'Request approved.') : 'Request rejected.');
+      toast.success(
+        approve
+          ? stage === 'hr'
+            ? 'Verified by Location HR · Forwarded to Reporting Manager.'
+            : 'Approved by Manager · Attendance marked as Weekly Off.'
+          : `Request rejected by ${stage === 'hr' ? 'Location HR' : 'Reporting Manager'}.`,
+      );
       await load();
     } catch (caught) {
       toast.error(errorMessage(caught));
@@ -590,11 +570,11 @@ export default function Leave() {
                         </div>
                       </div>
 
-                      {/* Step 2: Manager Review */}
+                      {/* Step 2: Location HR Verification */}
                       {(() => {
-                        const isDone = Boolean(leave.managerActionAt) || leave.status === 'pending_hr' || leave.status === 'approved';
-                        const isCurrent = leave.status === 'pending_manager';
-                        const isRejected = leave.status === 'rejected' && !leave.managerActionAt;
+                        const isDone = Boolean(leave.hrActionAt) || leave.status === 'pending_manager' || leave.status === 'approved';
+                        const isCurrent = leave.status === 'pending_hr';
+                        const isRejected = leave.status === 'rejected' && !leave.hrActionAt;
                         return (
                           <div className={cx(
                             'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
@@ -608,21 +588,21 @@ export default function Leave() {
                             </span>
                             <div className="min-w-0">
                               <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
-                                2. Manager
+                                2. Location HR
                               </p>
-                              <p className="text-[9px] text-ink-500 truncate" title={leave.managerName ?? 'Direct Manager'}>
-                                {isDone ? 'Approved' : isCurrent ? 'Awaiting Review' : isRejected ? 'Rejected' : leave.managerName ?? 'Manager Review'}
+                              <p className="text-[9px] text-ink-500 truncate" title={leave.hrName ?? 'Location HR'}>
+                                {isDone ? 'Verified' : isCurrent ? 'Awaiting HR' : isRejected ? 'Rejected' : leave.hrName ?? 'HR Verification'}
                               </p>
                             </div>
                           </div>
                         );
                       })()}
 
-                      {/* Step 3: HR Review */}
+                      {/* Step 3: Reporting Manager Review */}
                       {(() => {
-                        const isDone = Boolean(leave.hrActionAt) || leave.status === 'approved';
-                        const isCurrent = leave.status === 'pending_hr';
-                        const isRejected = leave.status === 'rejected' && Boolean(leave.managerActionAt) && !leave.hrActionAt;
+                        const isDone = Boolean(leave.managerActionAt) || leave.status === 'approved';
+                        const isCurrent = leave.status === 'pending_manager';
+                        const isRejected = leave.status === 'rejected' && Boolean(leave.hrActionAt) && !leave.managerActionAt;
                         return (
                           <div className={cx(
                             'flex items-center gap-2 rounded-lg p-2 border shadow-2xs',
@@ -636,10 +616,10 @@ export default function Leave() {
                             </span>
                             <div className="min-w-0">
                               <p className={cx('text-[11px] font-bold truncate', isDone ? 'text-emerald-950' : isCurrent ? 'text-amber-950' : isRejected ? 'text-red-950' : 'text-ink-700')}>
-                                3. HR Final
+                                3. Manager
                               </p>
-                              <p className="text-[9px] text-ink-500 truncate" title={leave.hrName ?? 'HR Operations'}>
-                                {isDone ? 'Approved' : isCurrent ? 'Awaiting HR' : isRejected ? 'Rejected' : leave.hrName ?? 'HR Review'}
+                              <p className="text-[9px] text-ink-500 truncate" title={leave.managerName ?? 'Direct Manager'}>
+                                {isDone ? 'Approved' : isCurrent ? 'Awaiting Manager' : isRejected ? 'Rejected' : leave.managerName ?? 'Manager Review'}
                               </p>
                             </div>
                           </div>
@@ -696,16 +676,24 @@ export default function Leave() {
                     <Icon name="eye" size={13} className="text-brand-600" />
                     Live View
                   </button>
-                  {leave.canApproveManager && (
-                    <>
-                      <button type="button" className="btn-primary btn-sm" onClick={() => void decide(leave.id, true, 'manager')}>Approve</button>
-                      <button type="button" className="btn-secondary btn-sm" onClick={() => void decide(leave.id, false, 'manager')}>Reject</button>
-                    </>
-                  )}
                   {leave.canApproveHr && (
                     <>
-                      <button type="button" className="btn-primary btn-sm" onClick={() => void decide(leave.id, true, 'hr')}>HR approve</button>
-                      <button type="button" className="btn-secondary btn-sm" onClick={() => void decide(leave.id, false, 'hr')}>HR reject</button>
+                      <button type="button" className="btn-primary btn-sm bg-brand-600 hover:bg-brand-700" onClick={() => void decide(leave.id, true, 'hr')}>
+                        HR Verify
+                      </button>
+                      <button type="button" className="btn-secondary btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => void decide(leave.id, false, 'hr')}>
+                        HR Reject
+                      </button>
+                    </>
+                  )}
+                  {leave.canApproveManager && (
+                    <>
+                      <button type="button" className="btn-primary btn-sm bg-emerald-600 hover:bg-emerald-700" onClick={() => void decide(leave.id, true, 'manager')}>
+                        Manager Approve
+                      </button>
+                      <button type="button" className="btn-secondary btn-sm text-red-600 border-red-200 hover:bg-red-50" onClick={() => void decide(leave.id, false, 'manager')}>
+                        Manager Reject
+                      </button>
                     </>
                   )}
                   {leave.canCancel && (
@@ -742,292 +730,186 @@ export default function Leave() {
         </div>
       </Card>
 
-      <Modal open={applyOpen} onClose={() => setApplyOpen(false)} title="Apply for leave" description="Your manager approves first, then HR. Balances are validated on the server."
-        footer={<><button className="btn-secondary" onClick={() => setApplyOpen(false)}>Cancel</button><button className="btn-primary" form="leave-form" type="submit" disabled={!canSubmit}>{busy ? 'Submitting…' : 'Submit request'}</button></>}>
+      <Modal
+        open={applyOpen}
+        onClose={() => setApplyOpen(false)}
+        title="Apply for Week Off"
+        description="Select any eligible calendar date in the month. Verified by your Location HR, then approved by your Reporting Manager."
+        footer={
+          <>
+            <button type="button" className="btn-secondary" onClick={() => setApplyOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn-primary" form="leave-form" type="submit" disabled={!canSubmit}>
+              {busy ? 'Submitting…' : 'Submit Week-Off Request'}
+            </button>
+          </>
+        }
+      >
         <form id="leave-form" onSubmit={apply} className="space-y-4">
-          {routingError ? <div role="alert" className="text-sm text-red-600">{routingError}<button type="button" className="btn-secondary ml-2" onClick={() => void loadRouting()}>Retry</button></div> : !routing ? <p role="status">Loading your approval route…</p> : (
-            <div className="space-y-3 rounded-lg border border-brand-200 bg-brand-50 p-3">
+          {routingError ? (
+            <div role="alert" className="text-sm text-red-600">
+              {routingError}
+              <button type="button" className="btn-secondary ml-2" onClick={() => void loadRouting()}>
+                Retry
+              </button>
+            </div>
+          ) : !routing ? (
+            <p role="status">Loading your approval route…</p>
+          ) : (
+            <div className="space-y-3 rounded-xl border border-brand-200 bg-brand-50/80 p-3.5">
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Employee"><input className="input" value={routing.employeeName} readOnly /></Field>
-                <Field label="Assigned location"><input className="input" value={routing.locationName ?? 'Not assigned'} readOnly /></Field>
-                <Field label="Reporting manager"><input className="input" value={routing.manager?.name ?? 'Not assigned'} readOnly /></Field>
-                <Field label="HR approver" required><select className="input" value={hrApproverId} onChange={(event) => setHrApproverId(event.target.value)} required>
-                  <option value="">Select location HR</option>
-                  {routing.hrApprovers.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-                </select></Field>
+                <Field label="Employee">
+                  <input className="input font-medium" value={routing.employeeName} readOnly />
+                </Field>
+                <Field label="Assigned location">
+                  <input className="input font-medium" value={routing.locationName ?? 'Not assigned'} readOnly />
+                </Field>
+                <Field label="Reporting manager">
+                  <input className="input font-medium" value={routing.manager?.name ?? 'Not assigned'} readOnly />
+                </Field>
+                <Field label="Location HR approver" required>
+                  <select
+                    className="input font-medium"
+                    value={hrApproverId}
+                    onChange={(event) => setHrApproverId(event.target.value)}
+                    required
+                  >
+                    <option value="">Select location HR</option>
+                    {routing.hrApprovers.map((person) => (
+                      <option key={person.id} value={person.id}>
+                        {person.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
               </div>
-              <p className="text-xs text-ink-600">1. Submit request → 2. {routing.manager?.name ?? 'Manager'} reviews → 3. {routing.hrApprovers.find((person) => String(person.id) === hrApproverId)?.name ?? 'Location HR'} gives final approval → 4. Balance and calendar update.</p>
-              {routing.issues.map((issue) => <p key={issue} role="alert" className="text-xs text-red-700">{issue}</p>)}
+              <p className="text-xs text-brand-900 font-medium">
+                Flow: 1. Submit week-off → 2. Location HR verifies → 3. Reporting Manager approves → 4. Attendance marked as Weekly Off & 1 day deducted from quota.
+              </p>
+              {routing.issues.map((issue) => (
+                <p key={issue} role="alert" className="text-xs text-red-700">
+                  {issue}
+                </p>
+              ))}
             </div>
           )}
 
-          <div className="space-y-1.5">
-            <span className="label font-bold text-ink-900">Request type</span>
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3" role="group" aria-label="Request type">
-              {optionButton('regular', 'calendar', 'Regular Leave', 'CL / SL / EL')}
-              {optionButton('weekly_off', 'calendar', 'Weekly Off', `Saved (${w?.available ?? 0} avail)`)}
-              {optionButton('half_day', 'clock', 'Half-Day Leave', '0.5 day')}
+          {/* Month Selector & Entitlement Overview */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="label mb-0 block font-bold text-ink-900">Monthly Week-Off Entitlement</span>
+                <span className="text-[11px] text-ink-500">Calculated dynamically based on number of Sundays in month</span>
+              </div>
+              <MonthPicker
+                year={woPeriod.year}
+                month={woPeriod.month}
+                onChange={(year, month) => {
+                  setWoPeriod({ year, month });
+                  setWoDate('');
+                }}
+              />
             </div>
-          </div>
 
-          {requestType === 'regular' ? (
-            <>
-              <Field label="Leave type" required>
-                <select
-                  className="input font-medium"
-                  value={selectedLeaveTypeId}
-                  onChange={(e) => setSelectedLeaveTypeId(e.target.value)}
-                  required
-                >
-                  <option value="">Select leave type</option>
-                  {types.map((t) => {
-                    const bal = balances.find((b) => b.leaveTypeId === t.id);
-                    let label = t.name;
-                    if (t.code === 'LWP') label += ' (Unpaid · Loss of Pay)';
-                    else if (t.code === 'CO') label += ` (${bal?.available ?? 0} days available · Compensatory Off)`;
-                    else if (t.code === 'ML') label += ' (Maternity · 26 weeks · Medical doc required)';
-                    else if (t.code === 'PL') label += ' (Paternity · Up to 10 days · Doc required)';
-                    else label += ` (${bal?.available ?? t.annual_quota} days available)`;
-                    return (
-                      <option key={t.id} value={t.id}>
-                        {label}
-                      </option>
-                    );
-                  })}
-                </select>
-              </Field>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Start date" required>
-                  <input
-                    type="date"
-                    className="input font-medium"
-                    value={startDate}
-                    min={localToday()}
-                    onChange={(e) => {
-                      setStartDate(e.target.value);
-                      if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
-                    }}
-                    required
-                  />
-                </Field>
-                <Field label="End date" required>
-                  <input
-                    type="date"
-                    className="input font-medium"
-                    value={endDate}
-                    min={startDate || localToday()}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    required
-                  />
-                </Field>
+            {/* Monthly Saved Weekly-Off Balance Summary Card */}
+            <div className="grid grid-cols-2 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-950 sm:grid-cols-4 shadow-xs">
+              <div>
+                <span className="text-[11px] text-emerald-700 block">Total Sundays</span>
+                <strong className="text-sm font-bold">{woSummary?.totalSundays ?? 5}</strong>
               </div>
-
-              {breakdownError ? (
-                <p role="alert" className="text-xs text-red-600">{breakdownError}</p>
-              ) : breakdown ? (
-                <div className={breakdown.chargedDays > 0 ? 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700' : 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'}>
-                  {breakdown.calendarCounted ? (
-                    <p><strong>{breakdown.chargedDays}</strong> calendar day(s) (maternity leave is counted in calendar days).</p>
-                  ) : breakdown.chargedDays > 0 ? (
-                    <p>
-                      <strong>{breakdown.chargedDays}</strong> day(s) will be deducted from your leave balance
-                      {breakdown.weeklyOffDays + breakdown.holidayDays > 0 &&
-                        ` (${breakdown.calendarDays} calendar days; ${breakdown.weeklyOffDays ? `${breakdown.weeklyOffDays} Sunday weekly off(s)` : ''}${breakdown.weeklyOffDays && breakdown.holidayDays ? ' and ' : ''}${breakdown.holidayDays ? `${breakdown.holidayDays} public holiday(s)` : ''} not charged)`}
-                      .
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      <p className="font-semibold text-amber-900">
-                        These selected dates ({startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} to ${formatDate(endDate)}`}) are Sunday weekly off(s) or public holidays.
-                      </p>
-                      {breakdown.weeklyOffDays > 0 && (
-                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-amber-200">
-                          <span className="text-[11px] text-amber-800 font-medium">
-                            Want to take this date as your scheduled weekly off from your monthly balance?
-                          </span>
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
-                            onClick={() => {
-                              setRequestType('weekly_off');
-                              setWoDate(startDate);
-                            }}
-                          >
-                            <Icon name="calendar" size={12} />
-                            Apply as Saved Weekly Off
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ) : null}
-
-              <Field label="Supporting document (optional)">
-                <input type="file" className="input" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
-              </Field>
-            </>
-          ) : requestType === 'weekly_off' ? (
-            <>
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <span className="label mb-0 block font-bold text-ink-900">Select weekly-off date</span>
-                    <span className="text-[11px] text-ink-500">Only saved/allocated weekly offs can be selected and taken</span>
-                  </div>
-                  <MonthPicker year={woPeriod.year} month={woPeriod.month} onChange={(year, month) => { setWoPeriod({ year, month }); setWoDate(''); }} />
-                </div>
-
-                {/* Monthly Saved Weekly-Off Balance Summary Card */}
-                <div className="grid grid-cols-2 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-950 sm:grid-cols-4 shadow-xs">
-                  <div>
-                    <span className="text-[11px] text-emerald-700 block">Total Sundays</span>
-                    <strong className="text-sm font-bold">{woSummary?.totalSundays ?? 5}</strong>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-emerald-700 block">Allocated</span>
-                    <strong className="text-sm font-bold">{w?.allocated ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-emerald-700 block">Taken</span>
-                    <strong className="text-sm font-bold text-emerald-800">{w?.taken ?? 0}</strong>
-                  </div>
-                  <div>
-                    <span className="text-[11px] text-emerald-700 block">Saved / Available</span>
-                    <strong className={cx('text-sm font-bold', (w?.available ?? 0) > 0 ? 'text-emerald-700' : 'text-red-600')}>
-                      {w?.available ?? 0} available
-                    </strong>
-                  </div>
-                  {(w?.pending ?? 0) > 0 && (
-                    <div className="col-span-2 sm:col-span-4 pt-1 border-t border-emerald-200 text-emerald-800 text-[11px]">
-                      {w?.pending} date(s) currently reserved by pending approval.
-                    </div>
-                  )}
-                </div>
-
-                {woError && !woSummary ? (
-                  <p role="alert" className="text-xs text-red-600">{woError}</p>
-                ) : !woSummary || (woLoading && (woSummary.month !== woPeriod.month || woSummary.year !== woPeriod.year)) ? (
-                  <Skeleton lines={2} />
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Weekly-off date">
-                      {woSummary.sundays.map((entry) => {
-                        const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
-                        const selected = woDate === entry.date;
-                        return (
-                          <button
-                            key={entry.date}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={!selectable}
-                            onClick={() => setWoDate(entry.date)}
-                            className={cx(
-                              'rounded-lg border px-2.5 py-2.5 text-left text-xs transition-all',
-                              selected
-                                ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
-                                : selectable
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
-                                  : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
-                            )}
-                          >
-                            <span className="block font-bold">{formatDate(entry.date)}</span>
-                            <span className="text-[11px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {(w?.available ?? 0) <= 0 ? (
-                      <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
-                        ⚠️ No saved weekly-off balance is available for {woSummary.monthName} {woSummary.year}. You have taken or reserved all eligible weekly offs.
-                      </div>
-                    ) : woDate ? (
-                      <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
-                        Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your saved weekly-off quota upon approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
-                      </div>
-                    ) : null}
-                  </>
-                )}
+              <div>
+                <span className="text-[11px] text-emerald-700 block">Allocated Quota</span>
+                <strong className="text-sm font-bold">{w?.allocated ?? 0} Days</strong>
               </div>
-            </>
-          ) : (
-            <>
-              <Field label="Select date" hint="One date · half-day leave is never taken on your weekly off or a public holiday">
+              <div>
+                <span className="text-[11px] text-emerald-700 block">Taken / Approved</span>
+                <strong className="text-sm font-bold text-emerald-800">{w?.taken ?? 0} Days</strong>
+              </div>
+              <div>
+                <span className="text-[11px] text-emerald-700 block">Available Balance</span>
+                <strong className={cx('text-sm font-bold', (w?.available ?? 0) > 0 ? 'text-emerald-700' : 'text-red-600')}>
+                  {w?.available ?? 0} Days
+                </strong>
+              </div>
+              {(w?.pending ?? 0) > 0 && (
+                <div className="col-span-2 sm:col-span-4 pt-1 border-t border-emerald-200 text-emerald-800 text-[11px]">
+                  {w?.pending} request(s) currently pending approval.
+                </div>
+              )}
+            </div>
+
+            {/* Date Selection: Any Calendar Date in the Month */}
+            <div className="space-y-2">
+              <Field label="Select Week-Off Date" hint="Eligible on any calendar date in the month, including weekdays">
                 <input
                   type="date"
-                  className="input font-medium"
-                  value={hdDate}
+                  className="input font-bold text-sm text-ink-900"
+                  value={woDate}
                   min={localToday()}
-                  onChange={(event) => setHdDate(event.target.value)}
+                  max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
+                  onChange={(e) => setWoDate(e.target.value)}
                   required
                 />
               </Field>
 
-              <div className="rounded-xl border border-blue-200 bg-blue-50/80 p-3.5 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-blue-950 flex items-center gap-1.5">
-                    <Icon name="clock" size={14} className="text-blue-700" />
-                    <span>Session (select one)</span>
-                  </span>
-                  <span className="text-[11px] font-semibold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">Half-day deduction: 0.5 day</span>
+              {woSummary && (
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-semibold text-ink-500">Quick Pick Month Sundays:</span>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Quick pick Sunday">
+                    {woSummary.sundays.map((entry) => {
+                      const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
+                      const selected = woDate === entry.date;
+                      return (
+                        <button
+                          key={entry.date}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={!selectable}
+                          onClick={() => setWoDate(entry.date)}
+                          className={cx(
+                            'rounded-lg border px-2.5 py-2 text-left text-xs transition-all',
+                            selected
+                              ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
+                              : selectable
+                                ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
+                                : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
+                          )}
+                        >
+                          <span className="block font-bold">{formatDate(entry.date)}</span>
+                          <span className="text-[10px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  {(['first_half', 'second_half'] as const).map((slot) => (
-                    <label
-                      key={slot}
-                      className={cx(
-                        'flex cursor-pointer items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-all',
-                        hdSlot === slot
-                          ? 'border-blue-600 bg-white text-blue-950 shadow-xs ring-2 ring-blue-500/30 font-semibold'
-                          : 'border-blue-200 bg-white/70 text-ink-700 hover:bg-white',
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name="halfDaySlot"
-                        value={slot}
-                        checked={hdSlot === slot}
-                        onChange={() => setHdSlot(slot)}
-                        className="mt-0.5 text-brand-600 focus:ring-brand-500"
-                      />
-                      <div>
-                        <span className="block font-bold text-ink-900">{slot === 'first_half' ? 'First Half' : 'Second Half'}</span>
-                        <span className="text-[11px] text-ink-500">{slot === 'first_half' ? 'Morning Session' : 'Afternoon Session'}</span>
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
+              )}
 
-              {halfPreviewError ? (
-                <p role="alert" className="text-xs text-red-600">{halfPreviewError}</p>
-              ) : halfPreview ? (
-                <div className={halfPreview.lossOfPay ? 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900' : 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700'}>
-                  {halfPreview.lossOfPay ? (
-                    <p>You have no paid leave balance left, so this half day will be recorded as <strong>{halfPreview.deductFrom.name}</strong> (0.5 day, loss of pay).</p>
-                  ) : (
-                    <p>
-                      Available {halfPreview.deductFrom.name} balance: <strong>{halfPreview.deductFrom.usable}</strong> day(s) ·{' '}
-                      <strong>0.5 day</strong> deducted after HR approval · Remaining after approval: <strong>{halfPreview.remainingAfterApproval}</strong> day(s).
-                    </p>
-                  )}
-                  <p className="mt-1 text-ink-500">Half-day leave never reduces your weekly-off balance.</p>
+              {(w?.available ?? 0) <= 0 ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
+                  ⚠️ No week-off balance available for {woSummary?.monthName} {woSummary?.year}. You have taken or reserved all eligible days for this month.
+                </div>
+              ) : woDate ? (
+                <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
+                  Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your monthly entitlement upon final manager approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
                 </div>
               ) : null}
+            </div>
+          </div>
 
-              <Field label="Supporting document (optional)">
-                <input type="file" className="input" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
-              </Field>
-            </>
-          )}
-
-          <Field label="Reason" hint="Optional">
-            <textarea className="input min-h-[80px]" value={reason} onChange={(event) => setReason(event.target.value)} maxLength={2000} />
+          <Field label="Reason (optional)" hint="Optional notes for your approvers">
+            <textarea
+              className="input min-h-[75px]"
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              maxLength={2000}
+              placeholder="Reason for week-off (optional)…"
+            />
           </Field>
-          <p className="text-xs text-ink-500">Requests are checked on the server for eligibility, duplicates, overlaps and available balance.</p>
+          <p className="text-xs text-ink-500">
+            Validated against your joining date, duplicate applications, and monthly entitlement.
+          </p>
         </form>
       </Modal>
 
@@ -1052,11 +934,35 @@ export default function Leave() {
                 )}
               </div>
               <div className="flex items-center gap-2">
+                {viewingLeave.canApproveHr && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-primary btn-sm bg-brand-600 hover:bg-brand-700"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, true, 'hr');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      HR Verify
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={async () => {
+                        await decide(viewingLeave.id, false, 'hr');
+                        setViewingLeave(null);
+                      }}
+                    >
+                      HR Reject
+                    </button>
+                  </>
+                )}
                 {viewingLeave.canApproveManager && (
                   <>
                     <button
                       type="button"
-                      className="btn-primary btn-sm"
+                      className="btn-primary btn-sm bg-emerald-600 hover:bg-emerald-700"
                       onClick={async () => {
                         await decide(viewingLeave.id, true, 'manager');
                         setViewingLeave(null);
@@ -1066,37 +972,13 @@ export default function Leave() {
                     </button>
                     <button
                       type="button"
-                      className="btn-secondary btn-sm"
+                      className="btn-secondary btn-sm text-red-600 border-red-200 hover:bg-red-50"
                       onClick={async () => {
                         await decide(viewingLeave.id, false, 'manager');
                         setViewingLeave(null);
                       }}
                     >
                       Manager Reject
-                    </button>
-                  </>
-                )}
-                {viewingLeave.canApproveHr && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn-primary btn-sm"
-                      onClick={async () => {
-                        await decide(viewingLeave.id, true, 'hr');
-                        setViewingLeave(null);
-                      }}
-                    >
-                      HR Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="btn-secondary btn-sm"
-                      onClick={async () => {
-                        await decide(viewingLeave.id, false, 'hr');
-                        setViewingLeave(null);
-                      }}
-                    >
-                      HR Reject
                     </button>
                   </>
                 )}
@@ -1537,11 +1419,11 @@ export default function Leave() {
                   </div>
                 </div>
 
-                {/* Node 2: Manager Review */}
+                {/* Node 2: Location HR Verification */}
                 {(() => {
-                  const isDone = Boolean(viewingFlowLeave.managerActionAt) || viewingFlowLeave.status === 'pending_hr' || viewingFlowLeave.status === 'approved';
-                  const isCurrent = viewingFlowLeave.status === 'pending_manager';
-                  const isRejected = viewingFlowLeave.status === 'rejected' && !viewingFlowLeave.managerActionAt;
+                  const isDone = Boolean(viewingFlowLeave.hrActionAt) || viewingFlowLeave.status === 'pending_manager' || viewingFlowLeave.status === 'approved';
+                  const isCurrent = viewingFlowLeave.status === 'pending_hr';
+                  const isRejected = viewingFlowLeave.status === 'rejected' && !viewingFlowLeave.hrActionAt;
                   return (
                     <div className={cx(
                       'rounded-xl border p-3 space-y-2',
@@ -1555,31 +1437,31 @@ export default function Leave() {
                           )}>
                             {isDone ? '✓' : isRejected ? '✕' : '2'}
                           </span>
-                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>2. Manager</span>
+                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>2. Location HR</span>
                         </div>
                         <span className={cx(
                           'rounded-full px-2 py-0.5 text-[10px] font-bold',
                           isDone ? 'bg-emerald-200/80 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900 animate-pulse' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-200 text-ink-600'
                         )}>
-                          {isDone ? 'REVIEWED' : isCurrent ? 'PENDING' : isRejected ? 'REJECTED' : 'WAITING'}
+                          {isDone ? 'VERIFIED' : isCurrent ? 'PENDING HR' : isRejected ? 'REJECTED' : 'WAITING'}
                         </span>
                       </div>
                       <div className="space-y-1 text-xs">
-                        <p className="font-bold text-ink-900">{viewingFlowLeave.managerName ?? 'Reporting Manager'}</p>
-                        <p className="text-[11px] text-ink-500">First-level Reviewer</p>
+                        <p className="font-bold text-ink-900">{viewingFlowLeave.hrName ?? 'Location HR Approver'}</p>
+                        <p className="text-[11px] text-ink-500">First-stage Verification</p>
                         <p className="text-[10px] text-ink-600 font-medium">
-                          {isDone ? (viewingFlowLeave.managerActionAt ? formatDateTime(viewingFlowLeave.managerActionAt) : 'Approved') : isCurrent ? 'Awaiting Manager Action' : isRejected ? 'Declined at manager review' : 'Standing by'}
+                          {isDone ? (viewingFlowLeave.hrActionAt ? formatDateTime(viewingFlowLeave.hrActionAt) : 'HR Verified') : isCurrent ? 'Awaiting HR Verification' : isRejected ? 'Declined at HR stage' : 'Standing by'}
                         </p>
                       </div>
                     </div>
                   );
                 })()}
 
-                {/* Node 3: HR Review */}
+                {/* Node 3: Reporting Manager Review */}
                 {(() => {
-                  const isDone = Boolean(viewingFlowLeave.hrActionAt) || viewingFlowLeave.status === 'approved';
-                  const isCurrent = viewingFlowLeave.status === 'pending_hr';
-                  const isRejected = viewingFlowLeave.status === 'rejected' && Boolean(viewingFlowLeave.managerActionAt) && !viewingFlowLeave.hrActionAt;
+                  const isDone = Boolean(viewingFlowLeave.managerActionAt) || viewingFlowLeave.status === 'approved';
+                  const isCurrent = viewingFlowLeave.status === 'pending_manager';
+                  const isRejected = viewingFlowLeave.status === 'rejected' && Boolean(viewingFlowLeave.hrActionAt) && !viewingFlowLeave.managerActionAt;
                   return (
                     <div className={cx(
                       'rounded-xl border p-3 space-y-2',
@@ -1593,20 +1475,20 @@ export default function Leave() {
                           )}>
                             {isDone ? '✓' : isRejected ? '✕' : '3'}
                           </span>
-                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>3. Location HR</span>
+                          <span className={isDone ? 'text-emerald-900' : isCurrent ? 'text-amber-900' : isRejected ? 'text-red-900' : 'text-ink-600'}>3. Reporting Manager</span>
                         </div>
                         <span className={cx(
                           'rounded-full px-2 py-0.5 text-[10px] font-bold',
                           isDone ? 'bg-emerald-200/80 text-emerald-900' : isCurrent ? 'bg-amber-200 text-amber-900 animate-pulse' : isRejected ? 'bg-red-200 text-red-900' : 'bg-ink-200 text-ink-600'
                         )}>
-                          {isDone ? 'APPROVED' : isCurrent ? 'PENDING HR' : isRejected ? 'REJECTED' : 'WAITING'}
+                          {isDone ? 'APPROVED' : isCurrent ? 'PENDING MGR' : isRejected ? 'REJECTED' : 'WAITING'}
                         </span>
                       </div>
                       <div className="space-y-1 text-xs">
-                        <p className="font-bold text-ink-900">{viewingFlowLeave.hrName ?? 'HR Operations'}</p>
+                        <p className="font-bold text-ink-900">{viewingFlowLeave.managerName ?? 'Reporting Manager'}</p>
                         <p className="text-[11px] text-ink-500">Final Decision Maker</p>
                         <p className="text-[10px] text-ink-600 font-medium">
-                          {isDone ? (viewingFlowLeave.hrActionAt ? formatDateTime(viewingFlowLeave.hrActionAt) : 'HR Approved') : isCurrent ? 'Awaiting HR Approval' : isRejected ? 'Declined at HR stage' : 'Standing by'}
+                          {isDone ? (viewingFlowLeave.managerActionAt ? formatDateTime(viewingFlowLeave.managerActionAt) : 'Manager Approved') : isCurrent ? 'Awaiting Manager Review' : isRejected ? 'Declined at manager review' : 'Standing by'}
                         </p>
                       </div>
                     </div>

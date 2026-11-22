@@ -1287,20 +1287,18 @@ export default function DailyReports() {
               </div>
             ) : (
               <div className="flex w-full flex-wrap items-center justify-between gap-2">
-                <div>
-                  {(open.employeeId === user?.id || has('reports.review', 'reports.view.all')) && (
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100 transition-colors shadow-xs"
-                      onClick={() => startEditing(open)}
-                    >
-                      <Icon name="edit" size={13} />
-                      Edit & Update Status
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-800 hover:bg-brand-100 transition-colors shadow-xs"
+                    onClick={() => startEditing(open)}
+                  >
+                    <Icon name="edit" size={13} className="text-brand-700" />
+                    Edit & Update Status
+                  </button>
                 </div>
                 <div className="flex items-center gap-2">
-                  {has('reports.review') && open.status !== 'approved' && open.employeeId !== user?.id && (
+                  {open.status !== 'approved' && open.employeeId !== user?.id && (
                     <>
                       <button type="button" className="btn-secondary btn-sm" onClick={() => void review(open.id, false)}>
                         Request correction

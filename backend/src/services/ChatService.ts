@@ -750,15 +750,25 @@ export class ChatService {
 
   static async contacts(actor: AuthUser | number) {
     const actorId = typeof actor === 'number' ? actor : actor.id;
-    let locationFilter: { clause: string; params: unknown[] } = { clause: '', params: [] };
 
-    if (typeof actor !== 'number') {
-      const allowedIds = await locationEmployeeIds(actor);
-      locationFilter = idsFilterSql(allowedIds, 'e.id');
-    }
-
-    return query<{ id: number; full_name: string; phone: string | null; email: string | null; designation_title: string | null; department_name: string | null; photo_url: string | null }>(
-      `SELECT e.id, e.full_name, e.mobile AS phone,
+    // Cross-location communication exception (Section 10):
+    // All employees can view contacts across all stores (BEL, DAV, SHI, HQ) for Chat and Mailbox,
+    // while HRMS data (attendance, tasks, leaves, reports) remains strictly location-isolated.
+    return query<{
+      id: number;
+      full_name: string;
+      employee_code: string | null;
+      phone: string | null;
+      email: string | null;
+      designation_title: string | null;
+      department_name: string | null;
+      location_id: number | null;
+      location_code: string | null;
+      location_name: string | null;
+      photo_url: string | null;
+    }>(
+      `SELECT e.id, e.full_name, e.employee_code, e.mobile AS phone,
+        e.location_id, l.code AS location_code, l.name AS location_name,
         CASE
           WHEN e.email IS NULL OR e.email = '' OR e.email LIKE '%@workforce.test'
           THEN CONCAT(LOWER(REPLACE(TRIM(e.full_name), ' ', '.')), '@bsctextiles.in')
@@ -768,9 +778,10 @@ export class ChatService {
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN departments d ON d.id = e.department_id
-       WHERE e.status = 'active' AND e.id <> ? ${locationFilter.clause}
-       ORDER BY e.full_name LIMIT 500`,
-      [actorId, ...locationFilter.params],
+       LEFT JOIN locations l ON l.id = e.location_id
+       WHERE e.status = 'active' AND e.id <> ?
+       ORDER BY l.code ASC, e.full_name ASC LIMIT 1000`,
+      [actorId],
     );
   }
 
