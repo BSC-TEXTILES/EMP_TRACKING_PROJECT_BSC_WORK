@@ -5,6 +5,7 @@ import { useSocketEvent } from '../contexts/RealtimeContext';
 import { Avatar, Badge, Card, EmptyState, ProgressBar, SectionHeader, Skeleton, StatCard } from './ui';
 import { formatDateTime, relativeTime } from '../lib/format';
 import { Icon } from './icons';
+import { AppIcon } from './AppIcon';
 
 /**
  * Live device board (LiveGuard Pro integration): real hardware health, Windows
@@ -208,12 +209,23 @@ export function LiveDevicesPanel() {
                     <Badge tone={device.online ? 'success' : 'neutral'}>{device.online ? 'Online' : 'Offline'}</Badge>
                   </div>
 
-                  <p className="mt-2 truncate text-xs text-ink-500">
-                    {device.session
-                      ? device.session.status === 'paused' ? 'Session paused' : device.session.isIdle ? 'Idle / away' : `Using ${device.session.currentApp ?? 'desktop'}`
-                      : 'No active work session'}
-                    {device.lastSeenAt ? ` · seen ${relativeTime(device.lastSeenAt)}` : ''}
-                  </p>
+                  <div className="mt-2 flex items-center gap-1.5 truncate text-xs text-ink-600">
+                    {device.session ? (
+                      device.session.status === 'paused' ? (
+                        <span>Session paused</span>
+                      ) : device.session.isIdle ? (
+                        <span className="text-amber-700 font-medium">Idle / away</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1">
+                          Using <AppIcon name={device.session.currentApp ?? 'desktop'} size={14} />
+                          <strong className="text-ink-800">{device.session.currentApp ?? 'desktop'}</strong>
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-ink-400">No active work session</span>
+                    )}
+                    {device.lastSeenAt ? <span className="text-ink-400">· seen {relativeTime(device.lastSeenAt)}</span> : null}
+                  </div>
 
                   {device.health ? (
                     <div className="mt-3 space-y-2">

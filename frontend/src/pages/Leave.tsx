@@ -111,7 +111,9 @@ function localToday(): string {
 }
 
 function requestTitle(leave: LeaveItem): string {
-  return 'Week Off';
+  if (leave.requestKind === 'weekly_off') return 'Week Off';
+  if (leave.requestKind === 'half_day' || leave.isHalfDay) return `Half-Day Leave · ${leave.leaveType || 'General'}`;
+  return leave.leaveType || 'Leave Request';
 }
 
 export default function Leave() {
@@ -279,9 +281,13 @@ export default function Leave() {
   }, [applyOpen]);
 
   const canSubmit =
-    Boolean(routing?.canApply && hrApproverId && woDate) &&
+    Boolean(routing?.canApply && hrApproverId) &&
     !busy &&
-    (woSummary?.weeklyOffs.available ?? 0) > 0;
+    (requestType === 'weekly_off'
+      ? Boolean(woDate) && (woSummary?.weeklyOffs.available ?? 0) > 0
+      : requestType === 'half_day'
+        ? Boolean(hdDate && halfPreview)
+        : Boolean(selectedLeaveTypeId && startDate && endDate && endDate >= startDate && (breakdown?.chargedDays ?? 0) > 0));
 
   const apply = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -289,16 +295,40 @@ export default function Leave() {
     setBusy(true);
     try {
       const trimmed = reason.trim();
-      if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
-        toast.error('You have no saved weekly offs available to take this month.');
-        return;
+      let documentFileId: number | undefined;
+      if (document) documentFileId = (await api.upload<{ id: number }>(document)).id;
+
+      if (requestType === 'weekly_off') {
+        if ((woSummary?.weeklyOffs.available ?? 0) <= 0) {
+          toast.error('You have no saved weekly offs available to take this month.');
+          return;
+        }
+        await api.post('/leave/weekly-off', {
+          date: woDate,
+          reason: trimmed || undefined,
+          hrApproverId: Number(hrApproverId),
+        });
+        toast.success(`Week-off request for ${formatDate(woDate)} submitted to Location HR for verification.`);
+      } else if (requestType === 'half_day') {
+        await api.post('/leave/half-day', {
+          date: hdDate,
+          slot: hdSlot,
+          reason: trimmed || undefined,
+          hrApproverId: Number(hrApproverId),
+          documentFileId,
+        });
+        toast.success(`Half-day leave (${SLOT_LABEL[hdSlot]}) for ${formatDate(hdDate)} submitted for approval.`);
+      } else {
+        await api.post('/leave', {
+          leaveTypeId: Number(selectedLeaveTypeId),
+          hrApproverId: Number(hrApproverId),
+          startDate,
+          endDate,
+          reason: trimmed || undefined,
+          documentFileId,
+        });
+        toast.success('Leave request submitted for approval.');
       }
-      await api.post('/leave/weekly-off', {
-        date: woDate,
-        reason: trimmed || undefined,
-        hrApproverId: Number(hrApproverId),
-      });
-      toast.success(`Week-off request for ${formatDate(woDate)} submitted to Location HR for verification.`);
       setApplyOpen(false);
       resetForm();
       await load();
@@ -733,15 +763,19 @@ export default function Leave() {
       <Modal
         open={applyOpen}
         onClose={() => setApplyOpen(false)}
-        title="Apply for Week Off"
-        description="Select any eligible calendar date in the month. Verified by your Location HR, then approved by your Reporting Manager."
+        title="Apply for Leave / Week-Off"
+        description="Select whether to take a saved weekly off or apply for regular leave. Location HR verifies first, then your Reporting Manager approves."
         footer={
           <>
             <button type="button" className="btn-secondary" onClick={() => setApplyOpen(false)}>
               Cancel
             </button>
             <button className="btn-primary" form="leave-form" type="submit" disabled={!canSubmit}>
-              {busy ? 'Submitting…' : 'Submit Week-Off Request'}
+              {busy
+                ? 'Submitting…'
+                : requestType === 'weekly_off'
+                  ? 'Submit Week-Off Request'
+                  : 'Submit Leave Request'}
             </button>
           </>
         }
@@ -785,7 +819,7 @@ export default function Leave() {
                 </Field>
               </div>
               <p className="text-xs text-brand-900 font-medium">
-                Flow: 1. Submit week-off → 2. Location HR verifies → 3. Reporting Manager approves → 4. Attendance marked as Weekly Off & 1 day deducted from quota.
+                Flow: 1. Submit request → 2. Location HR verifies → 3. Reporting Manager approves → 4. Attendance status synced.
               </p>
               {routing.issues.map((issue) => (
                 <p key={issue} role="alert" className="text-xs text-red-700">
@@ -795,120 +829,283 @@ export default function Leave() {
             </div>
           )}
 
-          {/* Month Selector & Entitlement Overview */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <span className="label mb-0 block font-bold text-ink-900">Monthly Week-Off Entitlement</span>
-                <span className="text-[11px] text-ink-500">Calculated dynamically based on number of Sundays in month</span>
-              </div>
-              <MonthPicker
-                year={woPeriod.year}
-                month={woPeriod.month}
-                onChange={(year, month) => {
-                  setWoPeriod({ year, month });
-                  setWoDate('');
-                }}
-              />
+          {/* Mode Selector */}
+          <div className="space-y-1.5">
+            <span className="label font-bold text-ink-900">Application Type</span>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label="Request type">
+              {optionButton('weekly_off', 'calendar', 'Saved Week-Off', `Quota (${w?.available ?? 0} avail)`)}
+              {optionButton('regular', 'calendar', 'Regular Leave', 'CL / SL / EL')}
+              {optionButton('half_day', 'clock', 'Half-Day Leave', '0.5 day')}
             </div>
+          </div>
 
-            {/* Monthly Saved Weekly-Off Balance Summary Card */}
-            <div className="grid grid-cols-2 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-950 sm:grid-cols-4 shadow-xs">
-              <div>
-                <span className="text-[11px] text-emerald-700 block">Total Sundays</span>
-                <strong className="text-sm font-bold">{woSummary?.totalSundays ?? 5}</strong>
-              </div>
-              <div>
-                <span className="text-[11px] text-emerald-700 block">Allocated Quota</span>
-                <strong className="text-sm font-bold">{w?.allocated ?? 0} Days</strong>
-              </div>
-              <div>
-                <span className="text-[11px] text-emerald-700 block">Taken / Approved</span>
-                <strong className="text-sm font-bold text-emerald-800">{w?.taken ?? 0} Days</strong>
-              </div>
-              <div>
-                <span className="text-[11px] text-emerald-700 block">Available Balance</span>
-                <strong className={cx('text-sm font-bold', (w?.available ?? 0) > 0 ? 'text-emerald-700' : 'text-red-600')}>
-                  {w?.available ?? 0} Days
-                </strong>
-              </div>
-              {(w?.pending ?? 0) > 0 && (
-                <div className="col-span-2 sm:col-span-4 pt-1 border-t border-emerald-200 text-emerald-800 text-[11px]">
-                  {w?.pending} request(s) currently pending approval.
+          {requestType === 'weekly_off' ? (
+            <div className="space-y-3">
+              {/* Month Selector & Entitlement Overview */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="label mb-0 block font-bold text-ink-900">Monthly Week-Off Entitlement</span>
+                  <span className="text-[11px] text-ink-500">Calculated dynamically based on number of Sundays in month</span>
                 </div>
-              )}
-            </div>
+                <MonthPicker
+                  year={woPeriod.year}
+                  month={woPeriod.month}
+                  onChange={(year, month) => {
+                    setWoPeriod({ year, month });
+                    setWoDate('');
+                  }}
+                />
+              </div>
 
-            {/* Date Selection: Any Calendar Date in the Month */}
-            <div className="space-y-2">
-              <Field label="Select Week-Off Date" hint="Eligible on any calendar date in the month, including weekdays">
+              {/* Monthly Saved Weekly-Off Balance Summary Card */}
+              <div className="grid grid-cols-2 gap-2 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-xs text-emerald-950 sm:grid-cols-4 shadow-xs">
+                <div>
+                  <span className="text-[11px] text-emerald-700 block">Total Sundays</span>
+                  <strong className="text-sm font-bold">{woSummary?.totalSundays ?? 5}</strong>
+                </div>
+                <div>
+                  <span className="text-[11px] text-emerald-700 block">Allocated Quota</span>
+                  <strong className="text-sm font-bold">{w?.allocated ?? 0} Days</strong>
+                </div>
+                <div>
+                  <span className="text-[11px] text-emerald-700 block">Taken / Approved</span>
+                  <strong className="text-sm font-bold text-emerald-800">{w?.taken ?? 0} Days</strong>
+                </div>
+                <div>
+                  <span className="text-[11px] text-emerald-700 block">Available Balance</span>
+                  <strong className={cx('text-sm font-bold', (w?.available ?? 0) > 0 ? 'text-emerald-700' : 'text-red-600')}>
+                    {w?.available ?? 0} Days
+                  </strong>
+                </div>
+                {(w?.pending ?? 0) > 0 && (
+                  <div className="col-span-2 sm:col-span-4 pt-1 border-t border-emerald-200 text-emerald-800 text-[11px]">
+                    {w?.pending} request(s) currently pending approval.
+                  </div>
+                )}
+              </div>
+
+              {/* Date Selection: Any Calendar Date in the Month */}
+              <div className="space-y-2">
+                <Field label="Select Week-Off Date" hint="Eligible on any calendar date in the month, including weekdays">
+                  <input
+                    type="date"
+                    className="input font-bold text-sm text-ink-900"
+                    value={woDate}
+                    min={localToday()}
+                    max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
+                    onChange={(e) => setWoDate(e.target.value)}
+                    required
+                  />
+                </Field>
+
+                {woSummary && (
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-semibold text-ink-500">Quick Pick Month Sundays:</span>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Quick pick Sunday">
+                      {woSummary.sundays.map((entry) => {
+                        const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
+                        const selected = woDate === entry.date;
+                        return (
+                          <button
+                            key={entry.date}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            disabled={!selectable}
+                            onClick={() => setWoDate(entry.date)}
+                            className={cx(
+                              'rounded-lg border px-2.5 py-2 text-left text-xs transition-all',
+                              selected
+                                ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
+                                : selectable
+                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
+                                  : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
+                            )}
+                          >
+                            <span className="block font-bold">{formatDate(entry.date)}</span>
+                            <span className="text-[10px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {(w?.available ?? 0) <= 0 ? (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
+                    ⚠️ No week-off balance available for {woSummary?.monthName} {woSummary?.year}. You have taken or reserved all eligible days for this month.
+                  </div>
+                ) : woDate ? (
+                  <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
+                    Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your monthly entitlement upon final manager approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : requestType === 'regular' ? (
+            <div className="space-y-3">
+              <Field label="Leave type" required>
+                <select
+                  className="input font-medium"
+                  value={selectedLeaveTypeId}
+                  onChange={(e) => setSelectedLeaveTypeId(e.target.value)}
+                  required
+                >
+                  <option value="">Select leave type</option>
+                  {types.map((t) => {
+                    const bal = balances.find((b) => b.leaveTypeId === t.id);
+                    let label = t.name;
+                    if (t.code === 'LWP') label += ' (Unpaid · Loss of Pay)';
+                    else if (t.code === 'CO') label += ` (${bal?.available ?? 0} days available · Compensatory Off)`;
+                    else if (t.code === 'ML') label += ' (Maternity · 26 weeks)';
+                    else if (t.code === 'PL') label += ' (Paternity · Up to 10 days)';
+                    else label += ` (${bal?.available ?? t.annual_quota} days available)`;
+                    return (
+                      <option key={t.id} value={t.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label="Start date" required>
+                  <input
+                    type="date"
+                    className="input font-medium"
+                    value={startDate}
+                    min={localToday()}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
+                    }}
+                    required
+                  />
+                </Field>
+                <Field label="End date" required>
+                  <input
+                    type="date"
+                    className="input font-medium"
+                    value={endDate}
+                    min={startDate || localToday()}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    required
+                  />
+                </Field>
+              </div>
+
+              {breakdownError ? (
+                <p role="alert" className="text-xs text-red-600">{breakdownError}</p>
+              ) : breakdown ? (
+                <div className={breakdown.chargedDays > 0 ? 'rounded-lg border border-ink-200 bg-ink-50 p-3 text-xs text-ink-700' : 'rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'}>
+                  {breakdown.calendarCounted ? (
+                    <p><strong>{breakdown.chargedDays}</strong> calendar day(s) (maternity leave is counted in calendar days).</p>
+                  ) : breakdown.chargedDays > 0 ? (
+                    <p>
+                      <strong>{breakdown.chargedDays}</strong> day(s) will be deducted from your leave balance
+                      {breakdown.weeklyOffDays + breakdown.holidayDays > 0 &&
+                        ` (${breakdown.calendarDays} calendar days; ${breakdown.weeklyOffDays ? `${breakdown.weeklyOffDays} Sunday weekly off(s)` : ''}${breakdown.weeklyOffDays && breakdown.holidayDays ? ' and ' : ''}${breakdown.holidayDays ? `${breakdown.holidayDays} public holiday(s)` : ''} not charged)`}
+                      .
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="font-semibold text-amber-900">
+                        These selected dates ({startDate === endDate ? formatDate(startDate) : `${formatDate(startDate)} to ${formatDate(endDate)}`}) are Sunday weekly off(s) or public holidays.
+                      </p>
+                      {breakdown.weeklyOffDays > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-amber-200">
+                          <span className="text-[11px] text-amber-800 font-medium">
+                            Want to take this date as your scheduled weekly off from your monthly balance?
+                          </span>
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-amber-700 transition-colors"
+                            onClick={() => {
+                              setRequestType('weekly_off');
+                              setWoDate(startDate);
+                            }}
+                          >
+                            <Icon name="calendar" size={12} />
+                            Apply as Saved Weekly Off
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              <Field label="Supporting document (optional)">
+                <input type="file" className="input text-xs" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
+              </Field>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <Field label="Date" required>
                 <input
                   type="date"
-                  className="input font-bold text-sm text-ink-900"
-                  value={woDate}
+                  className="input font-medium"
+                  value={hdDate}
                   min={localToday()}
-                  max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
-                  onChange={(e) => setWoDate(e.target.value)}
+                  onChange={(e) => setHdDate(e.target.value)}
                   required
                 />
               </Field>
 
-              {woSummary && (
-                <div className="space-y-1.5">
-                  <span className="text-[11px] font-semibold text-ink-500">Quick Pick Month Sundays:</span>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-5" role="radiogroup" aria-label="Quick pick Sunday">
-                    {woSummary.sundays.map((entry) => {
-                      const selectable = entry.status === 'available' && (w?.available ?? 0) > 0;
-                      const selected = woDate === entry.date;
-                      return (
-                        <button
-                          key={entry.date}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          disabled={!selectable}
-                          onClick={() => setWoDate(entry.date)}
-                          className={cx(
-                            'rounded-lg border px-2.5 py-2 text-left text-xs transition-all',
-                            selected
-                              ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30 font-bold shadow-xs'
-                              : selectable
-                                ? 'border-emerald-300 bg-emerald-50 text-emerald-900 hover:border-emerald-400 hover:bg-emerald-100/60 cursor-pointer'
-                                : 'cursor-not-allowed border-ink-200 bg-ink-50 text-ink-400 opacity-60',
-                          )}
-                        >
-                          <span className="block font-bold">{formatDate(entry.date)}</span>
-                          <span className="text-[10px] mt-0.5 block">{WEEKLY_OFF_STATUS_LABEL[entry.status]}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+              <Field label="Half-day session" required>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={hdSlot === 'first_half'}
+                    className={cx(
+                      'rounded-lg border p-2.5 text-left text-xs font-semibold transition-all',
+                      hdSlot === 'first_half' ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30' : 'border-ink-200 bg-white text-ink-700',
+                    )}
+                    onClick={() => setHdSlot('first_half')}
+                  >
+                    First Half (Morning)
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={hdSlot === 'second_half'}
+                    className={cx(
+                      'rounded-lg border p-2.5 text-left text-xs font-semibold transition-all',
+                      hdSlot === 'second_half' ? 'border-brand-600 bg-brand-50 text-brand-900 ring-2 ring-brand-500/30' : 'border-ink-200 bg-white text-ink-700',
+                    )}
+                    onClick={() => setHdSlot('second_half')}
+                  >
+                    Second Half (Afternoon)
+                  </button>
+                </div>
+              </Field>
+
+              {halfPreview && (
+                <div className="rounded-lg border border-ink-200 bg-ink-50 p-2.5 text-xs text-ink-700">
+                  Will deduct <strong>0.5 day</strong> from your available {halfPreview.deductFrom?.name ?? 'leave balance'}.
                 </div>
               )}
 
-              {(w?.available ?? 0) <= 0 ? (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800 font-medium">
-                  ⚠️ No week-off balance available for {woSummary?.monthName} {woSummary?.year}. You have taken or reserved all eligible days for this month.
-                </div>
-              ) : woDate ? (
-                <div className="rounded-lg border border-brand-200 bg-brand-50/70 p-3 text-xs text-brand-950 font-medium">
-                  Selected date: <strong>{formatDate(woDate)}</strong> · 1 day will be deducted from your monthly entitlement upon final manager approval (Remaining: <strong>{Math.max(0, (w?.remaining ?? 0) - 1)}</strong>).
-                </div>
-              ) : null}
+              <Field label="Supporting document (optional)">
+                <input type="file" className="input text-xs" onChange={(event) => setDocument(event.target.files?.[0] ?? null)} />
+              </Field>
             </div>
-          </div>
+          )}
 
+          {/* Reason is strictly optional */}
           <Field label="Reason (optional)" hint="Optional notes for your approvers">
             <textarea
               className="input min-h-[75px]"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               maxLength={2000}
-              placeholder="Reason for week-off (optional)…"
+              placeholder="Reason or notes (optional)…"
             />
           </Field>
           <p className="text-xs text-ink-500">
-            Validated against your joining date, duplicate applications, and monthly entitlement.
+            Requests are verified by Location HR, approved by your Reporting Manager, and synchronized with attendance.
           </p>
         </form>
       </Modal>

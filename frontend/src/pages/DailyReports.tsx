@@ -740,6 +740,17 @@ export default function DailyReports() {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
+                        className="inline-flex items-center gap-1 btn-secondary btn-sm text-brand-700 border-brand-200 hover:bg-brand-50"
+                        onClick={() => {
+                          setOpen(report);
+                          startEditing(report);
+                        }}
+                      >
+                        <Icon name="edit" size={13} />
+                        Edit & Status
+                      </button>
+                      <button
+                        type="button"
                         className="btn-secondary btn-sm"
                         onClick={() => openReportDetail(report)}
                       >
@@ -882,6 +893,17 @@ export default function DailyReports() {
                           </button>
                         </>
                       )}
+                      <button
+                        type="button"
+                        className="inline-flex items-center gap-1 btn-secondary btn-sm text-brand-700 border-brand-200 hover:bg-brand-50"
+                        onClick={() => {
+                          setOpen(report);
+                          startEditing(report);
+                        }}
+                      >
+                        <Icon name="edit" size={13} />
+                        Edit & Status
+                      </button>
                       <button
                         type="button"
                         className="btn-secondary btn-sm"
@@ -1425,6 +1447,26 @@ export default function DailyReports() {
           ) : (
             <div className="space-y-4 text-sm">
               {loadingDetail && <Skeleton lines={2} />}
+
+              {open.status === 'changes_requested' && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50/90 p-3.5 shadow-xs">
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500 text-white font-bold text-xs">!</span>
+                    <div>
+                      <p className="text-xs font-bold text-amber-950">Changes Requested by Reviewer</p>
+                      <p className="text-[11px] text-amber-900 mt-0.5">{open.reviewNote || 'Reviewer requested updates before this report can be approved.'}</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-primary btn-sm bg-amber-600 hover:bg-amber-700"
+                    onClick={() => startEditing(open)}
+                  >
+                    <Icon name="edit" size={13} />
+                    Edit & Update Report
+                  </button>
+                </div>
+              )}
 
               <div className="grid gap-3 sm:grid-cols-3">
                 <div className="rounded-lg bg-ink-50 p-2.5">

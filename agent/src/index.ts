@@ -54,6 +54,10 @@ interface QueueEvent {
   startedAt?: string;
   endedAt?: string;
   activeSeconds?: number;
+  idleSeconds?: number;
+  foregroundSeconds?: number;
+  isLocked?: boolean;
+  windowTitle?: string;
   domain?: string;
   browser?: string;
   tabTitle?: string;
@@ -193,6 +197,7 @@ interface ProcessSnapshot {
   appCategory: string;
   pid: number;
   idleSeconds: number;
+  isLocked: boolean;
   windowTitle: string;
 }
 
@@ -229,22 +234,27 @@ if ($targetPid -gt 0) {
     $title = $p.MainWindowTitle
   }
 }
-"$procName|$targetPid|$idleMs|$title"`;
+$isLocked = ($h -eq [IntPtr]::Zero) -or ($procName -like "*lockapp*") -or ($procName -like "*logonui*")
+"$procName|$targetPid|$idleMs|$($isLocked ? 1 : 0)|$title"`;
   try {
     const { stdout } = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 8000 });
     const parts = stdout.trim().split('|');
     const proc = (parts[0] ?? '').trim().toLowerCase();
     const pid = Number(parts[1]) || 0;
     const idleMs = Math.max(0, Number(parts[2]) || 0);
-    const title = parts.slice(3).join('|').trim();
-    if (!proc) return null;
-    const { appName, appCategory } = resolveAppInfo(proc, title);
+    const isLocked = parts[3] === '1';
+    const title = parts.slice(4).join('|').trim();
+    if (!proc && !isLocked) return null;
+    const { appName, appCategory } = isLocked
+      ? { appName: 'Workstation Locked', appCategory: 'Administration' }
+      : resolveAppInfo(proc, title);
     return {
-      procName: proc,
+      procName: proc || 'lockapp',
       appName,
       appCategory,
       pid,
       idleSeconds: Math.floor(idleMs / 1000),
+      isLocked,
       windowTitle: title,
     };
   } catch {
@@ -403,18 +413,24 @@ async function main(): Promise<void> {
         log(`Excluded application ${activeSnapshot.appName} detected; activity not recorded.`);
       } else {
         const isIdle = activeSnapshot.idleSeconds >= idleThresholdSeconds;
+        const idleSec = isIdle ? Math.min(seconds, activeSnapshot.idleSeconds) : 0;
+        const activeSec = Math.max(0, seconds - idleSec);
         queue.push({
-          type: isIdle ? 'work' : 'app',
-          title: isIdle ? 'Idle period' : undefined,
-          occurredAt: isIdle ? new Date(activeSince).toISOString() : undefined,
+          type: 'app',
+          title: activeSnapshot.windowTitle || undefined,
+          occurredAt: new Date(activeSince).toISOString(),
           clientEventId: crypto.randomUUID(),
-          appName: isIdle ? 'Idle Time' : activeSnapshot.appName,
-          appCategory: isIdle ? 'Administration' : activeSnapshot.appCategory,
+          appName: activeSnapshot.appName,
+          appCategory: activeSnapshot.appCategory,
           processName: `${activeSnapshot.procName}.exe`,
           processId: activeSnapshot.pid || undefined,
           startedAt: new Date(activeSince).toISOString(),
           endedAt: new Date(now).toISOString(),
-          activeSeconds: seconds,
+          activeSeconds: activeSec,
+          idleSeconds: idleSec,
+          foregroundSeconds: seconds,
+          isLocked: activeSnapshot.isLocked,
+          windowTitle: activeSnapshot.windowTitle,
         });
       }
     }
@@ -446,8 +462,8 @@ async function main(): Promise<void> {
       }
       const fg = await foregroundProcess();
       const isIdle = fg ? fg.idleSeconds >= idleThresholdSeconds : false;
-      const currentApp = isIdle ? 'Idle / Away' : (fg?.appName ?? 'Desktop');
-      const currentCategory = isIdle ? 'Administration' : (fg?.appCategory ?? 'Other');
+      const currentApp = fg?.appName ?? 'Desktop';
+      const currentCategory = fg?.appCategory ?? 'Other';
 
       await api('/activity/agent/heartbeat', {
         method: 'POST',
@@ -456,6 +472,8 @@ async function main(): Promise<void> {
           currentCategory,
           isIdle,
           idleSeconds: fg?.idleSeconds ?? 0,
+          isLocked: fg?.isLocked ?? false,
+          windowTitle: fg?.windowTitle ?? '',
         }),
       }, { deviceToken: token });
 

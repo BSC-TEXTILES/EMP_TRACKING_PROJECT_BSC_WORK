@@ -36,6 +36,10 @@ export interface ActivityEvent {
   startedAt?: string;
   endedAt?: string;
   activeSeconds?: number;
+  idleSeconds?: number;
+  foregroundSeconds?: number;
+  isLocked?: boolean;
+  windowTitle?: string;
   browser?: string;
   domain?: string;
   tabTitle?: string;
@@ -509,11 +513,12 @@ export class ActivityService {
 
   static async heartbeat(
     context: DeviceContext,
-    info?: { currentApp?: string; currentCategory?: string; isIdle?: boolean; idleSeconds?: number },
+    info?: { currentApp?: string; currentCategory?: string; isIdle?: boolean; idleSeconds?: number; isLocked?: boolean; windowTitle?: string },
   ) {
     if (!context.sessionId) throw ApiError.badRequest('No active work session. Start attendance and monitoring first.');
     const app = info?.currentApp ? cleanText(info.currentApp, 120) : null;
     const cat = info?.currentCategory ? cleanText(info.currentCategory, 60) : null;
+    const isLocked = Boolean(info?.isLocked);
     const idleSec = Number.isFinite(info?.idleSeconds)
       ? Math.max(0, Math.floor(Number(info?.idleSeconds)))
       : (info?.isIdle ? 300 : 0);
@@ -523,9 +528,10 @@ export class ActivityService {
        SET last_heartbeat_at = NOW(3), 
            current_app = COALESCE(?, current_app), 
            current_category = COALESCE(?, current_category), 
-           idle_seconds = ? 
+           idle_seconds = ?,
+           is_locked = ?
        WHERE id = ?`,
-      [app, cat, idleSec, context.sessionId],
+      [app, cat, idleSec, isLocked ? 1 : 0, context.sessionId],
     );
     await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [context.deviceId]);
 
@@ -536,6 +542,8 @@ export class ActivityService {
       currentCategory: cat,
       isIdle: Boolean(info?.isIdle),
       idleSeconds: idleSec,
+      isLocked,
+      windowTitle: info?.windowTitle ?? '',
       serverNow: new Date().toISOString(),
     });
 
@@ -641,15 +649,19 @@ export class ActivityService {
           if (started.invalid || ended.invalid || (started.ms !== null && ended.ms !== null && ended.ms < started.ms)) { reject('invalid_time'); continue; }
           if (started.ms !== null && started.ms < sessionStartMs) { reject('outside_session'); continue; }
           const seconds = boundedSeconds(event.activeSeconds, started.ms, ended.ms, 6 * 3600);
+          const idleSeconds = Number.isFinite(event.idleSeconds) ? Math.max(0, Math.floor(Number(event.idleSeconds))) : 0;
+          const foregroundSeconds = Number.isFinite(event.foregroundSeconds) ? Math.max(0, Math.floor(Number(event.foregroundSeconds))) : seconds;
+          const isLocked = Boolean(event.isLocked);
+          const windowTitle = event.windowTitle ? cleanText(event.windowTitle, 255) : null;
           const category = catalogByName.get(appName.toLowerCase())?.category ?? (APP_CATEGORIES.includes(event.appCategory as never) ? String(event.appCategory) : 'Other');
           const result = await execute(
             `INSERT IGNORE INTO application_usage_logs
-              (session_id, employee_id, device_id, app_name, app_category, process_name, process_id, started_at, ended_at, active_seconds, last_active_at, client_event_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW(3)), ?, ?, COALESCE(?, NOW(3)), ?)`,
+              (session_id, employee_id, device_id, app_name, app_category, process_name, process_id, started_at, ended_at, active_seconds, idle_seconds, foreground_seconds, is_locked, window_title, last_active_at, client_event_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, NOW(3)), ?, ?, ?, ?, ?, ?, COALESCE(?, NOW(3)), ?)`,
             [
               context.sessionId, context.employeeId, context.deviceId, appName, category, cleanText(event.processName, 160) || null,
               Number.isFinite(Number(event.processId)) && Number(event.processId) > 0 ? Math.floor(Number(event.processId)) : null,
-              started.value, ended.value, seconds, ended.value, eventId,
+              started.value, ended.value, seconds, idleSeconds, foregroundSeconds, isLocked ? 1 : 0, windowTitle, ended.value, eventId,
             ],
           );
           if (result.affectedRows > 0) accepted += 1; else duplicates += 1;

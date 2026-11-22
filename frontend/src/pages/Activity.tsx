@@ -15,6 +15,7 @@ import { SystemGuardian } from '../components/liveguard/SystemGuardian';
 import { SystemMonitor } from '../components/liveguard/SystemMonitor';
 import { ForensicReportModal } from '../components/liveguard/ForensicReportModal';
 import { LiveDevicesPanel } from '../components/LiveDevicesPanel';
+import { AppIcon } from '../components/AppIcon';
 
 // Modular Activity Components
 import { ActivityOverview } from './activity/ActivityOverview';
@@ -1415,8 +1416,9 @@ export default function Activity() {
                           <div className="mt-3 space-y-1.5 rounded-lg bg-ink-50 p-2.5 text-xs">
                             <div className="flex items-center justify-between">
                               <span className="text-ink-500">Current App:</span>
-                              <span className="max-w-[170px] truncate rounded border border-ink-200 bg-white px-2 py-0.5 font-medium text-brand-700">
-                                {row.currentApp || (row.active ? 'Active Session' : 'None')}
+                              <span className="inline-flex items-center gap-1.5 max-w-[190px] truncate rounded border border-ink-200 bg-white px-2 py-0.5 font-medium text-brand-700">
+                                {row.currentApp && <AppIcon name={row.currentApp} size={14} />}
+                                <span className="truncate">{row.currentApp || (row.active ? 'Active Session' : 'None')}</span>
                               </span>
                             </div>
                             <div className="flex items-center justify-between">
@@ -1513,7 +1515,10 @@ export default function Activity() {
                             )}
                           </td>
                           <td>
-                            <span className="text-xs font-medium text-ink-700">{row.currentApp || '—'}</span>
+                            <div className="flex items-center gap-1.5">
+                              {row.currentApp && <AppIcon name={row.currentApp} size={15} />}
+                              <span className="text-xs font-medium text-ink-700">{row.currentApp || '—'}</span>
+                            </div>
                           </td>
                           <td>{formatMinutes(row.activeMinutes)}</td>
                           <td>{row.tasksCompleted}</td>
@@ -1956,8 +1961,10 @@ export default function Activity() {
                 ) : (
                   <ul className="space-y-1 text-sm text-ink-700">
                     {(detail.daily.appBreakdown ?? []).slice(0, 10).map((item, idx) => (
-                      <li key={idx}>
-                        {item.app} · {formatMinutes(item.minutes)}
+                      <li key={idx} className="flex items-center gap-2">
+                        <AppIcon name={item.app} size={16} />
+                        <span className="font-semibold">{item.app}</span>
+                        <span className="text-ink-400 font-mono text-xs">· {formatMinutes(item.minutes)}</span>
                       </li>
                     ))}
                   </ul>

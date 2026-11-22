@@ -489,7 +489,12 @@ export class DailyReportService {
     if (!report) throw ApiError.notFound('Report not found');
 
     const isAuthor = Number(report.employee_id) === user.id;
-    const isReviewer = user.permissions.includes('reports.review') || user.permissions.includes('reports.view.all');
+    const isReviewer =
+      user.permissions.includes('reports.review') ||
+      user.permissions.includes('reports.view.all') ||
+      user.roleSlug === 'admin' ||
+      user.roleSlug === 'super_admin' ||
+      user.roleSlug === 'manager';
     if (!isAuthor && !isReviewer) {
       throw ApiError.forbidden('You do not have permission to edit this report');
     }

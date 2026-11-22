@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Card, SectionHeader, EmptyState, Badge, Field } from '../../components/ui';
 import { Icon } from '../../components/icons';
+import { AppIcon } from '../../components/AppIcon';
 import { cx, formatDate, formatDateTime, titleize } from '../../lib/format';
 import { formatMinutes, type SelfDashboard, type AppUsage, type BrowserActivityItem } from './activityTypes';
 
@@ -110,6 +111,7 @@ export function ActivityTodayPanel({
                               title="Select for deletion"
                             />
                           )}
+                          <AppIcon name={item.app} size={18} />
                           <span className="truncate font-semibold text-ink-900">{item.app}</span>
                         </div>
                         <div className="flex shrink-0 items-center gap-2">
