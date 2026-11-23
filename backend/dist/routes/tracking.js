@@ -1,13 +1,10 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Router } from 'express';
 import { z } from 'zod';
 import { query } from '../db/index.js';
 import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
-import { TrackingAgentService, batchSchema, enrollSchema, getInstallerInfo, heartbeatSchema, listTrackingDevices, } from '../services/tracking/TrackingAgentService.js';
+import { TrackingAgentService, batchSchema, enrollSchema, getInstallerInfo, heartbeatSchema, installerPath, listTrackingDevices, } from '../services/tracking/TrackingAgentService.js';
 import { TrackingConfig, settingsPatchSchema } from '../services/tracking/TrackingConfig.js';
 import { TrackingQueryService, canSeeOthers, deviceLive, trackingScope } from '../services/tracking/TrackingQueryService.js';
 import { TrackingReportService } from '../services/tracking/TrackingReportService.js';
@@ -25,17 +22,6 @@ function requireDevice(req, _res, next) {
         .then((device) => { req.trackingDevice = device; next(); })
         .catch(next);
 }
-const here = path.dirname(fileURLToPath(import.meta.url));
-function installerPath() {
-    const name = 'BSC-Activity-Tracker-Setup.exe';
-    const candidates = [
-        process.env.TRACKING_AGENT_INSTALLER,
-        path.resolve(here, '../../../tracking-agent/dist', name),
-        path.resolve(process.cwd(), 'tracking-agent/dist', name),
-        path.resolve(process.cwd(), '../tracking-agent/dist', name),
-    ].filter(Boolean);
-    return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
-}
 // ------------------------------------------------------------ Agent API
 // Device-token authenticated; no employee session or password is ever stored on the device.
 trackingRouter.post('/agent/enroll', rateLimit({ windowMs: 10 * 60_000, max: 20, keyPrefix: 'tracking-enroll' }), asyncHandler(async (req, res) => {
@@ -52,6 +38,13 @@ trackingRouter.post('/agent/acknowledge', rateLimit({ windowMs: 60_000, max: 60,
 }));
 trackingRouter.post('/agent/unenroll', rateLimit({ windowMs: 60_000, max: 30, keyPrefix: 'tracking-unenroll' }), requireDevice, asyncHandler(async (req, res) => {
     res.json(await TrackingAgentService.unenroll(req.trackingDevice, clientIp(req)));
+}));
+/** Agent self-update download (device token). Only a release-grade signed installer is served. */
+trackingRouter.get('/agent/update/download', rateLimit({ windowMs: 60 * 60_000, max: 10, keyPrefix: 'tracking-update-download' }), requireDevice, asyncHandler(async (_req, res) => {
+    const file = installerPath();
+    if (!file || !getInstallerInfo()?.releaseGrade)
+        throw ApiError.notFound('No release-grade signed installer is published on this server.');
+    res.download(file, 'BSC-Activity-Tracker-Setup.exe');
 }));
 // ------------------------------------------------------------- Web API
 trackingRouter.use(authenticate);
@@ -71,6 +64,14 @@ trackingRouter.get('/agent/info', asyncHandler(async (_req, res) => {
         downloadPath: '/api/tracking/agent/download',
         sha256: installer?.sha256 ?? null,
         sizeBytes: installer?.size ?? null,
+        installerVersion: installer?.version ?? null,
+        signature: installer ? {
+            releaseGrade: installer.releaseGrade,
+            signer: installer.signer,
+            issuer: installer.issuer,
+            timestamped: installer.timestamped,
+            problems: installer.problems,
+        } : null,
     });
 }));
 /** HRMS page usage from the signed-in web app. */

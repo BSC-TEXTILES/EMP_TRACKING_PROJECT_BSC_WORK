@@ -396,7 +396,7 @@ async function ensureDatabaseReady(): Promise<void> {
   }
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   process.on('unhandledRejection', (reason) => console.error('[process] unhandled promise rejection', reason));
   try {
     await recoverPendingInstallation();

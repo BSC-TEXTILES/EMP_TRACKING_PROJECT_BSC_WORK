@@ -132,6 +132,13 @@ async function deliver(row) {
     }
     catch (error) {
         const message = describeSmtpError(error);
+        if (isSmtpRateLimit(error)) {
+            // Provider throttling: pause the whole queue and retry later without using up an attempt.
+            smtpPausedUntil = Date.now() + RATE_LIMIT_PAUSE_MS;
+            await execute("UPDATE email_deliveries SET status = 'queued', attempts = GREATEST(attempts - 1, 0), last_error = ?, next_attempt_at = DATE_ADD(NOW(3), INTERVAL 15 MINUTE) WHERE id = ?", [message, row.id]);
+            console.warn(`[mail] provider rate limit; queue paused 15 min (message ${row.id} kept for retry)`);
+            return;
+        }
         const current = await queryOne('SELECT attempts, max_attempts FROM email_deliveries WHERE id = ?', [row.id]);
         const attempts = Number(current?.attempts ?? 1);
         const max = Number(current?.max_attempts ?? 3);
@@ -172,6 +179,18 @@ async function loadAttachments(list) {
         }
     }
     return result;
+}
+const RATE_LIMIT_PAUSE_MS = 15 * 60_000;
+/** Queue-wide pause after the provider rate-limits us; shared by every batch in this process. */
+let smtpPausedUntil = 0;
+/** True for provider throttling (e.g. Hostinger 451 "Ratelimit"), which must not burn retries. */
+export function isSmtpRateLimit(error) {
+    const err = error;
+    const text = `${err?.message ?? ''} ${err?.response ?? ''}`.toLowerCase();
+    return (err?.responseCode === 451 || err?.responseCode === 421 || err?.responseCode === 450) && /rate ?limit|too many|throttl/.test(text);
+}
+export function smtpPauseRemainingMs() {
+    return Math.max(0, smtpPausedUntil - Date.now());
 }
 /** Turns SMTP failures into an administrator-readable reason without exposing credentials. */
 export function describeSmtpError(error) {
@@ -404,6 +423,8 @@ export async function deliverNow(id) {
 }
 /** Processes due queue rows. Returns counters for the job log. */
 export async function processEmailQueue(limit = 10) {
+    if (smtpPauseRemainingMs() > 0)
+        return { sent: 0, failed: 0, skipped: 0 };
     const rows = await query(`SELECT id, recipient_email, recipient_name, subject, template, payload
        FROM email_deliveries
       WHERE status IN ('queued', 'failed')
@@ -415,13 +436,10 @@ export async function processEmailQueue(limit = 10) {
     let sent = 0;
     let failed = 0;
     let skipped = 0;
-    let consecutiveRateLimits = 0;
     for (const row of rows) {
-        // Stop processing if we hit rate limits repeatedly
-        if (consecutiveRateLimits >= 3) {
-            console.log('[mail] Stopping queue processing due to repeated rate limits');
+        // The provider throttled us (this or an earlier batch): leave the rest for later.
+        if (smtpPauseRemainingMs() > 0)
             break;
-        }
         const claimed = await execute("UPDATE email_deliveries SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status IN ('queued','failed')", [row.id]);
         if (claimed.affectedRows === 0)
             continue;
@@ -430,23 +448,12 @@ export async function processEmailQueue(limit = 10) {
         const after = await queryOne('SELECT status FROM email_deliveries WHERE id = ?', [row.id]);
         if (after?.status === 'sent') {
             sent += 1;
-            consecutiveRateLimits = 0;
         }
         else if (after?.status === 'skipped') {
             skipped += 1;
-            consecutiveRateLimits = 0;
         }
         else if (after?.status === 'failed') {
             failed += 1;
-            // Check if this was a rate limit error
-            const errorRow = await queryOne('SELECT last_error FROM email_deliveries WHERE id = ?', [row.id]);
-            if (errorRow?.last_error?.includes('rate limit') || errorRow?.last_error?.includes('Ratelimit') || errorRow?.last_error?.includes('451')) {
-                consecutiveRateLimits += 1;
-                // Add a longer delay after rate limit in production
-                if (process.env.NODE_ENV !== 'test') {
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                }
-            }
         }
         else if (before?.status === 'sending') {
             failed += 1;

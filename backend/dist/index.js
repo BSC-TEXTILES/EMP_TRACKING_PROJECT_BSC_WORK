@@ -12,7 +12,7 @@ import { apiRouter } from './routes/index.js';
 import { initRealtime } from './realtime/io.js';
 import { mobileCors, originGuard, rateLimit, securityHeaders } from './middleware/security.js';
 import { startJobs } from './jobs/scheduler.js';
-import { closePool, queryOne } from './db/index.js';
+import { closePool, query, queryOne } from './db/index.js';
 import { FileService } from './services/FileService.js';
 import { logEnvironmentReport, validateEnvironment } from './lib/envValidation.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -153,15 +153,12 @@ async function ensureDatabaseReady() {
           KEY idx_login_audit_login_at (login_at),
           KEY idx_login_audit_status (termination_status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
-                // Ensure all employee emails use official @bsctextiles.in domain format
-                await execute(`UPDATE employees 
-          SET email = CONCAT(LOWER(REPLACE(TRIM(full_name), ' ', '.')), '@bsctextiles.in')
-          WHERE email LIKE '%@workforce.test' OR email IS NULL OR email = ''`);
+                // Startup only guarantees the two root accounts exist. It never rewrites, fabricates
+                // or deletes existing employee records (production data safety).
                 // Renukaradhya (renukaradhya@bsctextiles.in) is the only Super Admin and the root of the hierarchy
                 const { pool } = await import('./db/index.js');
                 const dbConn = await pool.getConnection();
                 try {
-                    await dbConn.query('SET FOREIGN_KEY_CHECKS = 0');
                     const { hashPassword } = await import('./lib/crypto.js');
                     const validHash = await hashPassword('Workforce@2026');
                     const [superAdminRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'super_admin' LIMIT 1");
@@ -186,46 +183,28 @@ async function ensureDatabaseReady() {
                     }
                     // Strip super_admin role from all other employees
                     await dbConn.query(`UPDATE employees SET role_id = (SELECT id FROM roles WHERE slug = 'employee' LIMIT 1) WHERE id != ? AND role_id = ?`, [renukaId, superAdminRoleId]);
-                    // Ensure Chetan TK exists as active HR Manager reporting to Renukaradhya
-                    const [chetanRows] = await dbConn.query("SELECT id, employee_code, email FROM employees WHERE full_name LIKE '%Chetan%' ORDER BY id DESC LIMIT 1");
+                    // Chetan TK (HR Manager) is created only on a database that does not have him yet.
+                    // An existing account is never modified here: HR/admin changes made in the app stand.
+                    const [chetanRows] = await dbConn.query("SELECT id FROM employees WHERE LOWER(email) = 'chetan.tk@bsctextiles.in' OR full_name = 'Chetan TK' ORDER BY id LIMIT 1");
                     let chetanId;
-                    const [hrRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'hr_manager' LIMIT 1");
-                    const hrRoleId = hrRole.length > 0 ? Number(hrRole[0].id) : 7;
-                    const [hrDept] = await dbConn.query("SELECT id FROM departments WHERE code = 'HR' LIMIT 1");
-                    const hrDeptId = hrDept.length > 0 ? Number(hrDept[0].id) : null;
-                    const [hrDesig] = await dbConn.query("SELECT id FROM designations WHERE title LIKE '%HR Manager%' OR title LIKE '%HR%' LIMIT 1");
-                    const hrDesigId = hrDesig.length > 0 ? Number(hrDesig[0].id) : null;
                     if (chetanRows.length > 0) {
                         chetanId = Number(chetanRows[0].id);
-                        await dbConn.query(`UPDATE employees 
-               SET full_name = 'Chetan TK',
-                   email = 'chetan.tk@bsctextiles.in',
-                   mobile = '9876543211',
-                   manager_id = ?,
-                   role_id = ?,
-                   department_id = COALESCE(?, department_id),
-                   designation_id = COALESCE(?, designation_id),
-                   status = 'active'
-               WHERE id = ?`, [renukaId, hrRoleId, hrDeptId, hrDesigId, chetanId]);
                     }
                     else {
-                        const [chetanInsert] = await dbConn.query(`INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at, mobile_verified_at)
-               VALUES ('EMP-1002', 'Chetan TK', 'chetan.tk@bsctextiles.in', '9876543211', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3), NOW(3))`, [validHash, hrRoleId, hrDeptId, hrDesigId, renukaId]);
+                        const [hrRole] = await dbConn.query("SELECT id FROM roles WHERE slug = 'hr_manager' LIMIT 1");
+                        const [hrDept] = await dbConn.query("SELECT id FROM departments WHERE code = 'HR' LIMIT 1");
+                        const [hrDesig] = await dbConn.query("SELECT id FROM designations WHERE title LIKE '%HR Manager%' OR title LIKE '%HR%' LIMIT 1");
+                        if (hrRole.length === 0)
+                            throw new Error('hr_manager role missing; run migrations');
+                        const [chetanInsert] = await dbConn.query(
+                        // employees.mobile is NOT NULL UNIQUE: placeholder on a brand-new database only; HR updates it.
+                        `INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, department_id, designation_id, manager_id, status, joining_date, email_verified_at)
+               VALUES ('EMP-1002', 'Chetan TK', 'chetan.tk@bsctextiles.in', '9876543211', ?, ?, ?, ?, ?, 'active', CURDATE(), NOW(3))`, [validHash, Number(hrRole[0].id), hrDept[0]?.id ?? null, hrDesig[0]?.id ?? null, renukaId]);
                         chetanId = Number(chetanInsert.insertId);
                     }
-                    // Purge deprecated mock/test accounts with @workforce.test domain
-                    try {
-                        await dbConn.query("DELETE FROM employees WHERE email LIKE '%@workforce.test'");
-                    }
-                    catch { }
-                    await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
                     console.log(`[startup] Verified Renukaradhya (ID: ${renukaId}, Super Admin) and Chetan TK (ID: ${chetanId}, HR Manager) ready.`);
                 }
                 finally {
-                    try {
-                        await dbConn.query('SET FOREIGN_KEY_CHECKS = 1');
-                    }
-                    catch { }
                     dbConn.release();
                 }
                 // Ensure task management tables exist
@@ -290,7 +269,7 @@ async function ensureDatabaseReady() {
                     const { DailyTaskService } = await import('./services/DailyTaskService.js');
                     await DailyTaskService.ensureTemplatesExist();
                     console.log('[startup] Master SOP task templates verified.');
-                    const [adminRows] = await dbConn.query(`SELECT e.id, e.email, r.slug AS role_slug
+                    const adminRows = await query(`SELECT e.id, e.email, r.slug AS role_slug
              FROM employees e JOIN roles r ON e.role_id = r.id
              WHERE r.slug = 'super_admin' LIMIT 1`);
                     if (adminRows.length > 0) {
@@ -382,7 +361,7 @@ async function ensureDatabaseReady() {
         console.error('[startup] Could not verify/initialize database schema:', err);
     }
 }
-async function main() {
+export async function main() {
     process.on('unhandledRejection', (reason) => console.error('[process] unhandled promise rejection', reason));
     try {
         await recoverPendingInstallation();

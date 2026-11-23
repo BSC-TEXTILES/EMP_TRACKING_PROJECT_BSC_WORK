@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { execute, query, queryOne, transaction, txExecute, txQueryOne } from '../../db/index.js';
 import { ApiError } from '../../lib/http.js';
@@ -21,26 +22,60 @@ const MAX_BATCH = 500;
 const MAX_INTERVAL_SECONDS = 3900;
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
-let cachedInstaller = null;
-export function getInstallerInfo() {
-    const name = 'BSC-Activity-Tracker-Setup.exe';
+const INSTALLER_NAME = 'BSC-Activity-Tracker-Setup.exe';
+const serviceDir = path.dirname(fileURLToPath(import.meta.url));
+/** Locates the built installer (TRACKING_AGENT_INSTALLER overrides). */
+export function installerPath() {
     const candidates = [
         process.env.TRACKING_AGENT_INSTALLER,
-        path.resolve(process.cwd(), 'tracking-agent/dist', name),
-        path.resolve(process.cwd(), '../tracking-agent/dist', name),
+        path.resolve(serviceDir, '../../../../tracking-agent/dist', INSTALLER_NAME),
+        path.resolve(process.cwd(), 'tracking-agent/dist', INSTALLER_NAME),
+        path.resolve(process.cwd(), '../tracking-agent/dist', INSTALLER_NAME),
     ].filter(Boolean);
-    const found = candidates.find((c) => fs.existsSync(c));
+    return candidates.find((candidate) => fs.existsSync(candidate)) ?? null;
+}
+let cachedInstaller = null;
+/**
+ * Hash, size and signing status of the installer. Signing status comes from the
+ * release-manifest.json written by the build's release gate and is only trusted when the
+ * manifest's hash matches the installer actually on disk.
+ */
+export function getInstallerInfo() {
+    const found = installerPath();
     if (!found)
         return null;
     try {
         const stat = fs.statSync(found);
-        if (cachedInstaller && cachedInstaller.mtime === stat.mtimeMs) {
-            return { sha256: cachedInstaller.sha256, size: cachedInstaller.size };
+        const manifestFile = path.join(path.dirname(found), 'release-manifest.json');
+        const manifestStat = fs.existsSync(manifestFile) ? fs.statSync(manifestFile) : null;
+        const key = `${found}:${stat.mtimeMs}:${stat.size}:${manifestStat?.mtimeMs ?? 0}`;
+        if (cachedInstaller?.key === key)
+            return cachedInstaller.info;
+        const hash = crypto.createHash('sha256').update(fs.readFileSync(found)).digest('hex');
+        let manifest = null;
+        if (manifestStat) {
+            try {
+                manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8').replace(/^﻿/, ''));
+            }
+            catch {
+                manifest = null;
+            }
         }
-        const buf = fs.readFileSync(found);
-        const hash = crypto.createHash('sha256').update(buf).digest('hex');
-        cachedInstaller = { mtime: stat.mtimeMs, sha256: hash, size: stat.size };
-        return { sha256: hash, size: stat.size };
+        const matches = manifest?.sha256?.setup?.toLowerCase() === hash;
+        const info = {
+            sha256: hash,
+            size: stat.size,
+            version: matches ? String(manifest.version ?? '') || null : null,
+            releaseGrade: Boolean(matches && manifest.kind === 'release' && manifest.releaseGrade === true),
+            signer: matches ? manifest.setup?.signer ?? null : null,
+            issuer: matches ? manifest.setup?.issuer ?? null : null,
+            timestamped: Boolean(matches && manifest.setup?.timestamp),
+            problems: !manifest ? ['No release manifest: this installer was not produced by the signed release pipeline (tracking-agent/build.ps1).']
+                : !matches ? ['release-manifest.json does not match the installer on disk.']
+                    : Array.isArray(manifest.problems) ? manifest.problems.map(String).slice(0, 20) : [],
+        };
+        cachedInstaller = { key, info };
+        return info;
     }
     catch {
         return null;
@@ -326,8 +361,8 @@ export const TrackingAgentService = {
          current_browser = VALUES(current_browser), current_domain = VALUES(current_domain), os_version = COALESCE(VALUES(os_version), os_version),
          ip = VALUES(ip), last_heartbeat_at = NOW(3), pending_events = VALUES(pending_events), dropped_events = VALUES(dropped_events),
          agent_sync_failures = VALUES(agent_sync_failures),
-         last_sync_error_at = IF(VALUES(last_sync_error) IS NULL, NULL, COALESCE(IF(last_sync_error <=> VALUES(last_sync_error), last_sync_error_at, NULL), NOW(3))),
-         last_sync_error = VALUES(last_sync_error),
+         last_sync_error_at = IF(VALUES(agent_sync_failures) = 0 OR VALUES(last_sync_error) IS NULL, NULL, COALESCE(IF(last_sync_error <=> VALUES(last_sync_error), last_sync_error_at, NULL), NOW(3))),
+         last_sync_error = IF(VALUES(agent_sync_failures) = 0, NULL, VALUES(last_sync_error)),
          clock_skew_ms = VALUES(clock_skew_ms), extension_seen_at = COALESCE(VALUES(extension_seen_at), extension_seen_at), went_offline_at = NULL`, [
             device.deviceId, device.employeeId, clip(input.agentVersion, 20), paused ? 'disabled' : 'running', state, app,
             clip(input.currentBrowser, 60), domain, clip(input.osVersion, 60), ip ?? null, input.pendingEvents, input.droppedEvents,
@@ -367,14 +402,18 @@ export const TrackingAgentService = {
         const hasUpdate = Boolean(version && compareVersions(version, settings.latestAgentVersion) < 0);
         let update = null;
         if (hasUpdate) {
+            // An update is only offered when a release-grade (trusted-CA signed, timestamped)
+            // installer is published; the agent re-verifies hash, Authenticode and publisher.
             const installer = getInstallerInfo();
-            update = {
-                latestVersion: settings.latestAgentVersion,
-                required: compareVersions(version, settings.minimumAgentVersion) < 0,
-                downloadPath: '/api/tracking/agent/download',
-                publisher: 'BSC Textiles Pvt Ltd',
-                ...(installer ? { sha256: installer.sha256 } : {}),
-            };
+            if (installer?.releaseGrade) {
+                update = {
+                    latestVersion: settings.latestAgentVersion,
+                    required: compareVersions(version, settings.minimumAgentVersion) < 0,
+                    downloadPath: '/api/tracking/agent/update/download',
+                    publisher: installer.signer ?? 'BSC Textiles Pvt Ltd',
+                    sha256: installer.sha256,
+                };
+            }
         }
         return {
             serverTime: new Date(now).toISOString(),

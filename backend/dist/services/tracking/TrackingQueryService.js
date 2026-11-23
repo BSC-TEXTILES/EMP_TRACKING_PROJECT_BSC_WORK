@@ -7,10 +7,18 @@ import { trackingAudit } from './trackingAudit.js';
 const iso = (value) => (value ? parseUtc(String(value))?.toISOString() ?? null : null);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 export function validDate(value, fallback = today()) {
-    if (typeof value !== 'string' || !DATE_RE.test(value))
+    if (typeof value !== 'string')
         return fallback;
-    const parsed = Date.parse(`${value}T00:00:00Z`);
-    return Number.isNaN(parsed) ? fallback : value;
+    const trimmed = value.trim();
+    if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
+        const [d, m, y] = trimmed.split('-');
+        const norm = `${y}-${m}-${d}`;
+        return !Number.isNaN(Date.parse(`${norm}T00:00:00Z`)) ? norm : fallback;
+    }
+    if (!DATE_RE.test(trimmed))
+        return fallback;
+    const parsed = Date.parse(`${trimmed}T00:00:00Z`);
+    return Number.isNaN(parsed) ? fallback : trimmed;
 }
 export function validRange(fromRaw, toRaw, maxDays = 31) {
     const to = validDate(toRaw);
@@ -228,6 +236,9 @@ export const TrackingQueryService = {
             const loginAt = session?.firstStartAt ?? day?.firstSeenAt ?? null;
             const liveActiveAt = primary?.online && primary.activityState === 'active' ? primary.lastHeartbeatAt : null;
             const lastActivity = [day?.lastActiveAt, date === today() ? liveActiveAt : null].filter(Boolean).sort().pop() ?? null;
+            const sessionActive = (session && session.open > 0 && (day?.activeSeconds ?? 0) === 0) ? Math.min(session.totalSeconds, 3600) : 0;
+            const totalActive = (day?.activeSeconds ?? 0) || sessionActive;
+            const hasData = Boolean(day || (session && session.count > 0) || primary?.online);
             items.push({
                 id,
                 employeeCode: String(row.employee_code),
@@ -244,10 +255,10 @@ export const TrackingQueryService = {
                 loginSource: session?.firstStartAt ? 'device' : day?.firstSeenAt ? 'device' : null,
                 hrmsLoginAt: login?.firstLogin ?? null,
                 logoutAt: session && session.open === 0 ? session.lastEndAt : null,
-                activeSeconds: day?.activeSeconds ?? 0,
+                activeSeconds: totalActive,
                 idleSeconds: day?.idleSeconds ?? 0,
                 lockedSeconds: day?.lockedSeconds ?? 0,
-                hasData: Boolean(day),
+                hasData,
                 lastActivityAt: lastActivity,
                 status,
                 currentApp: status === 'active' || status === 'idle' ? primary?.currentApp ?? null : null,
@@ -392,7 +403,7 @@ function compareVer(a, b) {
  * summary, application and website usage, sessions, gaps and the timeline.
  */
 export async function buildDay(employeeId, date, settings) {
-    const intervalsRaw = await query(`SELECT started_at, ended_at, state, app_name, browser, domain, device_id, event_type
+    const intervalsRaw = await query(`SELECT started_at, ended_at, state, app_name, process_name, browser, domain, device_id, event_type
      FROM tracking_events
      WHERE employee_id = ? AND work_date = ? AND event_type IN ('activity','web')
      ORDER BY started_at, id`, [employeeId, date]);
@@ -411,7 +422,7 @@ export async function buildDay(employeeId, date, settings) {
         .filter((row) => row.event_type === 'activity')
         .map((row) => ({
         start: ms(row.started_at), end: ms(row.ended_at), state: row.state,
-        app: row.app_name ?? null, browser: row.browser ?? null, domain: row.domain ?? null,
+        app: row.app_name ?? null, process: row.process_name ?? null, browser: row.browser ?? null, domain: row.domain ?? null,
         deviceId: row.device_id ? Number(row.device_id) : null,
     }));
     const webOnly = intervalsRaw.filter((row) => row.event_type === 'web').map((row) => ({
@@ -458,7 +469,7 @@ export async function buildDay(employeeId, date, settings) {
     for (const i of activity) {
         if (!i.app || i.state === 'locked')
             continue;
-        const entry = apps.get(i.app) ?? { app: i.app, activeSeconds: 0, idleSeconds: 0, first: i.start, last: i.end };
+        const entry = apps.get(i.app) ?? { app: i.app, process: i.process, activeSeconds: 0, idleSeconds: 0, first: i.start, last: i.end };
         const seconds = Math.round((i.end - i.start) / 1000);
         if (i.state === 'active')
             entry.activeSeconds += seconds;
@@ -466,6 +477,8 @@ export async function buildDay(employeeId, date, settings) {
             entry.idleSeconds += seconds;
         entry.first = Math.min(entry.first, i.start);
         entry.last = Math.max(entry.last, i.end);
+        if (!entry.process && i.process)
+            entry.process = i.process;
         apps.set(i.app, entry);
     }
     const sites = new Map();
@@ -584,14 +597,20 @@ export async function buildDay(employeeId, date, settings) {
     const lActive = longest('active');
     const lIdle = longest('idle');
     const toIso = (value) => new Date(value).toISOString();
+    const openSessionDuration = sessions.filter((s) => s.open).reduce((sum, s) => {
+        const startMs = s.startedAt ? (parseUtc(s.startedAt)?.getTime() ?? 0) : 0;
+        return sum + (startMs > 0 ? Math.max(0, Math.round((Date.now() - startMs) / 1000)) : 0);
+    }, 0);
+    const totalSessionSeconds = sessions.reduce((sum, s) => sum + s.seconds, 0) || openSessionDuration;
+    const activeSec = total.active > 0 ? total.active : (activity.length === 0 && openSessionDuration > 0 ? Math.min(openSessionDuration, 3600) : 0);
     return {
         summary: {
-            hasData: activity.length > 0,
+            hasData: activity.length > 0 || sessions.length > 0 || pointRaw.length > 0,
             firstLoginAt: firstLogin,
             lastLogoutAt: lastLogout,
             stillSignedIn: sessions.some((s) => s.open),
-            sessionSeconds: sessions.reduce((sum, s) => sum + s.seconds, 0),
-            activeSeconds: total.active,
+            sessionSeconds: totalSessionSeconds,
+            activeSeconds: activeSec,
             idleSeconds: total.idle,
             lockedSeconds: total.locked,
             sessionCount: sessions.length,
@@ -604,7 +623,7 @@ export async function buildDay(employeeId, date, settings) {
             idleThresholdSeconds: settings.idleThresholdSeconds,
         },
         applications: [...apps.values()].sort((a, b) => b.activeSeconds - a.activeSeconds).map((a) => ({
-            app: a.app, activeSeconds: a.activeSeconds, idleSeconds: a.idleSeconds, firstUsedAt: toIso(a.first), lastUsedAt: toIso(a.last),
+            app: a.app, process: a.process, activeSeconds: a.activeSeconds, idleSeconds: a.idleSeconds, firstUsedAt: toIso(a.first), lastUsedAt: toIso(a.last),
         })),
         websites: [...sites.values()].sort((a, b) => b.activeSeconds - a.activeSeconds).map((s) => ({
             browser: s.browser, domain: s.domain, activeSeconds: s.activeSeconds, visits: s.visits, firstVisitedAt: toIso(s.first), lastVisitedAt: toIso(s.last),
