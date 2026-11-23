@@ -74,7 +74,7 @@ export function getInstallerInfo(): InstallerInfo | null {
     const stat = fs.statSync(found);
     const manifestFile = path.join(path.dirname(found), 'release-manifest.json');
     const manifestStat = fs.existsSync(manifestFile) ? fs.statSync(manifestFile) : null;
-    const key = `${stat.mtimeMs}:${stat.size}:${manifestStat?.mtimeMs ?? 0}`;
+    const key = `${found}:${stat.mtimeMs}:${stat.size}:${manifestStat?.mtimeMs ?? 0}`;
     if (cachedInstaller?.key === key) return cachedInstaller.info;
     const hash = crypto.createHash('sha256').update(fs.readFileSync(found)).digest('hex');
     let manifest: Record<string, any> | null = null;

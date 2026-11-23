@@ -7,22 +7,32 @@ built into Windows 10 and 11, so nothing else needs to be installed on employee 
 
 ## Build
 
+Release builds must be signed with a certificate issued to BSC Textiles by a public CA
+or by Azure Trusted Signing. **Read [CODE_SIGNING.md](CODE_SIGNING.md) first.**
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File tracking-agent\build.ps1 `
-  -Server https://emptrack.bsctextiles.in `
-  -SignCertThumbprint <code-signing certificate thumbprint>
+# Certificate on a USB token / cloud HSM (appears in the Windows certificate store)
+powershell -ExecutionPolicy Bypass -File tracking-agentuild.ps1 `
+  -Server https://emptrack.bsctextiles.in -CertThumbprint <sha1 thumbprint>
+
+# Local test build only (self-signed; Smart App Control WILL block it; goes to dist-dev\)
+powershell -ExecutionPolicy Bypass -File tracking-agentuild.ps1 -DevSign
 ```
 
 * The build uses the C# compiler that ships with Windows
-  (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`). No SDK or NuGet is needed.
-* The outputs go to `tracking-agent/dist/`: `BSC-Activity-Tracker-Setup.exe` (with
-  the agent embedded), `BSCActivityTracker.exe` and `SHA256SUMS.txt`.
-* **Sign every release.** Windows Smart App Control and WDAC block unsigned executables
-  (this was observed on the development PC). Use an organisation code-signing
-  certificate; signtool must be installed from the Windows SDK.
+  (`%WINDIR%\Microsoft.NET\Framework644.0.30319\csc.exe`). Signing needs `signtool.exe`
+  (Windows SDK signing tools).
+* The agent is signed **before** it is embedded in the installer; the installer is signed
+  after. `verify-build.ps1` then checks all three binaries (setup, agent, embedded agent).
+  Only if every one is validly signed, chains to a Microsoft-distributed root, carries an
+  RFC 3161 timestamp and names the expected publisher is anything copied to
+  `tracking-agent/dist/`, together with `SHA256SUMS.txt` and `release-manifest.json`.
+* The HRMS reads `release-manifest.json`. *Devices & enrollment* shows whether the
+  published installer is trusted, and agents are offered automatic updates **only** for a
+  release-grade installer.
 * Publish the installer to the server
-  (`tracking-agent/dist/` or the path in `TRACKING_AGENT_INSTALLER`). Administrators
-  can then download it from *User Activity Tracking → Devices & enrollment*.
+  (`tracking-agent/dist/` or the path in `TRACKING_AGENT_INSTALLER`), including
+  `release-manifest.json`.
 
 ## Install (administrator)
 
@@ -109,6 +119,16 @@ Open HRMS, Exit tracker. Exit asks for confirmation and is recorded as `agent_st
   * The token is rotated automatically 30 days before it expires.
 * **Logs** are kept in `…\data\<SID>\logs\agent-YYYYMMDD.log` for 14 days. They hold
   states, counts and errors only.
+
+## Updates
+
+When the HRMS's *latest agent version* is newer than an agent and a release-grade installer
+is published, the agent downloads it from `/api/tracking/agent/update/download` (device
+token) and, before running it, requires: SHA-256 equal to the server's value, a
+**WinVerifyTrust** pass (intact signature, trusted chain, not revoked), and a signer CN
+equal to the publisher compiled into the agent at build time. Any failure is logged as
+`SECURITY ALERT` and the file is discarded. Required updates run `/repair /quiet`
+(Windows shows a UAC prompt) and the agent restarts afterwards.
 
 ## Test checklist (run on a signed build, on a company PC)
 
