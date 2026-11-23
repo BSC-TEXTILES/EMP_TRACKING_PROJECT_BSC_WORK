@@ -182,7 +182,15 @@ export default function TrackingEmployeeDetails() {
               <tbody>
                 {data.applications.map((a) => (
                   <tr key={a.app}>
-                    <td><div className="font-medium text-ink-900">{a.app}</div><div className="mt-1 h-1.5 w-full max-w-[220px] rounded-full bg-ink-100"><div className="h-full rounded-full bg-brand-600" style={{ width: `${Math.max(2, (a.activeSeconds / totalApp) * 100)}%` }} /></div></td>
+                    <td>
+                      <div className="font-medium text-ink-900">
+                        {a.app}
+                        {a.process && a.process.toLowerCase() !== a.app.toLowerCase() ? (
+                          <span className="ml-1.5 text-xs font-mono font-normal text-ink-400">({a.process}.exe)</span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 h-1.5 w-full max-w-[220px] rounded-full bg-ink-100"><div className="h-full rounded-full bg-brand-600" style={{ width: `${Math.max(2, (a.activeSeconds / totalApp) * 100)}%` }} /></div>
+                    </td>
                     <td>{istTime(a.firstUsedAt)}</td><td>{istTime(a.lastUsedAt)}</td>
                     <td className="text-right font-medium tabular-nums">{duration(a.activeSeconds)}</td><td className="text-right tabular-nums text-ink-500">{duration(a.idleSeconds)}</td>
                   </tr>

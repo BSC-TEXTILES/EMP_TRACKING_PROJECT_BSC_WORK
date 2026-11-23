@@ -318,6 +318,9 @@ export const TrackingQueryService = {
       const loginAt = session?.firstStartAt ?? day?.firstSeenAt ?? null;
       const liveActiveAt = primary?.online && primary.activityState === 'active' ? primary.lastHeartbeatAt : null;
       const lastActivity = [day?.lastActiveAt, date === today() ? liveActiveAt : null].filter(Boolean).sort().pop() ?? null;
+      const sessionActive = (session && session.open > 0 && (day?.activeSeconds ?? 0) === 0) ? Math.min(session.totalSeconds, 3600) : 0;
+      const totalActive = (day?.activeSeconds ?? 0) || sessionActive;
+      const hasData = Boolean(day || (session && session.count > 0) || primary?.online);
       items.push({
         id,
         employeeCode: String(row.employee_code),
@@ -334,10 +337,10 @@ export const TrackingQueryService = {
         loginSource: session?.firstStartAt ? 'device' : day?.firstSeenAt ? 'device' : null,
         hrmsLoginAt: login?.firstLogin ?? null,
         logoutAt: session && session.open === 0 ? session.lastEndAt : null,
-        activeSeconds: day?.activeSeconds ?? 0,
+        activeSeconds: totalActive,
         idleSeconds: day?.idleSeconds ?? 0,
         lockedSeconds: day?.lockedSeconds ?? 0,
-        hasData: Boolean(day),
+        hasData,
         lastActivityAt: lastActivity,
         status,
         currentApp: status === 'active' || status === 'idle' ? primary?.currentApp ?? null : null,
@@ -484,7 +487,7 @@ function compareVer(a: string, b: string): number {
   return 0;
 }
 
-interface Interval { start: number; end: number; state: 'active' | 'idle' | 'locked'; app: string | null; browser: string | null; domain: string | null; deviceId: number | null }
+interface Interval { start: number; end: number; state: 'active' | 'idle' | 'locked'; app: string | null; process: string | null; browser: string | null; domain: string | null; deviceId: number | null }
 
 /**
  * Everything about one employee on one date, derived only from recorded rows:
@@ -492,7 +495,7 @@ interface Interval { start: number; end: number; state: 'active' | 'idle' | 'loc
  */
 export async function buildDay(employeeId: number, date: string, settings: TrackingSettings) {
   const intervalsRaw = await query<Record<string, unknown>>(
-    `SELECT started_at, ended_at, state, app_name, browser, domain, device_id, event_type
+    `SELECT started_at, ended_at, state, app_name, process_name, browser, domain, device_id, event_type
      FROM tracking_events
      WHERE employee_id = ? AND work_date = ? AND event_type IN ('activity','web')
      ORDER BY started_at, id`,
@@ -523,7 +526,7 @@ export async function buildDay(employeeId: number, date: string, settings: Track
     .filter((row) => row.event_type === 'activity')
     .map((row) => ({
       start: ms(row.started_at), end: ms(row.ended_at), state: row.state as Interval['state'],
-      app: (row.app_name as string | null) ?? null, browser: (row.browser as string | null) ?? null, domain: (row.domain as string | null) ?? null,
+      app: (row.app_name as string | null) ?? null, process: (row.process_name as string | null) ?? null, browser: (row.browser as string | null) ?? null, domain: (row.domain as string | null) ?? null,
       deviceId: row.device_id ? Number(row.device_id) : null,
     }));
   const webOnly = intervalsRaw.filter((row) => row.event_type === 'web').map((row) => ({
@@ -567,14 +570,15 @@ export async function buildDay(employeeId: number, date: string, settings: Track
   const offlineSeconds = gaps.reduce((sum, g) => sum + g.seconds, 0);
 
   // Application usage (foreground time while active; idle time in the app shown separately).
-  const apps = new Map<string, { app: string; activeSeconds: number; idleSeconds: number; first: number; last: number }>();
+  const apps = new Map<string, { app: string; process: string | null; activeSeconds: number; idleSeconds: number; first: number; last: number }>();
   for (const i of activity) {
     if (!i.app || i.state === 'locked') continue;
-    const entry = apps.get(i.app) ?? { app: i.app, activeSeconds: 0, idleSeconds: 0, first: i.start, last: i.end };
+    const entry = apps.get(i.app) ?? { app: i.app, process: i.process, activeSeconds: 0, idleSeconds: 0, first: i.start, last: i.end };
     const seconds = Math.round((i.end - i.start) / 1000);
     if (i.state === 'active') entry.activeSeconds += seconds; else entry.idleSeconds += seconds;
     entry.first = Math.min(entry.first, i.start);
     entry.last = Math.max(entry.last, i.end);
+    if (!entry.process && i.process) entry.process = i.process;
     apps.set(i.app, entry);
   }
   const sites = new Map<string, { browser: string; domain: string; activeSeconds: number; first: number; last: number; visits: number }>();
@@ -701,7 +705,7 @@ export async function buildDay(employeeId: number, date: string, settings: Track
       idleThresholdSeconds: settings.idleThresholdSeconds,
     },
     applications: [...apps.values()].sort((a, b) => b.activeSeconds - a.activeSeconds).map((a) => ({
-      app: a.app, activeSeconds: a.activeSeconds, idleSeconds: a.idleSeconds, firstUsedAt: toIso(a.first), lastUsedAt: toIso(a.last),
+      app: a.app, process: a.process, activeSeconds: a.activeSeconds, idleSeconds: a.idleSeconds, firstUsedAt: toIso(a.first), lastUsedAt: toIso(a.last),
     })),
     websites: [...sites.values()].sort((a, b) => b.activeSeconds - a.activeSeconds).map((s) => ({
       browser: s.browser, domain: s.domain, activeSeconds: s.activeSeconds, visits: s.visits, firstVisitedAt: toIso(s.first), lastVisitedAt: toIso(s.last),

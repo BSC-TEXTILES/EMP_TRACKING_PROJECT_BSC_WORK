@@ -92,7 +92,7 @@ export interface DetailsResponse {
     longestIdle: { start: string; end: string; seconds: number } | null;
     observedSpanSeconds: number; trackedSeconds: number; offlineSeconds: number; completenessPercent: number | null; idleThresholdSeconds: number;
   };
-  applications: { app: string; activeSeconds: number; idleSeconds: number; firstUsedAt: string; lastUsedAt: string }[];
+  applications: { app: string; process?: string | null; activeSeconds: number; idleSeconds: number; firstUsedAt: string; lastUsedAt: string }[];
   websites: { browser: string; domain: string; activeSeconds: number; visits: number; firstVisitedAt: string; lastVisitedAt: string }[];
   sessions: { id: number; device: string; startedAt: string | null; endedAt: string | null; lastSeenAt: string | null; seconds: number; endReason: string | null; open: boolean }[];
   gaps: { start: string; end: string; seconds: number; reason: string }[];
