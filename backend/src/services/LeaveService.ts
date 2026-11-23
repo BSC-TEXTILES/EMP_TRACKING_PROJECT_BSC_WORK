@@ -226,7 +226,7 @@ export class LeaveService {
     }
 
     const overlap = await queryOne<{ id: number; is_half_day: number; half_day_slot: string | null }>(
-      `SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
+      `SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr','approved')
        AND request_kind <> 'weekly_off' AND start_date <= ? AND end_date >= ?`,
       [employeeId, input.endDate, input.startDate],
     );
@@ -267,7 +267,7 @@ export class LeaveService {
     const result = await transaction(async (conn) => {
       await conn.query('SELECT id FROM employees WHERE id = ? FOR UPDATE', [employeeId]);
       const [overlaps] = await conn.query<any[]>(
-        "SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND request_kind <> 'weekly_off' AND start_date <= ? AND end_date >= ?",
+        "SELECT id, is_half_day, half_day_slot FROM leave_requests WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr','approved') AND request_kind <> 'weekly_off' AND start_date <= ? AND end_date >= ?",
         [employeeId, input.endDate, input.startDate],
       );
       if (overlaps.length) {
@@ -370,12 +370,18 @@ export class LeaveService {
     const month = Number(sDate.slice(5, 7));
     const reason = (input.reason ?? '').trim();
 
+    const isSingleDay = !input.consecutive && !input.isAccumulated && sDate === eDate;
+
     const assertAvailable = (balance: Awaited<ReturnType<typeof WeeklyOffService.monthBalance>>) => {
+      if (isSingleDay && !balance.allDates.includes(sDate)) {
+        throw ApiError.badRequest(`${sDate} is not your scheduled weekly-off day.`);
+      }
       for (const d of requestedDates) {
         if (d < today()) {
           throw ApiError.badRequest('Week-off cannot be requested for past dates.');
         }
-        if (balance.joiningDate && d < balance.joiningDate) {
+        const entry = balance.dates?.find((item) => item.date === d);
+        if (entry?.status === 'not_eligible' || (balance.joiningDate && d < balance.joiningDate)) {
           throw ApiError.badRequest(`${d} is not eligible for weekly off (prior to joining date).`);
         }
         if (balance.takenDates?.includes(d)) {
@@ -406,7 +412,7 @@ export class LeaveService {
 
       const [overlap] = await conn.query<any[]>(
         `SELECT id FROM leave_requests
-         WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved')
+         WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr','approved')
            AND start_date <= ? AND end_date >= ? LIMIT 1`,
         [employeeId, eDate, sDate],
       );
@@ -471,7 +477,7 @@ export class LeaveService {
     const balances = await LeaveService.balances(employeeId, year);
     const pendingRows = await query<{ leave_type_id: number; days: number }>(
       `SELECT leave_type_id, SUM(days) AS days FROM leave_requests
-       WHERE employee_id = ? AND status IN ('pending_manager','pending_hr') AND request_kind <> 'weekly_off' AND YEAR(start_date) = ?
+       WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr') AND request_kind <> 'weekly_off' AND YEAR(start_date) = ?
        GROUP BY leave_type_id`,
       [employeeId, year],
     );
@@ -533,7 +539,7 @@ export class LeaveService {
     const run = conn ? runnerFor(conn) : <T>(sql: string, params: unknown[]) => query<T>(sql, params);
     const overlaps = await run<{ id: number; request_kind: string; is_half_day: number; half_day_slot: string | null }>(
       `SELECT id, request_kind, is_half_day, half_day_slot FROM leave_requests
-       WHERE employee_id = ? AND status IN ('pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`,
+       WHERE employee_id = ? AND status IN ('pending_both','pending_manager','pending_hr','approved') AND start_date <= ? AND end_date >= ?`,
       [employeeId, date, date],
     );
     for (const row of overlaps) {
@@ -1088,8 +1094,8 @@ export class LeaveService {
     );
     if (!leave) throw ApiError.notFound('Leave request not found');
     if (Number(leave.employee_id) !== employeeId) throw ApiError.forbidden('You can only cancel your own leave requests.');
-    if (!['pending_manager', 'pending_hr'].includes(leave.status)) throw ApiError.badRequest('Only pending requests can be cancelled.');
-    const updated = await execute("UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND status IN ('pending_manager','pending_hr')", [leaveId]);
+    if (!['pending_both', 'pending_manager', 'pending_hr'].includes(leave.status)) throw ApiError.badRequest('Only pending requests can be cancelled.');
+    const updated = await execute("UPDATE leave_requests SET status = 'cancelled' WHERE id = ? AND status IN ('pending_both','pending_manager','pending_hr')", [leaveId]);
     if (!updated.affectedRows) throw ApiError.conflict('This request was already processed.');
     await recordHistory(null, leaveId, 'cancelled', leave.status, 'cancelled', employeeId);
     await recordAudit({ actorId: employeeId, action: 'leave.cancelled', entityType: 'leave_request', entityId: leaveId, before: { status: leave.status } });

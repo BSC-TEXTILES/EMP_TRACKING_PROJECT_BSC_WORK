@@ -50,7 +50,7 @@ export class HrService {
         const pendingLeaves = await queryOne(`SELECT COUNT(*) AS pending
        FROM leave_requests lr
        JOIN employees e ON e.id = lr.employee_id
-       WHERE lr.status IN ('pending_manager', 'pending_hr')
+       WHERE lr.status IN ('pending_both', 'pending_manager', 'pending_hr')
          ${locFilter}`, locParams);
         // Pending Tasks
         const pendingTasks = await queryOne(`SELECT COUNT(DISTINCT t.id) AS pending
@@ -98,7 +98,7 @@ export class HrService {
        FROM leave_requests lr
        JOIN employees e ON e.id = lr.employee_id
        JOIN leave_types lt ON lt.id = lr.leave_type_id
-       WHERE lr.status IN ('pending_manager', 'pending_hr') ${locFilter}
+       WHERE lr.status IN ('pending_both', 'pending_manager', 'pending_hr') ${locFilter}
        ORDER BY lr.created_at DESC
        LIMIT 6`, locParams);
         const totalActive = Number(empMetrics?.active ?? 0);

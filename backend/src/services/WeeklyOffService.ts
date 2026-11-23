@@ -400,7 +400,7 @@ export class WeeklyOffService {
       for (const d of dateRange(s, e)) {
         if (d >= start && d <= end) {
           if (row.status === 'approved') approved.set(d, Number(row.id));
-          else if (row.status === 'pending_manager' || row.status === 'pending_hr') pending.set(d, Number(row.id));
+          else if (row.status === 'pending_manager' || row.status === 'pending_hr' || row.status === 'pending_both') pending.set(d, Number(row.id));
         }
       }
     }

@@ -169,7 +169,7 @@ export function startJobs() {
     cron.schedule('0 * * * *', () => {
         void runJob('kpi_reminder_check', async () => {
             await KpiService.monthlyReminder();
-            const pending = await query("SELECT COUNT(*) AS total FROM leave_requests WHERE status = 'pending_hr' AND created_at < DATE_SUB(NOW(3), INTERVAL 2 DAY)");
+            const pending = await query("SELECT COUNT(*) AS total FROM leave_requests WHERE status IN ('pending_both', 'pending_hr') AND created_at < DATE_SUB(NOW(3), INTERVAL 2 DAY)");
             return `${Number(pending[0]?.total ?? 0)} leave request(s) awaiting HR for over 48h`;
         });
     });

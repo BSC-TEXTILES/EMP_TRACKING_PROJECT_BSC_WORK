@@ -114,6 +114,29 @@ export function startJobs(): void {
     { timezone: config.timezone },
   );
 
+  // Employee activity tracking: mark devices whose heartbeat stopped as offline,
+  // close their sessions and raise alerts. Runs server-side, independent of any dashboard.
+  cron.schedule('* * * * *', () => {
+    void runJob('tracking_offline_sweep', async () => {
+      const { TrackingWorker } = await import('../services/tracking/TrackingWorker.js');
+      const changed = await TrackingWorker.sweepOffline();
+      return `${changed} device(s) marked offline`;
+    });
+  });
+
+  // Tracking retention: archive (gzip JSON lines) then delete rows past each location's retention period.
+  cron.schedule(
+    '40 2 * * *',
+    () => {
+      void runJob('tracking_retention', async () => {
+        const { TrackingWorker } = await import('../services/tracking/TrackingWorker.js');
+        const result = await TrackingWorker.retention(null, false);
+        return `${result.archiveFiles ?? 0} archive file(s) written`;
+      });
+    },
+    { timezone: config.timezone },
+  );
+
   cron.schedule('*/5 * * * *', () => {
     void runJob('overdue_and_sla', async () => {
       const overdue = await TaskService.markOverdue();
@@ -219,7 +242,7 @@ export function startJobs(): void {
     void runJob('kpi_reminder_check', async () => {
       await KpiService.monthlyReminder();
       const pending = await query<{ total: number }>(
-        "SELECT COUNT(*) AS total FROM leave_requests WHERE status = 'pending_hr' AND created_at < DATE_SUB(NOW(3), INTERVAL 2 DAY)",
+        "SELECT COUNT(*) AS total FROM leave_requests WHERE status IN ('pending_both', 'pending_hr') AND created_at < DATE_SUB(NOW(3), INTERVAL 2 DAY)",
       );
       return `${Number(pending[0]?.total ?? 0)} leave request(s) awaiting HR for over 48h`;
     });
