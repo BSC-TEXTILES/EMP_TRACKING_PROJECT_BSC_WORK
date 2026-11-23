@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows.Forms;
@@ -281,10 +282,64 @@ namespace BscTracker
                 {
                     updateNotice = latest;
                     bool required = Api.Bool(update, "required", false);
+                    string downloadPath = Api.Str(update, "downloadPath");
+                    string expectedSha256 = Api.Str(update, "sha256");
+                    string expectedPublisher = Api.Str(update, "publisher") ?? Product.Publisher;
                     tray.ShowBalloonTip(10000, Product.Name, "Version " + latest + " is available" + (required ? " and required by your administrator" : "") + ". Ask IT to update, or download it from the HRMS.", required ? ToolTipIcon.Warning : ToolTipIcon.Info);
+                    if (required && !string.IsNullOrEmpty(downloadPath))
+                    {
+                        StartBackground("auto-update", delegate { ApplySecureUpdate(latest, downloadPath, expectedSha256, expectedPublisher); });
+                    }
                 }
                 RefreshTray();
             });
+        }
+
+        void ApplySecureUpdate(string targetVersion, string downloadPath, string expectedSha256, string expectedPublisher)
+        {
+            try
+            {
+                DeviceIdentity id = identity;
+                if (id == null) return;
+                Log.Info("Starting verified update download for version " + targetVersion + "...");
+                string tempDir = Path.GetTempPath();
+                string destFile = Path.Combine(tempDir, "BSC-Activity-Tracker-Setup-" + targetVersion + ".exe");
+                string downloadErr;
+                if (!Api.DownloadFile(server, downloadPath, destFile, id.Token, out downloadErr))
+                {
+                    Log.Warn("Update download failed: " + downloadErr);
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(expectedSha256))
+                {
+                    string computedHash = SignatureVerifier.FileSha256Hex(destFile);
+                    if (!string.Equals(computedHash, expectedSha256.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log.Error("SECURITY ALERT: Update file hash mismatch! Expected: " + expectedSha256 + ", got: " + computedHash);
+                        try { File.Delete(destFile); } catch { }
+                        return;
+                    }
+                }
+
+                string signErr;
+                if (!SignatureVerifier.VerifyPublisher(destFile, expectedPublisher ?? Product.Publisher, out signErr))
+                {
+                    Log.Error("SECURITY ALERT: Update signature verification failed: " + signErr);
+                    try { File.Delete(destFile); } catch { }
+                    return;
+                }
+
+                Log.Info("Update verified successfully (Authenticode & SHA-256). Executing installer...");
+                ProcessStartInfo psi = new ProcessStartInfo(destFile, "/install /repair /quiet /nolaunch");
+                psi.UseShellExecute = true;
+                psi.Verb = "runas";
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Auto-update error: " + ex.Message);
+            }
         }
 
         void UploadLoop()

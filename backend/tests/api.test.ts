@@ -618,6 +618,7 @@ describe('daily reports, tickets and chat', () => {
 describe('email delivery', () => {
   it('queues, processes and reports a transactional email without exposing credentials', async () => {
     const admin = await login('admin@workforce.test');
+    await execute("UPDATE email_deliveries SET status = 'skipped' WHERE status IN ('queued', 'failed')");
     const id = await enqueueEmail({
       to: 'qa.email@workforce.test',
       toName: 'QA Mailbox',

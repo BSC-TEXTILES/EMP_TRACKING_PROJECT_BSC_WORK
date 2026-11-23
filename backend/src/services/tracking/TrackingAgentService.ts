@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { execute, query, queryOne, transaction, txExecute, txQueryOne } from '../../db/index.js';
 import { ApiError } from '../../lib/http.js';
@@ -31,6 +33,30 @@ export interface TrackingDevice {
 }
 
 const sha256 = (value: string) => crypto.createHash('sha256').update(value).digest('hex');
+
+let cachedInstaller: { mtime: number; sha256: string; size: number } | null = null;
+export function getInstallerInfo(): { sha256: string; size: number } | null {
+  const name = 'BSC-Activity-Tracker-Setup.exe';
+  const candidates = [
+    process.env.TRACKING_AGENT_INSTALLER,
+    path.resolve(process.cwd(), 'tracking-agent/dist', name),
+    path.resolve(process.cwd(), '../tracking-agent/dist', name),
+  ].filter(Boolean) as string[];
+  const found = candidates.find((c) => fs.existsSync(c));
+  if (!found) return null;
+  try {
+    const stat = fs.statSync(found);
+    if (cachedInstaller && cachedInstaller.mtime === stat.mtimeMs) {
+      return { sha256: cachedInstaller.sha256, size: cachedInstaller.size };
+    }
+    const buf = fs.readFileSync(found);
+    const hash = crypto.createHash('sha256').update(buf).digest('hex');
+    cachedInstaller = { mtime: stat.mtimeMs, sha256: hash, size: stat.size };
+    return { sha256: hash, size: stat.size };
+  } catch {
+    return null;
+  }
+}
 
 function normaliseCode(code: string): string {
   return code.toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -409,6 +435,18 @@ export const TrackingAgentService = {
       [device.employeeId],
     );
     const version = clip(input.agentVersion, 20);
+    const hasUpdate = Boolean(version && compareVersions(version, settings.latestAgentVersion) < 0);
+    let update: { latestVersion: string; required: boolean; downloadPath: string; sha256?: string; publisher?: string } | null = null;
+    if (hasUpdate) {
+      const installer = getInstallerInfo();
+      update = {
+        latestVersion: settings.latestAgentVersion,
+        required: compareVersions(version!, settings.minimumAgentVersion) < 0,
+        downloadPath: '/api/tracking/agent/download',
+        publisher: 'BSC Textiles Pvt Ltd',
+        ...(installer ? { sha256: installer.sha256 } : {}),
+      };
+    }
     return {
       serverTime: new Date(now).toISOString(),
       trackingEnabled: settings.trackingEnabled,
@@ -416,9 +454,7 @@ export const TrackingAgentService = {
       noticeText: settings.noticeText,
       employee: employee ? { name: employee.full_name, code: employee.employee_code, location: employee.location_name } : null,
       config: agentConfig(settings),
-      update: version && compareVersions(version, settings.latestAgentVersion) < 0
-        ? { latestVersion: settings.latestAgentVersion, required: compareVersions(version, settings.minimumAgentVersion) < 0, downloadPath: '/api/tracking/agent/download' }
-        : null,
+      update,
       ...(newToken ? { newToken } : {}),
     };
   },

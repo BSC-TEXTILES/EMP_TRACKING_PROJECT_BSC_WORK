@@ -229,11 +229,18 @@ async function loadAttachments(list: EmailTemplateData['attachments']): Promise<
 
 /** Turns SMTP failures into an administrator-readable reason without exposing credentials. */
 export function describeSmtpError(error: unknown): string {
-  const err = error as { code?: string; responseCode?: number; command?: string };
+  const err = error as { code?: string; responseCode?: number; command?: string; message?: string };
   if (err?.code === 'EAUTH' || err?.responseCode === 535) return 'SMTP authentication failed: check the SMTP username and password (for Gmail, use an App Password).';
   if (err?.code === 'ESOCKET' || err?.code === 'ECONNECTION' || err?.code === 'ETIMEDOUT' || err?.code === 'ECONNREFUSED') return 'Could not connect to the SMTP server: check the host, port and SSL/TLS setting.';
   if (err?.code === 'EENVELOPE' || (err?.responseCode && err.responseCode >= 550 && err.responseCode < 560)) return 'The mail server rejected the recipient or sender address.';
   if (err?.responseCode === 554 || err?.responseCode === 552) return 'The mail server refused the message (size or content policy).';
+  if (err?.responseCode === 451 || err?.code === 'EMESSAGE') {
+    const msg = err?.message || '';
+    if (msg.includes('ratelimit') || msg.includes('rate limit') || msg.includes('Ratelimit')) {
+      return 'SMTP rate limit exceeded: the email provider (Hostinger) has temporarily blocked sending due to too many messages. Please wait before retrying or contact your email provider to increase limits.';
+    }
+    return 'SMTP temporary error (451): the mail server is temporarily unable to process the message. Please retry later.';
+  }
   return 'SMTP delivery failed.';
 }
 
@@ -516,7 +523,7 @@ export async function deliverNow(id: number): Promise<{ status: 'accepted' | 'se
 }
 
 /** Processes due queue rows. Returns counters for the job log. */
-export async function processEmailQueue(limit = 20): Promise<{ sent: number; failed: number; skipped: number }> {
+export async function processEmailQueue(limit = 10): Promise<{ sent: number; failed: number; skipped: number }> {
   const rows = await query<{
     id: number;
     recipient_email: string;
@@ -532,13 +539,21 @@ export async function processEmailQueue(limit = 20): Promise<{ sent: number; fai
         AND attempts < max_attempts
         AND (next_attempt_at IS NULL OR next_attempt_at <= NOW(3))
       ORDER BY id
-      LIMIT ${Math.max(1, Math.min(100, limit))}`,
+      LIMIT ${Math.max(1, Math.min(50, limit))}`,
   );
 
   let sent = 0;
   let failed = 0;
   let skipped = 0;
+  let consecutiveRateLimits = 0;
+  
   for (const row of rows) {
+    // Stop processing if we hit rate limits repeatedly
+    if (consecutiveRateLimits >= 3) {
+      console.log('[mail] Stopping queue processing due to repeated rate limits');
+      break;
+    }
+
     const claimed = await execute(
       "UPDATE email_deliveries SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status IN ('queued','failed')",
       [row.id],
@@ -548,10 +563,32 @@ export async function processEmailQueue(limit = 20): Promise<{ sent: number; fai
     const before = await queryOne<{ status: string }>('SELECT status FROM email_deliveries WHERE id = ?', [row.id]);
     await deliver(row);
     const after = await queryOne<{ status: string }>('SELECT status FROM email_deliveries WHERE id = ?', [row.id]);
-    if (after?.status === 'sent') sent += 1;
-    else if (after?.status === 'skipped') skipped += 1;
-    else if (after?.status === 'failed') failed += 1;
-    else if (before?.status === 'sending') failed += 1;
+    
+    if (after?.status === 'sent') {
+      sent += 1;
+      consecutiveRateLimits = 0;
+    } else if (after?.status === 'skipped') {
+      skipped += 1;
+      consecutiveRateLimits = 0;
+    } else if (after?.status === 'failed') {
+      failed += 1;
+      // Check if this was a rate limit error
+      const errorRow = await queryOne<{ last_error: string | null }>('SELECT last_error FROM email_deliveries WHERE id = ?', [row.id]);
+      if (errorRow?.last_error?.includes('rate limit') || errorRow?.last_error?.includes('Ratelimit') || errorRow?.last_error?.includes('451')) {
+        consecutiveRateLimits += 1;
+        // Add a longer delay after rate limit in production
+        if (process.env.NODE_ENV !== 'test') {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+      }
+    } else if (before?.status === 'sending') {
+      failed += 1;
+    }
+
+    // Add a small delay between emails to avoid hitting rate limits in production
+    if (rows.length > 1 && process.env.NODE_ENV !== 'test') {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
   return { sent, failed, skipped };
 }

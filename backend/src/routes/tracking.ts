@@ -8,7 +8,7 @@ import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/ht
 import { authenticate, currentUser, type AuthedRequest } from '../middleware/auth.js';
 import { rateLimit } from '../middleware/security.js';
 import {
-  TrackingAgentService, batchSchema, enrollSchema, heartbeatSchema, listTrackingDevices, type TrackingDevice,
+  TrackingAgentService, batchSchema, enrollSchema, getInstallerInfo, heartbeatSchema, listTrackingDevices, type TrackingDevice,
 } from '../services/tracking/TrackingAgentService.js';
 import { TrackingConfig, settingsPatchSchema } from '../services/tracking/TrackingConfig.js';
 import { TrackingQueryService, canSeeOthers, deviceLive, trackingScope } from '../services/tracking/TrackingQueryService.js';
@@ -99,6 +99,22 @@ trackingRouter.get(
     const file = installerPath();
     if (!file) throw ApiError.notFound('The tracking agent installer has not been built on this server. See docs/TRACKING_AGENT.md.');
     res.download(file, 'BSC-Activity-Tracker-Setup.exe');
+  }),
+);
+
+trackingRouter.get(
+  '/agent/info',
+  asyncHandler(async (_req, res) => {
+    const settings = await TrackingConfig.forLocation(null);
+    const installer = getInstallerInfo();
+    res.json({
+      latestVersion: settings.latestAgentVersion,
+      minimumVersion: settings.minimumAgentVersion,
+      publisher: 'BSC Textiles Pvt Ltd',
+      downloadPath: '/api/tracking/agent/download',
+      sha256: installer?.sha256 ?? null,
+      sizeBytes: installer?.size ?? null,
+    });
   }),
 );
 

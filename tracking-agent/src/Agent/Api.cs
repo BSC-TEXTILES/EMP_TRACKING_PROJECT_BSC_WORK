@@ -149,5 +149,51 @@ namespace BscTracker
             if (d == null || !d.TryGetValue(key, out value) || value == null) return fallback;
             try { return Convert.ToBoolean(value); } catch { return fallback; }
         }
+
+        public static bool DownloadFile(string server, string path, string destPath, string token, out string error)
+        {
+            error = null;
+            try
+            {
+                string url = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                    ? path
+                    : server + (path.StartsWith("/") ? path : "/" + path);
+
+                HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+                request.Method = "GET";
+                request.UserAgent = "BSCActivityTracker/" + Product.Version;
+                request.Timeout = 60000;
+                request.ReadWriteTimeout = 60000;
+                if (!string.IsNullOrEmpty(token)) request.Headers["Authorization"] = "Bearer " + token;
+
+                string tempPath = destPath + ".tmp";
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    if ((int)response.StatusCode < 200 || (int)response.StatusCode >= 300)
+                    {
+                        error = "HTTP " + (int)response.StatusCode;
+                        return false;
+                    }
+                    using (Stream src = response.GetResponseStream())
+                    using (FileStream dst = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                    {
+                        byte[] buffer = new byte[81920];
+                        int read;
+                        while ((read = src.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            dst.Write(buffer, 0, read);
+                        }
+                    }
+                }
+                if (File.Exists(destPath)) File.Delete(destPath);
+                File.Move(tempPath, destPath);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+        }
     }
 }

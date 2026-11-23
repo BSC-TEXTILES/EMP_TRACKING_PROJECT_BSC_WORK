@@ -146,9 +146,10 @@ export function startJobs(): void {
     });
   });
 
-  cron.schedule('* * * * *', () => {
+  // Process email queue every 2 minutes with a small batch to respect provider rate limits (e.g., Hostinger)
+  cron.schedule('*/2 * * * *', () => {
     void runJob('email_queue', async () => {
-      const result = await processEmailQueue(25);
+      const result = await processEmailQueue(10);
       return `${result.sent} sent, ${result.failed} retrying, ${result.skipped} skipped`;
     });
   });

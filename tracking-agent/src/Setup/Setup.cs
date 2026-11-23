@@ -13,8 +13,9 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("BSC Activity Tracker Setup")]
 [assembly: AssemblyDescription("Installs, repairs, updates and removes the BSC Activity Tracker")]
-[assembly: AssemblyCompany("BSC Textiles")]
+[assembly: AssemblyCompany("BSC Textiles Pvt Ltd")]
 [assembly: AssemblyProduct("BSC Activity Tracker")]
+[assembly: AssemblyCopyright("Copyright © 2026 BSC Textiles Pvt Ltd. All rights reserved.")]
 [assembly: AssemblyVersion("2.0.0.0")]
 [assembly: AssemblyFileVersion("2.0.0.0")]
 

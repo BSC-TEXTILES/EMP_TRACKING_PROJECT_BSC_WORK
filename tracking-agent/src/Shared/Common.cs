@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.Win32;
@@ -13,7 +14,8 @@ namespace BscTracker
     public static class Product
     {
         public const string Name = "BSC Activity Tracker";
-        public const string Publisher = "BSC Textiles";
+        public const string Publisher = "BSC Textiles Pvt Ltd";
+        public const string Copyright = "Copyright © 2026 BSC Textiles Pvt Ltd. All rights reserved.";
         public const string Version = "2.0.0";
         public const string ExeName = "BSCActivityTracker.exe";
         public const string SetupName = "BSC-Activity-Tracker-Setup.exe";
@@ -98,6 +100,54 @@ namespace BscTracker
                 StringBuilder sb = new StringBuilder(hash.Length * 2);
                 foreach (byte b in hash) sb.Append(b.ToString("x2"));
                 return sb.ToString();
+            }
+        }
+    }
+
+    public static class SignatureVerifier
+    {
+        public static string FileSha256Hex(string path)
+        {
+            using (SHA256 sha = SHA256.Create())
+            using (FileStream fs = File.OpenRead(path))
+            {
+                byte[] hash = sha.ComputeHash(fs);
+                StringBuilder sb = new StringBuilder(hash.Length * 2);
+                foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        public static bool VerifyPublisher(string filePath, string expectedPublisher, out string error)
+        {
+            error = null;
+            if (!File.Exists(filePath))
+            {
+                error = "File does not exist: " + filePath;
+                return false;
+            }
+            try
+            {
+                X509Certificate cert = X509Certificate.CreateFromSignedFile(filePath);
+                if (cert == null || cert.Handle == IntPtr.Zero)
+                {
+                    error = "File is not digitally signed.";
+                    return false;
+                }
+                string subject = cert.Subject;
+                if (!string.IsNullOrEmpty(subject) &&
+                    (subject.IndexOf(expectedPublisher, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                     subject.IndexOf("BSC Textiles", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    return true;
+                }
+                error = "Publisher mismatch. Expected: " + expectedPublisher + ", found: " + subject;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                error = "Signature verification error: " + ex.Message;
+                return false;
             }
         }
     }

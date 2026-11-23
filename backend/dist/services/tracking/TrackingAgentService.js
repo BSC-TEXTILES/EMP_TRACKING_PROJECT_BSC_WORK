@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { z } from 'zod';
 import { execute, query, queryOne, transaction, txExecute, txQueryOne } from '../../db/index.js';
 import { ApiError } from '../../lib/http.js';
@@ -19,6 +21,31 @@ const MAX_BATCH = 500;
 const MAX_INTERVAL_SECONDS = 3900;
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
+let cachedInstaller = null;
+export function getInstallerInfo() {
+    const name = 'BSC-Activity-Tracker-Setup.exe';
+    const candidates = [
+        process.env.TRACKING_AGENT_INSTALLER,
+        path.resolve(process.cwd(), 'tracking-agent/dist', name),
+        path.resolve(process.cwd(), '../tracking-agent/dist', name),
+    ].filter(Boolean);
+    const found = candidates.find((c) => fs.existsSync(c));
+    if (!found)
+        return null;
+    try {
+        const stat = fs.statSync(found);
+        if (cachedInstaller && cachedInstaller.mtime === stat.mtimeMs) {
+            return { sha256: cachedInstaller.sha256, size: cachedInstaller.size };
+        }
+        const buf = fs.readFileSync(found);
+        const hash = crypto.createHash('sha256').update(buf).digest('hex');
+        cachedInstaller = { mtime: stat.mtimeMs, sha256: hash, size: stat.size };
+        return { sha256: hash, size: stat.size };
+    }
+    catch {
+        return null;
+    }
+}
 function normaliseCode(code) {
     return code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
@@ -337,6 +364,18 @@ export const TrackingAgentService = {
         }
         const employee = await queryOne('SELECT e.full_name, e.employee_code, l.name AS location_name FROM employees e LEFT JOIN locations l ON l.id = e.location_id WHERE e.id = ?', [device.employeeId]);
         const version = clip(input.agentVersion, 20);
+        const hasUpdate = Boolean(version && compareVersions(version, settings.latestAgentVersion) < 0);
+        let update = null;
+        if (hasUpdate) {
+            const installer = getInstallerInfo();
+            update = {
+                latestVersion: settings.latestAgentVersion,
+                required: compareVersions(version, settings.minimumAgentVersion) < 0,
+                downloadPath: '/api/tracking/agent/download',
+                publisher: 'BSC Textiles Pvt Ltd',
+                ...(installer ? { sha256: installer.sha256 } : {}),
+            };
+        }
         return {
             serverTime: new Date(now).toISOString(),
             trackingEnabled: settings.trackingEnabled,
@@ -344,9 +383,7 @@ export const TrackingAgentService = {
             noticeText: settings.noticeText,
             employee: employee ? { name: employee.full_name, code: employee.employee_code, location: employee.location_name } : null,
             config: agentConfig(settings),
-            update: version && compareVersions(version, settings.latestAgentVersion) < 0
-                ? { latestVersion: settings.latestAgentVersion, required: compareVersions(version, settings.minimumAgentVersion) < 0, downloadPath: '/api/tracking/agent/download' }
-                : null,
+            update,
             ...(newToken ? { newToken } : {}),
         };
     },

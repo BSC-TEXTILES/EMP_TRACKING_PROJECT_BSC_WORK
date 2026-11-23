@@ -4,9 +4,9 @@ using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("BSC Activity Tracker")]
 [assembly: System.Reflection.AssemblyDescription("Authorised work activity tracking agent for BSC Textiles company computers")]
-[assembly: System.Reflection.AssemblyCompany("BSC Textiles")]
+[assembly: System.Reflection.AssemblyCompany("BSC Textiles Pvt Ltd")]
 [assembly: System.Reflection.AssemblyProduct("BSC Activity Tracker")]
-[assembly: System.Reflection.AssemblyCopyright("BSC Textiles")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright © 2026 BSC Textiles Pvt Ltd. All rights reserved.")]
 [assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
 [assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
 
