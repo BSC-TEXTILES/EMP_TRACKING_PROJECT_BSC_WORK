@@ -112,7 +112,7 @@ emailSettingsRouter.put('/', asyncHandler(async (req, res) => {
         throw ApiError.badRequest('Invalid email configuration parameters.');
     }
     const d = directParsed.data;
-    const effectivePassword = d.password?.trim() ? d.password : (config.smtp.password || 'Btpldvg@2026');
+    const effectivePassword = d.password?.trim() ? d.password : config.smtp.password;
     const updatedSmtp = storedSmtp({
         host: d.host,
         port: d.port,

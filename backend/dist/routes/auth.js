@@ -275,7 +275,8 @@ authRouter.post('/register/resend', rateLimit({ windowMs: 10 * 60 * 1000, max: 6
 authRouter.post('/password/forgot', rateLimit({ windowMs: 15 * 60 * 1000, max: 8, keyPrefix: 'forgot' }), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({ identifier: z.string().min(3).max(190) }), req.body);
     const result = await AuthService.requestPasswordReset(body.identifier, clientIp(req));
-    res.json({ ...result, message: 'If the account exists, a verification code has been sent.' });
+    // Same response whether or not the account exists (no account enumeration).
+    res.json({ message: 'If the account exists, a verification code has been sent.', ...(result.devCode ? { devCode: result.devCode } : {}) });
 }));
 authRouter.post('/password/reset', rateLimit({ windowMs: 15 * 60 * 1000, max: 10, keyPrefix: 'reset' }), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({ identifier: z.string().min(3).max(190), code: z.string().min(4), password: z.string().min(10).max(200) }), req.body);

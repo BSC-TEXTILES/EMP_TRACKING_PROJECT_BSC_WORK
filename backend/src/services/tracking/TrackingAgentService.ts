@@ -90,7 +90,7 @@ export function getInstallerInfo(): InstallerInfo | null {
       signer: matches ? manifest!.setup?.signer ?? null : null,
       issuer: matches ? manifest!.setup?.issuer ?? null : null,
       timestamped: Boolean(matches && manifest!.setup?.timestamp),
-      problems: !manifest ? ['No release manifest: this installer was not produced by the signed release pipeline (tracking-agent/build.ps1).']
+      problems: !manifest ? ['This installer was built before the signed release process existed (it has no release-manifest.json), so its signature has not been verified as trusted.']
         : !matches ? ['release-manifest.json does not match the installer on disk.']
         : Array.isArray(manifest.problems) ? manifest.problems.map(String).slice(0, 20) : [],
     };

@@ -19,7 +19,7 @@ import {
 } from '../components/ui';
 import { Icon } from '../components/icons';
 import { InstallAppButton } from '../components/InstallAppButton';
-import { formatDate, formatDateTime, minutesToHours } from '../lib/format';
+import { cx, formatDate, formatDateTime, minutesToHours } from '../lib/format';
 
 interface ReportHistoryEntry {
   id: number;
@@ -132,6 +132,37 @@ const COMMON_PROBLEMS = [
   'Customer escalation pending resolution',
   'Dependency on cross-department approval',
 ];
+
+const COMMON_SUPPORT_REQUESTS = [
+  'IT hardware / network support',
+  'Store Manager stock / inventory approval',
+  'HR policy / attendance clarification',
+  'Manager sign-off on pending escalation',
+  'Accounts / vendor payment clearance',
+  'Cross-department coordination support',
+];
+
+function toggleChip(current: string, item: string): string {
+  const parts = (current || '')
+    .split(';')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const index = parts.findIndex((p) => p.toLowerCase() === item.toLowerCase());
+  if (index >= 0) {
+    parts.splice(index, 1);
+  } else {
+    parts.push(item);
+  }
+  return parts.join('; ');
+}
+
+function isChipActive(current: string, item: string): boolean {
+  if (!current) return false;
+  const parts = current
+    .split(';')
+    .map((s) => s.trim().toLowerCase());
+  return parts.includes(item.toLowerCase());
+}
 
 export default function DailyReports() {
   useDocumentTitle('End-of-Day Work Reports · BSC HRMS');
@@ -644,41 +675,100 @@ export default function DailyReports() {
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <Field label="Problems Encountered (Optional)" hint="Operational issues, client blockers, technical delays">
-                      <textarea
-                        className="input min-h-[85px]"
-                        value={form.problems}
-                        onChange={(event) => setForm({ ...form, problems: event.target.value })}
-                        placeholder="Mention any delays, system bugs, or obstacles faced today..."
-                      />
-                    </Field>
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {COMMON_PROBLEMS.map((prob) => (
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="label mb-0">Problems Encountered (Optional)</span>
+                      {form.problems && (
                         <button
-                          key={prob}
                           type="button"
-                          className="rounded-full bg-ink-100 hover:bg-ink-200 px-2 py-0.5 text-[10px] text-ink-700 transition-colors"
-                          onClick={() =>
-                            setForm((prev) => ({
-                              ...prev,
-                              problems: prev.problems ? `${prev.problems}; ${prob}` : prob,
-                            }))
-                          }
+                          className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
+                          onClick={() => setForm((prev) => ({ ...prev, problems: '' }))}
                         >
-                          + {prob}
+                          Clear
                         </button>
-                      ))}
+                      )}
+                    </div>
+                    <textarea
+                      className="input min-h-[85px]"
+                      value={form.problems}
+                      onChange={(event) => setForm({ ...form, problems: event.target.value })}
+                      placeholder="Mention any delays, system bugs, or obstacles faced today..."
+                    />
+                    <span className="mt-1 block text-xs text-ink-400">Operational issues, client blockers, technical delays</span>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {COMMON_PROBLEMS.map((prob) => {
+                        const active = isChipActive(form.problems, prob);
+                        return (
+                          <button
+                            key={prob}
+                            type="button"
+                            className={cx(
+                              'rounded-full px-2.5 py-0.5 text-[11px] transition-colors border flex items-center gap-1',
+                              active
+                                ? 'bg-amber-50 text-amber-900 border-amber-300 font-semibold shadow-xs'
+                                : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent font-medium'
+                            )}
+                            onClick={() =>
+                              setForm((prev) => ({
+                                ...prev,
+                                problems: toggleChip(prev.problems, prob),
+                              }))
+                            }
+                          >
+                            <span className="font-bold">{active ? '−' : '+'}</span>
+                            <span>{prob}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  <Field label="Support Required (Optional)" hint="Specify the assistance or department/manager needed">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="label mb-0">Support Required (Optional)</span>
+                      {form.supportRequired && (
+                        <button
+                          type="button"
+                          className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
+                          onClick={() => setForm((prev) => ({ ...prev, supportRequired: '' }))}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
                     <textarea
                       className="input min-h-[85px]"
                       value={form.supportRequired}
                       onChange={(event) => setForm({ ...form, supportRequired: event.target.value })}
                       placeholder="e.g. Need IT hardware replacement, Store Manager approval for stock return, HR clarification on leaves..."
                     />
-                  </Field>
+                    <span className="mt-1 block text-xs text-ink-400">Specify the assistance or department/manager needed</span>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {COMMON_SUPPORT_REQUESTS.map((req) => {
+                        const active = isChipActive(form.supportRequired, req);
+                        return (
+                          <button
+                            key={req}
+                            type="button"
+                            className={cx(
+                              'rounded-full px-2.5 py-0.5 text-[11px] transition-colors border flex items-center gap-1',
+                              active
+                                ? 'bg-brand-50 text-brand-900 border-brand-300 font-semibold shadow-xs'
+                                : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent font-medium'
+                            )}
+                            onClick={() =>
+                              setForm((prev) => ({
+                                ...prev,
+                                supportRequired: toggleChip(prev.supportRequired, req),
+                              }))
+                            }
+                          >
+                            <span className="font-bold">{active ? '−' : '+'}</span>
+                            <span>{req}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
 
                 <Field label="Tomorrow's Plan (Optional)" hint="Activities, follow-ups, and pending goals planned for next working day">
@@ -1400,22 +1490,99 @@ export default function DailyReports() {
               </Field>
 
               <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="Problems encountered (optional)">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="label mb-0">Problems encountered (optional)</span>
+                    {editForm.problems && (
+                      <button
+                        type="button"
+                        className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
+                        onClick={() => setEditForm((prev) => ({ ...prev, problems: '' }))}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     className="input min-h-[75px]"
                     value={editForm.problems}
                     placeholder="Mention any technical or operational delays…"
                     onChange={(e) => setEditForm({ ...editForm, problems: e.target.value })}
                   />
-                </Field>
-                <Field label="Support required (optional)">
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {COMMON_PROBLEMS.map((prob) => {
+                      const active = isChipActive(editForm.problems, prob);
+                      return (
+                        <button
+                          key={prob}
+                          type="button"
+                          className={cx(
+                            'rounded-full px-2 py-0.5 text-[10px] transition-colors border flex items-center gap-1',
+                            active
+                              ? 'bg-amber-50 text-amber-900 border-amber-300 font-semibold'
+                              : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent'
+                          )}
+                          onClick={() =>
+                            setEditForm((prev) => ({
+                              ...prev,
+                              problems: toggleChip(prev.problems, prob),
+                            }))
+                          }
+                        >
+                          <span className="font-bold">{active ? '−' : '+'}</span>
+                          <span>{prob}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="label mb-0">Support required (optional)</span>
+                    {editForm.supportRequired && (
+                      <button
+                        type="button"
+                        className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
+                        onClick={() => setEditForm((prev) => ({ ...prev, supportRequired: '' }))}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     className="input min-h-[75px]"
                     value={editForm.supportRequired}
                     placeholder="Mention responsible department or manager…"
                     onChange={(e) => setEditForm({ ...editForm, supportRequired: e.target.value })}
                   />
-                </Field>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {COMMON_SUPPORT_REQUESTS.map((req) => {
+                      const active = isChipActive(editForm.supportRequired, req);
+                      return (
+                        <button
+                          key={req}
+                          type="button"
+                          className={cx(
+                            'rounded-full px-2 py-0.5 text-[10px] transition-colors border flex items-center gap-1',
+                            active
+                              ? 'bg-brand-50 text-brand-900 border-brand-300 font-semibold'
+                              : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent'
+                          )}
+                          onClick={() =>
+                            setEditForm((prev) => ({
+                              ...prev,
+                              supportRequired: toggleChip(prev.supportRequired, req),
+                            }))
+                          }
+                        >
+                          <span className="font-bold">{active ? '−' : '+'}</span>
+                          <span>{req}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               <Field label="Tomorrow's plan (optional)">

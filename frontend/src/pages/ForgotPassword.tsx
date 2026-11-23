@@ -34,7 +34,7 @@ export default function ForgotPassword() {
     setSubmitting(true);
     setError(null);
     try {
-      const result = await api.post<{ message: string; devCode?: string; delivered: boolean }>('/auth/password/forgot', { identifier });
+      const result = await api.post<{ message: string; devCode?: string }>('/auth/password/forgot', { identifier });
       const otpCode = result.devCode ?? null;
       setDevCode(otpCode);
       if (otpCode) {
@@ -88,6 +88,11 @@ export default function ForgotPassword() {
               ? 'We will send a verification code to your registered email address or mobile number.'
               : 'Enter the code we sent, then set a strong new password. All other devices will be signed out.'}
           </p>
+          {step === 'reset' && !devCode && (
+            <p className="mt-2 text-xs text-ink-500">
+              No code after a few minutes? Ask HR or your administrator to reset your password from your employee record.
+            </p>
+          )}
           {error && <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
           {devCode && (
             <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 space-y-1">
@@ -102,7 +107,7 @@ export default function ForgotPassword() {
                 </button>
               </div>
               <p className="font-mono text-base font-bold tracking-widest text-amber-950">{devCode}</p>
-              <p className="text-[11px] text-amber-700">Instant code generated for verification.</p>
+              <p className="text-[11px] text-amber-700">Shown on screen because this is a development or test server.</p>
             </div>
           )}
 

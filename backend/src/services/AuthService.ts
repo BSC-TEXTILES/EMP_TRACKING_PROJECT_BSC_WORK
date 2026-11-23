@@ -48,6 +48,8 @@ export interface AuthUser {
   permissions: string[];
   sessionId: number;
   mustChangePassword: boolean;
+  /** Signed in with a temporary password set by HR/an administrator (must_change_password = 2). */
+  temporaryPassword: boolean;
   mfaEnabled: boolean;
   lastLoginAt: string | null;
 }
@@ -195,6 +197,12 @@ export interface RegisterInput {
   password: string;
 }
 
+/** Codes are shown on screen only in tests, or in local development with OTP_SHOW_CODES_ON_SCREEN=true. */
+export function showOtpOnScreen(): boolean {
+  if (process.env.NODE_ENV === 'production') return false;
+  return process.env.NODE_ENV === 'test' || process.env.OTP_SHOW_CODES_ON_SCREEN === 'true';
+}
+
 export class AuthService {
   /** Loads the canonical auth principal for an employee, including permissions. */
   static async buildUser(employeeId: number, sessionId = 0): Promise<AuthUser | null> {
@@ -251,6 +259,7 @@ export class AuthService {
       permissions,
       sessionId,
       mustChangePassword: Boolean(row.must_change_password),
+      temporaryPassword: Number(row.must_change_password) === 2,
       mfaEnabled: Boolean(row.mfa_enabled),
       lastLoginAt: row.last_login_at,
     };
@@ -862,8 +871,10 @@ export class AuthService {
       delivered = false;
     }
 
-    // Always provide devCode so that employees can verify and continue without external SMS/SMTP failures blocking them
-    return { delivered, devCode: code };
+    // The code is returned to the caller ONLY in automated tests or when a developer explicitly
+    // opts in on a non-production server. Returning it otherwise lets anyone who knows an
+    // employee's email reset that employee's password (account takeover).
+    return showOtpOnScreen() ? { delivered, devCode: code } : { delivered };
   }
 
   static async consumeOtp(identifier: string, purpose: string, code: string): Promise<void> {

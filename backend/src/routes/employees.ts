@@ -4,6 +4,7 @@ import { ApiError, asyncHandler, clientIp, intParam, parseBody } from '../lib/ht
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { EmployeeService } from '../services/EmployeeService.js';
 import { recordAudit } from '../lib/audit.js';
+import { rateLimit } from '../middleware/security.js';
 import { query } from '../db/index.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
@@ -189,6 +190,17 @@ employeesRouter.patch(
     }
     await EmployeeService.update(id, user, body);
     res.json({ ok: true });
+  }),
+);
+
+employeesRouter.post(
+  '/:id/reset-password',
+  requireAny('employees.manage'),
+  rateLimit({ windowMs: 15 * 60_000, max: 20, keyPrefix: 'admin-password-reset' }),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const id = intParam(req.params.id);
+    res.set('Cache-Control', 'no-store');
+    res.json(await EmployeeService.adminResetPassword(currentUser(req), id, clientIp(req), req.get('user-agent') ?? null));
   }),
 );
 

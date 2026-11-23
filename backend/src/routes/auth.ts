@@ -390,7 +390,8 @@ authRouter.post(
   asyncHandler(async (req, res) => {
     const body = parseBody(z.object({ identifier: z.string().min(3).max(190) }), req.body);
     const result = await AuthService.requestPasswordReset(body.identifier, clientIp(req));
-    res.json({ ...result, message: 'If the account exists, a verification code has been sent.' });
+    // Same response whether or not the account exists (no account enumeration).
+    res.json({ message: 'If the account exists, a verification code has been sent.', ...(result.devCode ? { devCode: result.devCode } : {}) });
   }),
 );
 

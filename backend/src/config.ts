@@ -36,8 +36,16 @@ if (process.env.NODE_ENV === 'production') {
 
 // Fallback environment files (for values not yet set). The production file is
 // never used as a fallback: a development or test run must not reach live data.
+const smtpKeysBeforeFallback = new Set(Object.keys(process.env).filter((key) => key.startsWith('SMTP_')));
 dotenv.config({ path: path.resolve(here, '../.env') });
 dotenv.config({ path: path.join(rootDir, '.env') });
+if (process.env.NODE_ENV === 'test') {
+  // Tests must never send through the real mailbox: drop SMTP settings that came only
+  // from the fallback .env files (backend/.env holds live credentials).
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('SMTP_') && !smtpKeysBeforeFallback.has(key)) delete process.env[key];
+  }
+}
 
 /** Parses mysql://user:pass@host:port/database when DATABASE_URL is provided. */
 function parseDatabaseUrl(raw: string | undefined): { host: string; port: number; user: string; password: string; database: string } | null {
@@ -170,14 +178,21 @@ export const config = {
     timeoutMs: int('COARENA_TIMEOUT_MS', 60_000),
   },
   internalJobSecret: process.env.INTERNAL_JOB_SECRET ?? '',
+  email: {
+    /**
+     * Master switch for notification and mailbox email. OFF unless EMAIL_SENDING_ENABLED=true.
+     * Login and password-reset codes are still emailed so nobody is locked out.
+     */
+    sendingEnabled: process.env.EMAIL_SENDING_ENABLED === 'true',
+  },
   smtp: {
-    // Robust Hostinger production defaults: if not overridden by website settings or environment,
-    // fallback to verified BSC Textiles mail credentials.
+    // Host/user defaults only. The password must come from the website settings or the
+    // SMTP_PASSWORD environment variable; it is never stored in source code.
     host: websiteSettings.smtp?.host || process.env.SMTP_HOST?.trim() || 'smtp.hostinger.com',
     port: websiteSettings.smtp?.host ? websiteSettings.smtp.port : (process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : 465),
     secure: websiteSettings.smtp?.host ? websiteSettings.smtp.secure : (process.env.SMTP_SECURE === 'false' ? false : true),
     user: websiteSettings.smtp?.user || process.env.SMTP_USER?.trim() || 'admin@bsctextiles.in',
-    password: websiteSettings.smtp?.password || process.env.SMTP_PASSWORD || 'Btpldvg@2026',
+    password: websiteSettings.smtp?.password || process.env.SMTP_PASSWORD || '',
     from: websiteSettings.smtp?.from || senderHeader(),
     replyTo: websiteSettings.smtp?.replyTo || process.env.SMTP_REPLY_TO?.trim() || 'admin@bsctextiles.in',
     get configured() {

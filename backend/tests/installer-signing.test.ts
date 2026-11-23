@@ -11,7 +11,8 @@ import os from 'node:os';
 import path from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { closePool } from '../src/db/index.js';
+import { closePool, execute, queryOne } from '../src/db/index.js';
+import { hashPassword } from '../src/lib/crypto.js';
 import { createApp } from '../src/index.js';
 import { isSmtpRateLimit } from '../src/lib/mailer.js';
 import { getInstallerInfo } from '../src/services/tracking/TrackingAgentService.js';
@@ -48,7 +49,7 @@ describe('installer release-grade detection', () => {
     stage(null);
     const info = getInstallerInfo();
     expect(info?.releaseGrade).toBe(false);
-    expect(info?.problems[0]).toMatch(/No release manifest/);
+    expect(info?.problems[0]).toMatch(/no release-manifest.json/);
   });
 
   it('rejects a manifest that does not match the installer on disk (swapped file)', () => {
@@ -91,6 +92,43 @@ describe('agent update download', () => {
   it('keeps the web download behind an employee session', async () => {
     const anonymous = await request(app).get('/api/tracking/agent/download');
     expect(anonymous.status).toBe(401);
+  });
+
+  it('gives a signed-in administrator the complete, unmodified installer', async () => {
+    stage(goodManifest);
+    const role = await queryOne<{ id: number }>("SELECT id FROM roles WHERE slug = 'admin'");
+    const sfx = crypto.randomBytes(3).toString('hex');
+    const email = `dl.admin.${sfx}@workforce.test`;
+    const password = 'Download-Test-2026!';
+    const created = await execute(
+      `INSERT INTO employees (employee_code, full_name, email, mobile, password_hash, role_id, employment_type, status,
+                              joining_date, email_verified_at, must_change_password, mfa_required)
+       VALUES (?, ?, ?, ?, ?, ?, 'full_time', 'active', CURDATE(), NOW(3), 0, 0)`,
+      [`DL-${sfx}`, `Download Admin ${sfx}`, email, `8${String(Math.floor(Math.random() * 1e9)).padStart(9, '0')}`, await hashPassword(password), role!.id],
+    );
+    try {
+      const agent = request.agent(app);
+      const login = await agent.post('/api/auth/login').set('Origin', 'http://localhost:5173').send({ identifier: email, password });
+      expect(login.status, JSON.stringify(login.body)).toBe(200);
+
+      const info = await agent.get('/api/tracking/agent/info');
+      expect(info.status).toBe(200);
+      expect(info.body.signature.releaseGrade).toBe(true);
+
+      const download = await agent.get('/api/tracking/agent/download').buffer(true).parse((res, done) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => done(null, Buffer.concat(chunks)));
+      });
+      expect(download.status).toBe(200);
+      expect(download.headers['content-disposition']).toMatch(/attachment; filename="BSC-Activity-Tracker-Setup\.exe"/);
+      const body = download.body as Buffer;
+      expect(body.length).toBe(info.body.sizeBytes);
+      expect(crypto.createHash('sha256').update(body).digest('hex')).toBe(info.body.sha256);
+    } finally {
+      await execute('DELETE FROM sessions WHERE employee_id = ?', [created.insertId]).catch(() => undefined);
+      await execute('DELETE FROM employees WHERE id = ?', [created.insertId]).catch(() => undefined);
+    }
   });
 });
 

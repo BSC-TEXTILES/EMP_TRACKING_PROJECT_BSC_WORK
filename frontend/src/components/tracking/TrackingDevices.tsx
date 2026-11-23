@@ -281,12 +281,27 @@ function InstallerTrust({ info }: { info: AgentInfo }) {
   }
   return (
     <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-      <p className="font-semibold">This installer is not signed with a trusted code-signing certificate.</p>
-      <p className="mt-1">Windows Smart App Control will block it on employee computers (&ldquo;could not verify its publisher&rdquo;). Do not ask employees to turn off Windows security. IT must rebuild it with the company&rsquo;s code-signing certificate (see docs/CODE_SIGNING.md).</p>
+      <p className="flex flex-wrap items-center gap-2 font-semibold">
+        <Badge tone="warning">Pending: company code-signing certificate</Badge>
+      </p>
+      <p className="mt-2">
+        The tracker software works, but this installer is not yet signed with a certificate Windows trusts, so
+        Smart App Control blocks it on PCs where that protection is on (&ldquo;could not verify its publisher&rdquo;).
+        This is not a fault in the application. It clears once the installer is rebuilt with BSC Textiles&rsquo; own certificate.
+      </p>
+      <ol className="mt-2 list-decimal space-y-0.5 pl-5">
+        <li>Buy an OV code-signing certificate for BSC Textiles from a public certificate authority, for example DigiCert, Sectigo or GlobalSign.</li>
+        <li>IT rebuilds the installer with it: <code className="rounded bg-amber-100 px-1">tracking-agent\build.ps1 -CertThumbprint &lt;thumbprint&gt;</code></li>
+        <li>Upload the new files in <code className="rounded bg-amber-100 px-1">tracking-agent/dist</code> to the server. This notice then changes to &ldquo;Trusted signature&rdquo;.</li>
+      </ol>
+      <p className="mt-2 text-xs">Never ask employees to turn off Windows security to install it. Full guide: docs/CODE_SIGNING.md.</p>
       {sig.problems.length > 0 && (
-        <ul className="mt-2 list-disc pl-5 text-xs">
-          {sig.problems.slice(0, 5).map((p) => <li key={p}>{p}</li>)}
-        </ul>
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer select-none">Technical details for IT</summary>
+          <ul className="mt-1 list-disc pl-5">
+            {sig.problems.slice(0, 8).map((p) => <li key={p}>{p}</li>)}
+          </ul>
+        </details>
       )}
     </div>
   );

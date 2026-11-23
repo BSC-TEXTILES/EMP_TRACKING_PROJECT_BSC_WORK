@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { execute, query, queryOne, transaction } from '../db/index.js';
 import { recordAudit } from '../lib/audit.js';
 import { hashPassword, passwordIssues } from '../lib/crypto.js';
@@ -1504,6 +1505,44 @@ export class EmployeeService {
        ORDER BY pal.created_at DESC
        LIMIT ?`, [limit]);
         return rows;
+    }
+    /**
+     * HR/administrator password reset for an employee who cannot receive a reset code.
+     * Issues a random temporary password (shown once, never logged), which the employee must
+     * replace at next sign-in (must_change_password = 2). Clears any login lockout and signs
+     * the employee out everywhere. Scope and role-level rules prevent privilege escalation.
+     */
+    static async adminResetPassword(actor, targetId, ip, userAgent) {
+        if (targetId === actor.id)
+            throw ApiError.badRequest('Use "Update Password" to change your own password.');
+        await assertEmployeeAccess(actor, targetId, 'employees');
+        const target = await queryOne('SELECT e.id, e.status, r.level AS role_level FROM employees e JOIN roles r ON r.id = e.role_id WHERE e.id = ?', [targetId]);
+        if (!target)
+            throw ApiError.notFound('Employee not found.');
+        if (actor.roleSlug !== 'super_admin' && Number(target.role_level) >= actor.roleLevel) {
+            throw ApiError.forbidden('You can only reset passwords for employees below your own role level.');
+        }
+        const temporaryPassword = generateTemporaryPassword();
+        await execute('UPDATE employees SET password_hash = ?, must_change_password = 2, failed_login_attempts = 0, locked_until = NULL WHERE id = ?', [await hashPassword(temporaryPassword), targetId]);
+        await execute("UPDATE employee_sessions SET revoked_at = NOW(3), revoked_reason = 'admin_password_reset' WHERE employee_id = ? AND revoked_at IS NULL", [targetId]);
+        await recordAudit({ actorId: actor.id, action: 'password.admin_reset', entityType: 'employee', entityId: targetId, ip, userAgent });
+        return { temporaryPassword };
+    }
+}
+/** 14-character temporary password that satisfies the password policy (upper, lower, digit, symbol). */
+function generateTemporaryPassword() {
+    const sets = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnpqrstuvwxyz', '23456789', '@#$%&*!?'];
+    const all = sets.join('');
+    const pick = (chars) => chars[crypto.randomInt(chars.length)];
+    for (;;) {
+        const chars = [...sets.map(pick), ...Array.from({ length: 10 }, () => pick(all))];
+        for (let i = chars.length - 1; i > 0; i -= 1) {
+            const j = crypto.randomInt(i + 1);
+            [chars[i], chars[j]] = [chars[j], chars[i]];
+        }
+        const candidate = chars.join('');
+        if (passwordIssues(candidate).length === 0)
+            return candidate;
     }
 }
 //# sourceMappingURL=EmployeeService.js.map

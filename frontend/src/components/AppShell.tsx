@@ -64,6 +64,11 @@ export function AppShell() {
   const [signOutModalOpen, setSignOutModalOpen] = useState(false);
   const [keepNotificationsOnSignOut, setKeepNotificationsOnSignOut] = useState(true);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  // An HR/admin-issued temporary password must be replaced before the app can be used.
+  const mustChangePassword = Boolean(user?.temporaryPassword);
+  useEffect(() => {
+    if (mustChangePassword) setPasswordModalOpen(true);
+  }, [mustChangePassword]);
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordBusy, setPasswordBusy] = useState(false);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
@@ -132,9 +137,11 @@ export function AppShell() {
         currentPassword: passwordForm.currentPassword,
         newPassword: passwordForm.newPassword,
       });
-      toast.success('Password updated successfully.');
       setPasswordModalOpen(false);
       setPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      // Changing the password signs out every session, this one included.
+      toast.success('Password updated. Please sign in with your new password.');
+      await logout();
     } catch (caught) {
       toast.error(errorMessage(caught));
     } finally {
@@ -888,9 +895,11 @@ export function AppShell() {
         {/* Update Password Modal */}
         <Modal
           open={passwordModalOpen}
-          onClose={() => setPasswordModalOpen(false)}
-          title="Update Password"
-          description="Change your account password securely. All other active sessions will be revoked."
+          onClose={() => { if (!mustChangePassword) setPasswordModalOpen(false); }}
+          title={mustChangePassword ? 'Set a new password' : 'Update Password'}
+          description={mustChangePassword
+            ? 'You signed in with a temporary password from HR or an administrator. Choose your own password to continue. Enter the temporary password as the current password.'
+            : 'Change your account password securely. All active sessions will be signed out.'}
           size="md"
           footer={null}
         >
@@ -964,9 +973,15 @@ export function AppShell() {
               </div>
             )}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-ink-100">
-              <button type="button" className="btn-secondary btn-sm" onClick={() => setPasswordModalOpen(false)} disabled={passwordBusy}>
-                Cancel
-              </button>
+              {mustChangePassword ? (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => void logout()} disabled={passwordBusy}>
+                  Sign out
+                </button>
+              ) : (
+                <button type="button" className="btn-secondary btn-sm" onClick={() => setPasswordModalOpen(false)} disabled={passwordBusy}>
+                  Cancel
+                </button>
+              )}
               <button type="submit" className="btn-primary btn-sm" disabled={passwordBusy}>
                 {passwordBusy ? 'Updating…' : 'Update Password'}
               </button>

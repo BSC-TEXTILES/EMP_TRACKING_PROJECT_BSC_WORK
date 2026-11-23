@@ -78,6 +78,9 @@ export default function Employees() {
   });
   const [editForm, setEditForm] = useState({ fullName: '', mobile: '', address: '', emergencyContact: '', dateOfBirth: '', employeeCode: '' });
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; code: string } | null>(null);
+  const [resetTarget, setResetTarget] = useState<{ id: number; name: string } | null>(null);
+  const [resetPassword, setResetPassword] = useState<string | null>(null);
+  const [resetBusy, setResetBusy] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [deleting, setDeleting] = useState(false);
 
@@ -112,6 +115,22 @@ export default function Employees() {
     employeeId !== user?.id && (isElevatedAdmin || roleLevelOf(roleIdOrName) < myLevel);
   const canTransfer = (employeeId: number) =>
     employeeId !== user?.id && (user?.roleSlug === 'super_admin' || (user?.roleLevel ?? 0) >= 70 || has('employees.manage') || has('employees.transfer'));
+  // Mirrors the server: employees.manage, never yourself, and only below your role level (Super Admin: anyone).
+  const canResetPassword = (employeeId: number, roleIdOrName: number | string | null | undefined) =>
+    has('employees.manage') && employeeId !== user?.id && (user?.roleSlug === 'super_admin' || roleLevelOf(roleIdOrName) < myLevel);
+  const confirmResetPassword = async () => {
+    if (!resetTarget) return;
+    setResetBusy(true);
+    try {
+      const result = await api.post<{ temporaryPassword: string }>(`/employees/${resetTarget.id}/reset-password`, {});
+      setResetPassword(result.temporaryPassword);
+    } catch (caught) {
+      toast.error(errorMessage(caught));
+    } finally {
+      setResetBusy(false);
+    }
+  };
+  const closeReset = () => { if (!resetBusy) { setResetTarget(null); setResetPassword(null); } };
   const assignableRoles = (structure?.roles ?? []).filter((r) => myLevel >= 100 || r.level <= myLevel);
 
   const confirmDeleteEmployee = async () => {
@@ -569,6 +588,13 @@ export default function Employees() {
                   } catch (caught) { toast.error(errorMessage(caught)); }
                 })()}>{detail.status === 'active' ? 'Deactivate' : 'Reactivate'}</button>
               )}
+              {canResetPassword(detail.id, detail.roleId) && detail.status === 'active' && (
+                <button type="button" className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+                  onClick={() => { setResetPassword(null); setResetTarget({ id: detail.id, name: detail.fullName }); }}>
+                  <Icon name="lock" size={14} />
+                  <span>Reset password</span>
+                </button>
+              )}
               {modalTab === 'overview' ? (
                 <>
                   <button
@@ -1010,6 +1036,43 @@ export default function Employees() {
         employees={employeesList}
         onCreated={() => { setCreateOpen(false); void load(); }}
       />
+
+      {/* HR/admin password reset */}
+      <Modal
+        open={Boolean(resetTarget)}
+        onClose={closeReset}
+        title={resetPassword ? 'Temporary password created' : 'Reset password'}
+        size="sm"
+        footer={resetPassword ? (
+          <button type="button" className="btn-primary btn-sm" onClick={closeReset}>Done</button>
+        ) : (
+          <>
+            <button type="button" className="btn-secondary btn-sm" onClick={closeReset} disabled={resetBusy}>Cancel</button>
+            <button type="button" className="btn-primary btn-sm" onClick={() => void confirmResetPassword()} disabled={resetBusy}>
+              {resetBusy ? 'Resetting…' : 'Reset password'}
+            </button>
+          </>
+        )}
+      >
+        {resetPassword ? (
+          <div className="space-y-3 text-sm text-ink-700">
+            <p>Give this temporary password to <strong>{resetTarget?.name}</strong> in person or by phone. It is shown only once.</p>
+            <div className="flex items-center gap-2 rounded-lg border border-ink-200 bg-ink-50 p-3">
+              <code className="flex-1 select-all font-mono text-base font-bold tracking-wider text-ink-900">{resetPassword}</code>
+              <button type="button" className="btn-secondary btn-sm"
+                onClick={() => { void navigator.clipboard?.writeText(resetPassword).then(() => toast.success('Copied.'), () => undefined); }}>
+                Copy
+              </button>
+            </div>
+            <p className="text-xs text-ink-500">They must choose their own password when they next sign in. They have been signed out on all devices.</p>
+          </div>
+        ) : (
+          <p className="text-sm text-ink-700">
+            Create a temporary password for <strong>{resetTarget?.name}</strong>? Their current password stops working immediately,
+            they are signed out everywhere, and they must set a new password at their next sign-in.
+          </p>
+        )}
+      </Modal>
 
       {/* Delete Employee Confirmation Modal */}
       <Modal

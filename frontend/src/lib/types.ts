@@ -29,6 +29,8 @@ export interface CurrentUser {
   joiningDate: string | null;
   permissions: string[];
   mustChangePassword: boolean;
+  /** Temporary password issued by HR/an administrator: must be replaced before using the app. */
+  temporaryPassword?: boolean;
   mfaEnabled: boolean;
   lastLoginAt: string | null;
 }

@@ -16,6 +16,15 @@ import { renderEmail, type EmailTemplateData } from './emailTemplates.js';
 let transporter: Transporter | null = null;
 export function resetMailTransport(): void { transporter?.close(); transporter = null; statusCache = null; }
 
+export const EMAIL_OFF_REASON = 'Email sending is turned off (EMAIL_SENDING_ENABLED is not "true"). Message recorded, not sent.';
+/**
+ * Notification/mailbox email master switch. When off, nothing but login and password-reset
+ * codes (sendOtpEmail) is handed to SMTP: messages are recorded as 'skipped' instead.
+ */
+export function emailSendingEnabled(): boolean {
+  return config.email.sendingEnabled;
+}
+
 function buildTransporter(): Transporter | null {
   if (!config.smtp.configured) return null;
   if (!transporter) {
@@ -106,8 +115,8 @@ export async function enqueueEmail(input: DeliveryInput): Promise<number | null>
   try {
     const result = await execute(
       `INSERT INTO email_deliveries
-         (recipient_email, recipient_name, subject, template, payload, status, next_attempt_at, dedupe_key, related_type, related_id, max_attempts)
-       VALUES (?, ?, ?, ?, ?, 'queued', NOW(3), ?, ?, ?, ?)
+         (recipient_email, recipient_name, subject, template, payload, status, last_error, next_attempt_at, dedupe_key, related_type, related_id, max_attempts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(3), ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE id = id`,
       [
         input.to.slice(0, 190),
@@ -115,6 +124,8 @@ export async function enqueueEmail(input: DeliveryInput): Promise<number | null>
         (input.subject ?? rendered.subject).slice(0, 255),
         input.template.slice(0, 60),
         JSON.stringify(input.data).slice(0, 60_000),
+        emailSendingEnabled() ? 'queued' : 'skipped',
+        emailSendingEnabled() ? null : EMAIL_OFF_REASON,
         input.dedupeKey?.slice(0, 160) ?? null,
         input.relatedType?.slice(0, 40) ?? null,
         input.relatedId ?? null,
@@ -136,6 +147,10 @@ async function deliver(row: {
   template: string;
   payload: string | null;
 }): Promise<void> {
+  if (!emailSendingEnabled()) {
+    await execute("UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?", [EMAIL_OFF_REASON, row.id]);
+    return;
+  }
   const transport = buildTransporter();
   if (!transport) {
     await execute(
@@ -452,9 +467,9 @@ export async function sendDirectEmail(options: DirectEmailOptions): Promise<Dire
   );
   const deliveryId = Number(deliveryInsert.insertId);
 
-  const transport = buildTransporter();
+  const transport = emailSendingEnabled() ? buildTransporter() : null;
   if (!transport) {
-    const errorMsg = 'SMTP is not configured on the server. Outgoing emails cannot be sent.';
+    const errorMsg = emailSendingEnabled() ? 'SMTP is not configured on the server. Outgoing emails cannot be sent.' : EMAIL_OFF_REASON;
     await execute(
       "UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?",
       [errorMsg, deliveryId],
@@ -549,6 +564,15 @@ export async function deliverNow(id: number): Promise<{ status: 'accepted' | 'se
 
 /** Processes due queue rows. Returns counters for the job log. */
 export async function processEmailQueue(limit = 10): Promise<{ sent: number; failed: number; skipped: number }> {
+  if (!emailSendingEnabled()) {
+    // Backlog is marked skipped so it cannot flood out later when sending is switched back on.
+    const result = await execute(
+      `UPDATE email_deliveries SET status = 'skipped', last_error = ?
+        WHERE status IN ('queued', 'failed') AND template <> 'otp'`,
+      [EMAIL_OFF_REASON],
+    );
+    return { sent: 0, failed: 0, skipped: result.affectedRows };
+  }
   if (smtpPauseRemainingMs() > 0) return { sent: 0, failed: 0, skipped: 0 };
   const rows = await query<{
     id: number;

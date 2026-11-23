@@ -411,6 +411,9 @@ export async function main() {
     if (!envReport.ok && config.isProd && !needsSetup()) {
         console.warn('[startup] Warning: configuration errors detected in environment settings.');
     }
+    if (!config.email.sendingEnabled) {
+        console.log('  Email: notification sending OFF (set EMAIL_SENDING_ENABLED=true to turn on); login/password-reset codes only');
+    }
     if (config.smtp.configured) {
         // Never block or crash startup on the SMTP probe.
         void import('./lib/mailer.js')
