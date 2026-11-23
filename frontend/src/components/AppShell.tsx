@@ -83,6 +83,18 @@ export function AppShell() {
     }
   }, [user?.id]);
 
+  // Tracking alerts for supervisors (top-right toasts), at most one per employee per 10 minutes.
+  const trackingToastAt = useRef(new Map<number, number>());
+  useSocketEvent('tracking:alert', (raw: unknown) => {
+    const alert = raw as { employeeId?: number; kind?: string; message?: string };
+    if (!alert?.employeeId || alert.employeeId === user?.id || !canAny('activity.view.all', 'activity.view.team')) return;
+    if (alert.kind !== 'device_offline' || !alert.message) return;
+    const last = trackingToastAt.current.get(alert.employeeId) ?? 0;
+    if (Date.now() - last < 10 * 60 * 1000) return;
+    trackingToastAt.current.set(alert.employeeId, Date.now());
+    toast.trackingOffline(alert.message, 'Tracking agent disconnected');
+  });
+
   // An admin/manager changed their own location (possibly on another device): reload the session.
   useSocketEvent('profile:location_changed', () => {
     void refreshAuth();
@@ -191,12 +203,13 @@ export function AppShell() {
       if (visible && now - lastInteraction < IDLE_MS) segmentStart = now;
       if (seconds < 5) return;
       accumulatedMs = 0;
+      // HRMS page usage for User Activity Tracking (route and active seconds only).
       void api
-        .post('/activity/module-activity', {
+        .post('/tracking/web/page', {
           module,
-          pagePath: location.pathname,
-          enteredAt: new Date(startedAt).toISOString(),
-          exitedAt: new Date(now).toISOString(),
+          path: location.pathname,
+          startedAt: new Date(Math.max(startedAt, now - seconds * 1000)).toISOString(),
+          endedAt: new Date(now).toISOString(),
           activeSeconds: seconds,
         })
         .catch(() => undefined);
@@ -346,7 +359,10 @@ export function AppShell() {
 
   const activeTitle = useMemo(() => {
     const all = nav.flatMap((group) => group.items);
-    const match = all.find((item) => (item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)));
+    // Whole path segments only, longest match first ('/activity' must not claim '/activity-tracking').
+    const match = all
+      .filter((item) => (item.to === '/' ? location.pathname === '/' : location.pathname === item.to || location.pathname.startsWith(`${item.to}/`)))
+      .sort((a, b) => b.to.length - a.to.length)[0];
     if (match) return match.label;
     if (location.pathname.startsWith('/meetings/')) return 'Meeting room';
     if (location.pathname.startsWith('/profile')) return 'My profile';

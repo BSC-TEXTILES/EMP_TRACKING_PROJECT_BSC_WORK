@@ -175,140 +175,14 @@ activityRouter.get(
   }),
 );
 
-activityRouter.get(
-  '/agent/installer.bat',
-  asyncHandler(async (req, res) => {
-    const protocol = req.protocol || 'http';
-    const host = req.get('host') || 'localhost:3000';
-    const serverUrl = `${protocol}://${host}`;
-    const token = req.query.token ? String(req.query.token) : '';
-
-    const batScript = `@echo off
-setlocal enabledelayedexpansion
-title BSC Textiles - Activity Tracking Agent Installer
-echo ======================================================================
-echo BSC TEXTILES - WORKFORCE MONITORING AGENT INSTALLER
-echo Davanagere (DAV) | Shivamogga (SHI) | Belagavi (BEL) | Head Office (HQ)
-echo ======================================================================
-echo.
-
-set "SERVER_URL=${serverUrl}"
-set "DEVICE_TOKEN=${token}"
-
-where node >nul 2>nul
-if %errorlevel% neq 0 (
-  echo [INFO] Node.js runtime not found. Attempting install via winget...
-  winget install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements >nul 2>nul
-  where node >nul 2>nul
-  if !errorlevel! neq 0 (
-    echo [ERROR] Please install Node.js v18 or later from https://nodejs.org
-    echo Once installed, rerun this installer.
-    pause
-    exit /b 1
-  )
-)
-
-cd /d "%~dp0"
-if not exist "agent-data" mkdir "agent-data"
-if not exist "logs" mkdir "logs"
-
-echo [1/3] Writing agent configuration...
-echo {"serverUrl":"%SERVER_URL%","deviceToken":"%DEVICE_TOKEN%"} > agent-data\\config.json
-
-echo [2/3] Registering auto-start on Windows boot...
-set "STARTUP_FOLDER=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
-set "VBS_PATH=%~dp0run-agent-hidden.vbs"
-set "LNK_PATH=%STARTUP_FOLDER%\\BSCTextilesAgent.lnk"
-
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_PATH%'); $s.TargetPath = 'wscript.exe'; $s.Arguments = '\"%VBS_PATH%\"'; $s.WorkingDirectory = '%~dp0'; $s.WindowStyle = 7; $s.Save()" >nul 2>nul
-
-echo [3/3] Launching background agent...
-start "" wscript.exe "%VBS_PATH%"
-
-echo ======================================================================
-echo [SUCCESS] BSC Workforce Activity Tracking Agent is installed and running!
-echo Status: Connected to %SERVER_URL%
-echo Logs:   %~dp0logs\\agent.log
-echo ======================================================================
-timeout /t 5
-`;
-
-    res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="install-agent.bat"');
-    res.send(batScript);
-  }),
-);
-
-activityRouter.get(
-  '/agent/installer.ps1',
-  asyncHandler(async (req, res) => {
-    const protocol = req.protocol || 'http';
-    const host = req.get('host') || 'localhost:3000';
-    const serverUrl = `${protocol}://${host}`;
-    const token = req.query.token ? String(req.query.token) : '';
-
-    const ps1Script = `# BSC Textiles Activity Tracking Agent Installer (PowerShell)
-param(
-  [string]$ServerUrl = "${serverUrl}",
-  [string]$DeviceToken = "${token}",
-  [switch]$Silent
-)
-
-$ErrorActionPreference = 'Stop'
-Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "BSC TEXTILES - WORKFORCE MONITORING AGENT INSTALLER" -ForegroundColor Cyan
-Write-Host "======================================================================" -ForegroundColor Cyan
-
-$agentDir = $PSScriptRoot
-if (-not $agentDir) { $agentDir = (Get-Location).Path }
-Set-Location $agentDir
-
-# Check Node.js
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  Write-Host "[INFO] Node.js not found in PATH. Trying winget install..." -ForegroundColor Yellow
-  try {
-    Start-Process winget -ArgumentList "install OpenJS.NodeJS.LTS --silent --accept-package-agreements --accept-source-agreements" -Wait -NoNewWindow
-  } catch {}
-  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Error "Node.js v18+ is required. Please install from https://nodejs.org"
-  }
+// The legacy batch/PowerShell installers wrote a config the old agent never read.
+// They are retired; the signed-in download of the Windows installer lives at
+// GET /api/tracking/agent/download (see docs/TRACKING_AGENT.md).
+for (const legacy of ['/agent/installer.bat', '/agent/installer.ps1']) {
+  activityRouter.get(legacy, (_req, res) => {
+    res.status(410).json({ error: { code: 'gone', message: 'This installer has been replaced. Download the BSC Activity Tracker installer from User Activity Tracking → Devices.' } });
+  });
 }
-
-New-Item -ItemType Directory -Force -Path (Join-Path $agentDir "agent-data") | Out-Null
-New-Item -ItemType Directory -Force -Path (Join-Path $agentDir "logs") | Out-Null
-
-$configPath = Join-Path $agentDir "agent-data\\config.json"
-$configData = @{ serverUrl = $ServerUrl; deviceToken = $DeviceToken } | ConvertTo-Json
-Set-Content -Path $configPath -Value $configData -Encoding UTF8
-Write-Host "[1/3] Configuration saved." -ForegroundColor Green
-
-# Register startup
-$startupFolder = [Environment]::GetFolderPath('Startup')
-$shortcutPath = Join-Path $startupFolder "BSCTextilesAgent.lnk"
-$vbsPath = Join-Path $agentDir "run-agent-hidden.vbs"
-
-$ws = New-Object -ComObject WScript.Shell
-$shortcut = $ws.CreateShortcut($shortcutPath)
-$shortcut.TargetPath = "wscript.exe"
-$shortcut.Arguments = "\`"$vbsPath\`""
-$shortcut.WorkingDirectory = $agentDir
-$shortcut.WindowStyle = 7
-$shortcut.Save()
-Write-Host "[2/3] Auto-start registered in Windows Startup." -ForegroundColor Green
-
-# Start agent
-Start-Process "wscript.exe" -ArgumentList "\`"$vbsPath\`"" -WorkingDirectory $agentDir
-Write-Host "[3/3] Background tracking agent launched." -ForegroundColor Green
-Write-Host "======================================================================" -ForegroundColor Cyan
-Write-Host "Installation Complete! Connected to $ServerUrl" -ForegroundColor Green
-Write-Host "======================================================================" -ForegroundColor Cyan
-`;
-
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="install-agent.ps1"');
-    res.send(ps1Script);
-  }),
-);
 
 // ------------------------------ Employee API -------------------------------
 activityRouter.use(authenticate);
@@ -371,73 +245,6 @@ activityRouter.get(
     res.setHeader('Content-Type', result.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
     res.send(result.buffer);
-  }),
-);
-
-// LiveGuard Pro System Guardian & Hardware Telemetry endpoints
-activityRouter.get(
-  '/liveguard/metrics',
-  asyncHandler(async (req: AuthedRequest, res) => {
-    const user = currentUser(req);
-    res.json({
-      ok: true,
-      metrics: {
-        cpu: { percent: 18.5, cores: 8, freq_mhz: 2800 },
-        memory: { percent: 42.5, total_gb: 16, used_gb: 6.8 },
-        gpu: { model: 'NVIDIA GeForce RTX 4060 / Intel Iris Xe', vram_gb: 8, percent: 12.0, temp: 48 },
-        disk: { percent: 42.5, free_gb: 294 },
-        network: { active_connections: 8, bytes_sent_mb: 124, bytes_recv_mb: 480 },
-        healthScore: 98,
-        status: 'OPTIMAL',
-        threats: [],
-        alerts: [],
-        fps: 60,
-      },
-    });
-  }),
-);
-
-activityRouter.post(
-  '/liveguard/scan',
-  asyncHandler(async (req: AuthedRequest, res) => {
-    res.json({
-      ok: true,
-      filesScanned: 14820,
-      threatsFound: 0,
-      quarantinedPids: [],
-      status: 'OPTIMAL',
-      completedAt: new Date().toISOString(),
-    });
-  }),
-);
-
-activityRouter.get(
-  '/liveguard/threats',
-  asyncHandler(async (req: AuthedRequest, res) => {
-    res.json({
-      threats: [
-        {
-          id: 'T-8091',
-          pid: 4892,
-          processName: 'xmrig_miner.exe',
-          threatType: 'Miner',
-          severity: 'critical',
-          filePath: 'C:\\Users\\AppData\\Local\\Temp\\xmrig_miner.exe',
-          detectedAt: new Date(Date.now() - 480000).toISOString(),
-          status: 'RECTIFIED',
-        },
-        {
-          id: 'T-7721',
-          pid: 6104,
-          processName: 'suspicious_hook.dll',
-          threatType: 'Keylogger',
-          severity: 'high',
-          filePath: 'C:\\ProgramData\\WindowsHost\\suspicious_hook.dll',
-          detectedAt: new Date(Date.now() - 3600000).toISOString(),
-          status: 'RECTIFIED',
-        },
-      ],
-    });
   }),
 );
 
@@ -993,20 +800,6 @@ activityRouter.get(
     const date = dateParam(req.query.date);
     const data = await EmployeeActivityDetailsService.getComprehensiveDashboard(user, id, date, req.ip);
     res.json(data);
-  }),
-);
-
-activityRouter.post(
-  '/user-details/:id/sync-events',
-  asyncHandler(async (req: AuthedRequest, res) => {
-    const user = currentUser(req);
-    const id = intParam(req.params.id);
-    if (user.id !== id && !user.permissions.includes('activity.view.all')) {
-      throw ApiError.forbidden('Cannot push events for another employee without administrative privileges.');
-    }
-    const events = Array.isArray(req.body?.events) ? req.body.events : [req.body];
-    const result = await EmployeeActivityDetailsService.ingestAgentEvents(id, events);
-    res.json(result);
   }),
 );
 

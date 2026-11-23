@@ -63,3 +63,9 @@ fcm-service-account*.json
 tools/
 *.zip
 *.jks
+
+# Windows tracking agent intermediate build output
+/tracking-agent/obj/
+
+# Packaged release archives
+/release/

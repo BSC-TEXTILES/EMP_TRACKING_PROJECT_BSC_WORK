@@ -258,6 +258,16 @@ export interface OverviewFilters {
   pageSize?: number;
 }
 
+export interface OverviewItem {
+  id: number; employeeCode: string; fullName: string; photoUrl: string | null; designation: string | null; department: string | null;
+  locationId: number | null; locationCode: string | null; locationName: string | null;
+  device: { id: number; name: string; os: string; agentVersion: string | null; online: boolean } | null;
+  deviceCount: number; loginAt: string | null; loginSource: 'device' | null; hrmsLoginAt: string | null; logoutAt: string | null;
+  activeSeconds: number; idleSeconds: number; lockedSeconds: number; hasData: boolean; lastActivityAt: string | null;
+  status: LiveStatus; currentApp: string | null; currentDomain: string | null; lastHeartbeatAt: string | null;
+  syncError: string | null; trackingEnabled: boolean;
+}
+
 const STATUS_FILTERS = ['all', 'active', 'idle', 'locked', 'offline', 'not_installed', 'sync_error', 'disabled'] as const;
 
 export const TrackingQueryService = {
@@ -287,7 +297,7 @@ export const TrackingQueryService = {
       return settingsCache.get(locationId)!;
     };
     const now = Date.now();
-    const items = [];
+    const items: OverviewItem[] = [];
     for (const row of employees) {
       const id = Number(row.id);
       const locationId = row.location_id ? Number(row.location_id) : null;
@@ -357,7 +367,7 @@ export const TrackingQueryService = {
     const statusRank: Record<string, number> = { active: 0, idle: 1, locked: 2, offline: 3, disabled: 4, not_installed: 5 };
     const sort = filters.sort ?? 'status';
     const dir = filters.order === 'desc' ? -1 : 1;
-    const cmp = (a: typeof items[number], b: typeof items[number]): number => {
+    const cmp = (a: OverviewItem, b: OverviewItem): number => {
       const str = (x: string | null | undefined, y: string | null | undefined) => (x ?? '').localeCompare(y ?? '');
       const time = (x: string | null, y: string | null) => (Date.parse(x ?? '') || 0) - (Date.parse(y ?? '') || 0);
       switch (sort) {

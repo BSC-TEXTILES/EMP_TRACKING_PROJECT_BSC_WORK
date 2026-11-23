@@ -1,3 +1,5 @@
+> **Superseded.** User Activity Tracking now uses the Windows agent in `tracking-agent/` and the `/api/tracking` engine. See [docs/ACTIVITY_TRACKING.md](ACTIVITY_TRACKING.md) and [docs/TRACKING_AGENT.md](TRACKING_AGENT.md). This document describes the legacy pipeline, kept for reference.
+
 # Employee activity monitoring
 
 Consent-based work activity, application usage, internal module usage, automatic incident tickets, daily activity summaries and transparent weekly performance. Data is written to the same MySQL database as attendance, tasks, reports, projects, tickets and KPI, and is exposed through the **Activity** section of the platform (`/activity`).

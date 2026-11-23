@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Workforce Activity Bridge",
-  "version": "1.0.0",
-  "description": "Shares approved work-domain and active-tab time with your organisation's Workforce monitoring policy. Never reads page content, forms or passwords.",
-  "permissions": ["tabs", "storage", "alarms"],
-  "host_permissions": ["http://localhost:4000/*", "https://*/api/activity/agent/events"],
+  "name": "BSC Activity Tracker – Browser Connector",
+  "version": "2.0.0",
+  "description": "Tells the BSC Activity Tracker on this company computer which website (domain only) is in the active tab. Never reads page content, full URLs, titles, forms or passwords.",
+  "permissions": ["tabs", "alarms"],
+  "host_permissions": ["http://127.0.0.1:47613/*"],
   "background": { "service_worker": "background.js" },
-  "options_page": "options.html",
-  "action": { "default_title": "Workforce Activity Bridge" }
+  "action": { "default_title": "BSC Activity Tracker", "default_popup": "popup.html" },
+  "incognito": "not_allowed",
+  "minimum_chrome_version": "110"
 }

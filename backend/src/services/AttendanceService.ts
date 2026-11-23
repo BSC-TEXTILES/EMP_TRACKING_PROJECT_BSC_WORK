@@ -783,7 +783,7 @@ export class AttendanceService {
   static async teamToday(employeeIds: number[]) {
     if (employeeIds.length === 0) return [];
     const placeholders = employeeIds.map(() => '?').join(',');
-    return query<{
+    const rows = await query<{
       employee_id: number;
       full_name: string;
       designation_title: string | null;
@@ -791,11 +791,12 @@ export class AttendanceService {
       check_in_at: string | null;
       check_out_at: string | null;
       total_minutes: number;
+      break_minutes: number;
       is_late: number;
     }>(
       `SELECT e.id AS employee_id, e.full_name, dg.title AS designation_title,
               COALESCE(a.status, 'absent') AS status, a.check_in_at, a.check_out_at, COALESCE(a.total_minutes, 0) AS total_minutes,
-              COALESCE(a.is_late, 0) AS is_late
+              COALESCE(a.break_minutes, 0) AS break_minutes, COALESCE(a.is_late, 0) AS is_late
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = ?
@@ -803,6 +804,21 @@ export class AttendanceService {
        ORDER BY e.full_name`,
       [today(), ...employeeIds],
     );
+    const now = Date.now();
+    // DATETIME columns are UTC but carry no zone marker; return ISO-8601 (with "Z") so
+    // clients render the correct local (IST) time. Open sessions show worked time so far.
+    return rows.map(({ break_minutes: breakMinutes, ...row }) => {
+      const checkIn = parseUtc(row.check_in_at);
+      const open = checkIn && !row.check_out_at;
+      return {
+        ...row,
+        check_in_at: toIso(row.check_in_at),
+        check_out_at: toIso(row.check_out_at),
+        total_minutes: open
+          ? Math.max(0, Math.floor((now - checkIn.getTime()) / 60000) - Number(breakMinutes || 0))
+          : Number(row.total_minutes || 0),
+      };
+    });
   }
 
   static async requestCorrection(

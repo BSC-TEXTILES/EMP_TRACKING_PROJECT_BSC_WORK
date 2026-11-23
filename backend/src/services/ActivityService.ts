@@ -551,31 +551,23 @@ export class ActivityService {
     await execute('UPDATE employee_devices SET last_seen_at = NOW(3) WHERE id = ?', [context.deviceId]);
 
     try {
+      // Columns match migration 053 (the previous statement referenced columns that
+      // never existed, so every legacy heartbeat silently failed to update status).
       await execute(
-        `INSERT INTO employee_tracking_status (employee_id, is_online, current_status, last_active_at, last_heartbeat_at, current_app, current_window, is_idle, idle_duration_seconds, device_id)
-         VALUES (?, 1, ?, NOW(3), NOW(3), ?, ?, ?, ?, ?)
+        `INSERT INTO employee_tracking_status (employee_id, is_online, is_active, is_idle, current_app, current_session_id, last_event_at, last_heartbeat_at)
+         VALUES (?, 1, ?, ?, ?, ?, NOW(3), NOW(3))
          ON DUPLICATE KEY UPDATE
            is_online = 1,
-           current_status = VALUES(current_status),
-           last_active_at = IF(VALUES(is_idle) = 0, NOW(3), last_active_at),
-           last_heartbeat_at = NOW(3),
-           current_app = VALUES(current_app),
-           current_window = VALUES(current_window),
+           is_active = VALUES(is_active),
            is_idle = VALUES(is_idle),
-           idle_duration_seconds = VALUES(idle_duration_seconds),
-           device_id = VALUES(device_id)`,
-        [
-          context.employeeId,
-          info?.isIdle ? 'idle' : 'active',
-          app,
-          info?.windowTitle ? cleanText(info.windowTitle, 255) : null,
-          info?.isIdle ? 1 : 0,
-          idleSec,
-          context.deviceId,
-        ],
+           current_app = VALUES(current_app),
+           current_session_id = VALUES(current_session_id),
+           last_event_at = IF(VALUES(is_idle) = 0, NOW(3), last_event_at),
+           last_heartbeat_at = NOW(3)`,
+        [context.employeeId, info?.isIdle ? 0 : 1, info?.isIdle ? 1 : 0, app, sessionId ?? null],
       );
-    } catch {
-      // Ignore if table schema differs
+    } catch (error) {
+      console.error('[activity] legacy tracking status update failed', (error as Error).message);
     }
 
     await ActivityService.notifyWatchers(context.employeeId, 'activity:heartbeat', {

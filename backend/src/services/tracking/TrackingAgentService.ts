@@ -13,8 +13,12 @@ const TOKEN_TTL_DAYS = 730;
 const TOKEN_ROTATE_WITHIN_DAYS = 30;
 const ENROLLMENT_TTL_HOURS = 72;
 const MAX_BATCH = 500;
-/** Longest single interval accepted; the agent closes intervals every 60 s. */
-const MAX_INTERVAL_SECONDS = 900;
+/**
+ * Longest single interval accepted. The agent rolls intervals over every 60 s, but an
+ * active interval stays open while input is absent (it may still become idle), so it
+ * can last up to the idle threshold (max 3600 s) plus one roll-over period.
+ */
+const MAX_INTERVAL_SECONDS = 3900;
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
 export interface TrackingDevice {

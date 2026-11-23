@@ -64,6 +64,14 @@ interface TeamRow {
   is_late: number;
 }
 
+/** Attendance times are stored in UTC; always show them in IST (zone-less values are treated as UTC). */
+const istFormatter = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
+function istClock(value: string): string {
+  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+  const date = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}Z`);
+  return Number.isNaN(date.getTime()) ? '—' : istFormatter.format(date).toUpperCase();
+}
+
 export default function Attendance() {
   useDocumentTitle('Attendance');
   const { has, user } = useAuth();
@@ -252,8 +260,8 @@ export default function Attendance() {
                               {record.autoClosed && <Badge tone="warning">Auto-closed</Badge>}
                             </div>
                           </td>
-                          <td className="whitespace-nowrap">{record.checkInAt ? new Date(record.checkInAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                          <td className="whitespace-nowrap">{record.checkOutAt ? new Date(record.checkOutAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                          <td className="whitespace-nowrap">{record.checkInAt ? istClock(record.checkInAt) : '—'}</td>
+                          <td className="whitespace-nowrap">{record.checkOutAt ? istClock(record.checkOutAt) : '—'}</td>
                           <td>{minutesToHours(record.totalMinutes)}</td>
                           <td>{minutesToHours(record.breakMinutes)}</td>
                           <td>{record.overtimeMinutes ? minutesToHours(record.overtimeMinutes) : '—'}</td>
@@ -306,11 +314,11 @@ export default function Attendance() {
                         <td>
                           <div className="flex items-center gap-1">
                             <StatusBadge status={row.status} />
-                            {row.is_late ? <Badge tone="warning">Late</Badge> : null}
+                            {row.is_late && row.status !== 'late' ? <Badge tone="warning">Late</Badge> : null}
                           </div>
                         </td>
-                        <td>{row.check_in_at ? new Date(row.check_in_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                        <td>{row.check_out_at ? new Date(row.check_out_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                        <td>{row.check_in_at ? istClock(row.check_in_at) : '—'}</td>
+                        <td>{row.check_out_at ? istClock(row.check_out_at) : '—'}</td>
                         <td>{minutesToHours(row.total_minutes)}</td>
                       </tr>
                     ))}

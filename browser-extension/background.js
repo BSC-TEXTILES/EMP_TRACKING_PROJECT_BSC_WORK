@@ -1,89 +1,82 @@
-// Records only the active tab's domain, title and duration during an authorised
-// monitoring session. Page contents, form inputs, cookies and passwords are
-// never read. The server rejects domains outside the approved policy.
-let current = null;
-let server = 'http://localhost:4000';
-let token = '';
+// BSC Activity Tracker – Browser Connector (Manifest V3).
+//
+// Reports ONLY the hostname of the active tab of the focused browser window to
+// the BSC Activity Tracker agent running on this computer (127.0.0.1:47613).
+// The agent combines it with its own foreground/idle/lock detection, so website
+// time is counted only while this browser is the active application and the
+// employee is active. Nothing is sent to any internet server by this extension.
+//
+// Never read or sent: page contents, full URLs (paths, queries), page titles,
+// form data, cookies, passwords, history, downloads or incognito tabs.
 
-async function settings() {
-  const stored = await chrome.storage.local.get(['server', 'deviceToken']);
-  server = (stored.server || server).replace(/\/$/, '');
-  token = stored.deviceToken || '';
+const AGENT = 'http://127.0.0.1:47613';
+let lastSent = { domain: undefined, at: 0 };
+
+function browserKey() {
+  const brands = (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand);
+  if (brands.some((b) => /Edge/i.test(b))) return 'edge';
+  if (brands.some((b) => /Opera/i.test(b))) return 'opera';
+  if (brands.some((b) => /Vivaldi/i.test(b))) return 'vivaldi';
+  if (navigator.brave || brands.some((b) => /Brave/i.test(b))) return 'brave';
+  if (/Firefox\//.test(navigator.userAgent)) return 'firefox';
+  return 'chrome';
 }
 
-function domainOf(url) {
+/** Hostname for normal web pages only; internal pages report no domain. */
+function hostnameOf(tab) {
+  if (!tab || tab.incognito || !tab.url) return null;
   try {
-    const parsed = new URL(url);
-    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-    return parsed.hostname.replace(/^www\./, '').toLowerCase();
+    const url = new URL(tab.url);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.hostname.replace(/^www\./, '').toLowerCase() || null;
   } catch {
     return null;
   }
 }
 
-async function flush(next) {
-  await settings();
-  const now = Date.now();
-  const finished = current;
-  current = next;
-  if (!finished || !token) return;
-  const seconds = Math.round((now - finished.startedAt) / 1000);
-  if (seconds < 5) return;
+async function activeDomain() {
   try {
-    await fetch(`${server}/api/activity/agent/events`, {
+    const win = await chrome.windows.getLastFocused({ populate: false });
+    if (!win || !win.focused) return null;
+    const [tab] = await chrome.tabs.query({ active: true, windowId: win.id });
+    return hostnameOf(tab);
+  } catch {
+    return null;
+  }
+}
+
+async function report(force = false) {
+  const domain = await activeDomain();
+  const now = Date.now();
+  if (!force && domain === lastSent.domain && now - lastSent.at < 60_000) return;
+  try {
+    const response = await fetch(`${AGENT}/v1/tab`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Device-Token': token },
-      body: JSON.stringify({
-        events: [{
-          type: 'browser',
-          clientEventId: crypto.randomUUID(),
-          browser: navigator.userAgent.includes('Edg/') ? 'Microsoft Edge'
-            : navigator.userAgent.includes('Firefox') ? 'Firefox'
-            : navigator.userAgent.includes('Brave') ? 'Brave Browser' : 'Google Chrome',
-          domain: finished.domain,
-          tabTitle: finished.title,
-          category: 'Business Operations',
-          startedAt: new Date(finished.startedAt).toISOString(),
-          endedAt: new Date(now).toISOString(),
-          activeSeconds: seconds,
-        }],
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ browser: browserKey(), domain }),
+    });
+    lastSent = { domain, at: now };
+    const state = response.ok ? await response.json() : null;
+    await chrome.action.setBadgeText({ text: response.ok ? '' : '!' });
+    await chrome.action.setTitle({
+      title: response.ok
+        ? (state && state.websiteTracking ? 'BSC Activity Tracker: connected' : 'BSC Activity Tracker: connected (website tracking off)')
+        : 'BSC Activity Tracker: agent not responding',
     });
   } catch {
-    // Offline: the next activation/interval retries with fresh metadata only.
+    // Agent not running (e.g. personal computer or tracker stopped): nothing is recorded.
+    await chrome.action.setBadgeText({ text: '!' });
+    await chrome.action.setBadgeBackgroundColor({ color: '#b45309' });
+    await chrome.action.setTitle({ title: 'BSC Activity Tracker: agent not running on this computer' });
   }
 }
 
-async function captureActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!tab || !tab.url) return;
-  const domain = domainOf(tab.url);
-  if (!domain) return;
-  if (current && current.domain === domain) {
-    current.title = tab.title || current.title;
-    return;
-  }
-  await flush({ domain, title: (tab.title || '').slice(0, 240), startedAt: Date.now() });
-}
-
+chrome.tabs.onActivated.addListener(() => { void report(); });
+chrome.tabs.onUpdated.addListener((_id, change, tab) => { if (tab.active && (change.url || change.status === 'complete')) void report(); });
+chrome.windows.onFocusChanged.addListener(() => { void report(true); });
+chrome.runtime.onStartup.addListener(() => { void report(true); });
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.alarms.create('workforce-flush', { periodInMinutes: 1 });
-  void captureActiveTab();
+  chrome.alarms.create('bsc-keepalive', { periodInMinutes: 1 });
+  void report(true);
 });
-
-chrome.runtime.onStartup.addListener(() => {
-  chrome.alarms.create('workforce-flush', { periodInMinutes: 1 });
-  void captureActiveTab();
-});
-
-chrome.tabs.onActivated.addListener(() => { void captureActiveTab(); });
-chrome.tabs.onUpdated.addListener((_tabId, info, tab) => {
-  if (info.status === 'complete' && tab.active) void captureActiveTab();
-});
-chrome.windows.onFocusChanged.addListener((windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) void flush(null);
-  else void captureActiveTab();
-});
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'workforce-flush') void captureActiveTab();
-});
+chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === 'bsc-keepalive') void report(true); });

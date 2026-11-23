@@ -1,3 +1,5 @@
+> **Superseded.** User Activity Tracking now uses the Windows agent in `tracking-agent/` and the `/api/tracking` engine. See [docs/ACTIVITY_TRACKING.md](../docs/ACTIVITY_TRACKING.md) and [docs/TRACKING_AGENT.md](../docs/TRACKING_AGENT.md). This document describes the legacy pipeline, kept for reference.
+
 # Workforce monitoring agent (Windows)
 
 Transparent desktop agent that records only authorised work metadata during an active attendance session on a company-managed computer. It never captures keystrokes, clipboard content, screenshots, passwords or private application content. Screenshot evidence is not captured by this build even when the policy flag is enabled.

@@ -25,6 +25,7 @@ const MeetingRoom = lazyWithRetry(() => import('./pages/MeetingRoom'), 'meeting-
 const Kpi = lazyWithRetry(() => import('./pages/Kpi'), 'kpi');
 const Activity = lazyWithRetry(() => import('./pages/Activity'), 'activity');
 const UserActivityTracking = lazyWithRetry(() => import('./pages/UserActivityTracking'), 'user-activity-tracking');
+const TrackingEmployeeDetails = lazyWithRetry(() => import('./pages/TrackingEmployeeDetails'), 'tracking-employee-details');
 const Leave = lazyWithRetry(() => import('./pages/Leave'), 'leave');
 const Projects = lazyWithRetry(() => import('./pages/Projects'), 'projects');
 const Collections = lazyWithRetry(() => import('./pages/Collections'), 'collections');
@@ -155,6 +156,8 @@ export function App() {
           <Route path="kpi" element={<Kpi />} />
           <Route path="activity" element={<Activity />} />
           <Route path="activity-tracking" element={<RequireAdmin><UserActivityTracking /></RequireAdmin>} />
+          {/* Access to one employee is enforced by the API: self, reporting team or permitted location. */}
+          <Route path="activity-tracking/:id" element={<TrackingEmployeeDetails />} />
           <Route path="leave" element={<Leave />} />
           <Route path="projects" element={<Projects />} />
           <Route path="collections" element={<Collections />} />

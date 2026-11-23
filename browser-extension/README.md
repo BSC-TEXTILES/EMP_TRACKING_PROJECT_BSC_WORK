@@ -1,13 +1,30 @@
-# Workforce Activity Bridge (browser extension)
+# BSC Activity Tracker – Browser Connector (Chrome / Edge, Manifest V3)
 
-Manifest V3 extension for Chrome, Brave, Edge and Firefox (Chromium build). It shares only the **active tab's domain, title and duration** with the Workforce monitoring API while an authorised session is active. It does not read page content, form fields, cookies, passwords, history or private-browsing data.
+This connector tells the **BSC Activity Tracker** agent on the same computer which
+website is open in the active tab. It sends the hostname only, for example
+`mail.google.com`, to `http://127.0.0.1:47613`. The agent counts that website's time
+only while the browser is the foreground application and the employee is active. The
+extension itself never contacts any internet server.
 
-## Install (managed device)
+**Never read or sent:** page contents, full URLs (paths and queries), page titles,
+forms, cookies, passwords and history. Incognito windows are ignored, and
+`chrome://`, `edge://` and `file://` pages report no domain.
 
-1. Open the browser's extensions page and enable **Developer mode**.
-2. Choose **Load unpacked** and select this folder.
-3. Open the extension options.
-4. Enter the Workforce server URL (for example `http://localhost:4000`) and a device token created on the Activity page or by the desktop agent (`wfm_dev_…`).
-5. Start attendance and a monitored work session in the web app. The bridge begins sending approved domains only.
+**Permissions:**
+* `tabs`, to read the active tab's address and reduce it to a hostname.
+* `alarms`, for a one-minute keep-alive.
+* Host access to `127.0.0.1:47613` only.
 
-The server checks every domain against the monitoring policy and silently discards unapproved domains. Titles are stored only for approved domains. Reporting stops when the work session ends because the API rejects events without an active session.
+## Deploy
+
+* **Managed (recommended):** package the folder as a CRX and host it internally, or
+  publish it privately in the Chrome Web Store or Edge Add-ons. Then force-install it
+  with the `ExtensionInstallForcelist` group policy for Chrome and Edge.
+* **Manual / testing:** open `chrome://extensions` or `edge://extensions`, turn on
+  *Developer mode*, choose *Load unpacked*, and select this folder.
+
+The toolbar popup shows whether the local tracker is reachable. When the agent is not
+running, nothing is recorded.
+
+The previous "Workforce Activity Bridge" (which needed a pasted device token and sent
+tab titles) has been retired.

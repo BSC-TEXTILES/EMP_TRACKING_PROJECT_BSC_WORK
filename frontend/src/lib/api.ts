@@ -469,6 +469,35 @@ export function downloadReport(params: Record<string, string | number | undefine
   window.location.href = `${BASE}/exports?${search.toString()}`;
 }
 
+/**
+ * Downloads an authenticated API response (Excel, PDF, installer) as a file,
+ * using the same credentials as every other API call. Server error messages are
+ * surfaced as ApiError so callers can show them.
+ */
+export async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, { credentials: CREDENTIALS, headers: authHeaders() });
+  if (!response.ok) {
+    let message = `Download failed (${response.status})`;
+    try {
+      const body = await response.json();
+      const candidate = body?.error?.message ?? body?.error ?? body?.message;
+      if (typeof candidate === 'string') message = candidate;
+    } catch { /* not JSON */ }
+    throw new ApiError(response.status, message, 'download_failed');
+  }
+  const disposition = response.headers.get('Content-Disposition') ?? '';
+  const match = /filename="?([^";]+)"?/i.exec(disposition);
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = match?.[1] ?? fallbackName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   if (error instanceof Error) return error.message;
