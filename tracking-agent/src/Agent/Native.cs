@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace BscTracker
 {
@@ -166,6 +167,103 @@ namespace BscTracker
                 case "vivaldi": return "Vivaldi";
                 default: return key;
             }
+        }
+
+        static readonly Regex DomainRegex = new Regex(@"(?:https?:\/\/)?(?:www\.)?([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.(?:[a-zA-Z]{2,}|[a-zA-Z0-9-]+\.[a-zA-Z]{2,}))(?::\d+)?(?:\/|\b)", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        static readonly Dictionary<string, string> KnownWebServices = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "gmail", "mail.google.com" },
+            { "google meet", "meet.google.com" },
+            { "google drive", "drive.google.com" },
+            { "google docs", "docs.google.com" },
+            { "google sheets", "sheets.google.com" },
+            { "google slides", "slides.google.com" },
+            { "google forms", "forms.google.com" },
+            { "google search", "google.com" },
+            { "google", "google.com" },
+            { "youtube", "youtube.com" },
+            { "github", "github.com" },
+            { "gitlab", "gitlab.com" },
+            { "chatgpt", "chatgpt.com" },
+            { "openai", "chatgpt.com" },
+            { "bsc textiles", "bsctextiles.in" },
+            { "bsc hrms", "bsctextiles.in" },
+            { "hrms portal", "bsctextiles.in" },
+            { "whatsapp", "web.whatsapp.com" },
+            { "stack overflow", "stackoverflow.com" },
+            { "linkedin", "linkedin.com" },
+            { "twitter", "x.com" },
+            { "facebook", "facebook.com" },
+            { "instagram", "instagram.com" },
+            { "slack", "slack.com" },
+            { "notion", "notion.so" },
+            { "figma", "figma.com" },
+            { "canva", "canva.com" },
+            { "hostinger", "hostinger.com" },
+            { "tally", "tallysolutions.com" },
+            { "zoho", "zoho.com" },
+            { "salesforce", "salesforce.com" },
+            { "jira", "atlassian.net" },
+            { "confluence", "atlassian.net" },
+            { "bitbucket", "bitbucket.org" },
+            { "outlook", "outlook.office.com" },
+            { "office 365", "office.com" },
+            { "microsoft 365", "office.com" },
+            { "teams", "teams.microsoft.com" },
+            { "wikipedia", "wikipedia.org" },
+            { "reddit", "reddit.com" },
+            { "amazon", "amazon.in" },
+            { "flipkart", "flipkart.com" }
+        };
+
+        /// <summary>
+        /// Native fallback to detect website domain from browser window titles
+        /// when the browser extension has not yet been connected.
+        /// </summary>
+        public static string ExtractDomainFromTitle(string title, string processName)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return null;
+            string cleanTitle = title.Trim();
+
+            // Strip common browser title suffixes
+            string[] browserSuffixes = new string[] {
+                " - Google Chrome", " - Chromium", " - Microsoft Edge", " - Microsoft​ Edge",
+                " - Personal - Microsoft​ Edge", " - Work - Microsoft​ Edge", " - Mozilla Firefox",
+                " - Brave", " - Opera", " - Vivaldi"
+            };
+            foreach (string s in browserSuffixes)
+            {
+                int idx = cleanTitle.LastIndexOf(s, StringComparison.OrdinalIgnoreCase);
+                if (idx > 0)
+                {
+                    cleanTitle = cleanTitle.Substring(0, idx).Trim();
+                    break;
+                }
+            }
+
+            // Check if title contains an explicit domain
+            Match m = DomainRegex.Match(cleanTitle);
+            if (m.Success && m.Groups.Count > 1)
+            {
+                string matched = m.Groups[1].Value.ToLowerInvariant();
+                if (matched.IndexOf('.') > 0 && !matched.EndsWith(".exe") && !matched.EndsWith(".dll") && !matched.EndsWith(".zip") && !matched.EndsWith(".pdf"))
+                {
+                    string cleaned = Bridge.CleanHost(matched);
+                    if (cleaned != null) return cleaned;
+                }
+            }
+
+            // Match known web applications
+            foreach (KeyValuePair<string, string> kvp in KnownWebServices)
+            {
+                if (cleanTitle.IndexOf(kvp.Key, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return kvp.Value;
+                }
+            }
+
+            return null;
         }
     }
 }

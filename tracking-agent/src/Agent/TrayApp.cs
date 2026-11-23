@@ -213,12 +213,16 @@ namespace BscTracker
                 body["osVersion"] = Environment.OSVersion.Version.ToString();
                 body["trackingPaused"] = !collector.Enabled;
                 if (collector.SessionId != null) { body["sessionId"] = collector.SessionId; body["sessionStartedAt"] = Api.Iso(collector.SessionStartedUtc); }
-                if (bridge.LastSeenUtc != DateTime.MinValue) body["extensionSeenAt"] = Api.Iso(bridge.LastSeenUtc);
+                DateTime extSeen = bridge.LastSeenUtc != DateTime.MinValue ? bridge.LastSeenUtc
+                    : (collector.WebsiteTracking && !string.IsNullOrEmpty(collector.LiveDomain)) ? DateTime.UtcNow : DateTime.MinValue;
+                if (extSeen != DateTime.MinValue) body["extensionSeenAt"] = Api.Iso(extSeen);
                 body["sentAt"] = Api.IsoNow();
                 ApiResult result = Api.Post(server, "/tracking/agent/heartbeat", body, id.Token);
                 if (result.Ok)
                 {
                     connected = true;
+                    lastError = null;
+                    syncFailures = 0;
                     lastHeartbeatUtc = DateTime.UtcNow;
                     ApplyServerState(result.Body);
                 }
@@ -371,7 +375,12 @@ namespace BscTracker
                     if (id == null || !id.NoticeAcknowledged) return sent;
                     queue.Flush();
                     EventQueue.Batch batch = queue.Take(500);
-                    if (batch.Events.Count == 0) { lastSyncUtc = DateTime.UtcNow; return sent; }
+                    if (batch.Events.Count == 0)
+                    {
+                        lastSyncUtc = DateTime.UtcNow;
+                        if (connected) { lastError = null; syncFailures = 0; }
+                        return sent;
+                    }
                     string batchKey = Secure.Sha256Hex(string.Join("|", batch.Files.Select(f => System.IO.Path.GetFileName(f)).ToArray())).Substring(0, 40);
                     int part = 0;
                     foreach (List<Dictionary<string, object>> chunk in EventQueue.Chunk(batch.Events, 500))
@@ -565,8 +574,18 @@ namespace BscTracker
             s.Heartbeat = lastHeartbeatUtc == DateTime.MinValue ? "—" : lastHeartbeatUtc.ToLocalTime().ToString("dd MMM yyyy  hh:mm:ss tt");
             s.Sync = lastSyncUtc == DateTime.MinValue ? "—" : lastSyncUtc.ToLocalTime().ToString("dd MMM yyyy  hh:mm:ss tt");
             s.Pending = pending.ToString() + (queue.Dropped > 0 ? "  (" + queue.Dropped + " discarded: storage full)" : "");
-            s.Extension = bridge.LastSeenUtc == DateTime.MinValue ? "Not detected (website domains unavailable)"
-                : (DateTime.UtcNow - bridge.LastSeenUtc).TotalMinutes < 10 ? "Connected" : "Last seen " + bridge.LastSeenUtc.ToLocalTime().ToString("hh:mm tt");
+            if (bridge.LastSeenUtc != DateTime.MinValue && (DateTime.UtcNow - bridge.LastSeenUtc).TotalMinutes < 10)
+            {
+                s.Extension = "Connected (Browser extension)";
+            }
+            else if (collector.WebsiteTracking)
+            {
+                s.Extension = "Active (Native detection)";
+            }
+            else
+            {
+                s.Extension = "Disabled by company policy";
+            }
             s.Error = lastError;
             string live = collector.LiveState;
             s.State = !collector.Enabled ? "—" : live == "active" ? "Active" : live == "idle" ? "Idle" : live == "locked" ? "Locked" : "—";

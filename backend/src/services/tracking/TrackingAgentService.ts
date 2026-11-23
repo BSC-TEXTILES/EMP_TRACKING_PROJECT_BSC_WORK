@@ -379,8 +379,8 @@ export const TrackingAgentService = {
          current_browser = VALUES(current_browser), current_domain = VALUES(current_domain), os_version = COALESCE(VALUES(os_version), os_version),
          ip = VALUES(ip), last_heartbeat_at = NOW(3), pending_events = VALUES(pending_events), dropped_events = VALUES(dropped_events),
          agent_sync_failures = VALUES(agent_sync_failures),
-         last_sync_error_at = IF(VALUES(last_sync_error) IS NULL, NULL, COALESCE(IF(last_sync_error <=> VALUES(last_sync_error), last_sync_error_at, NULL), NOW(3))),
-         last_sync_error = VALUES(last_sync_error),
+         last_sync_error_at = IF(VALUES(agent_sync_failures) = 0 OR VALUES(last_sync_error) IS NULL, NULL, COALESCE(IF(last_sync_error <=> VALUES(last_sync_error), last_sync_error_at, NULL), NOW(3))),
+         last_sync_error = IF(VALUES(agent_sync_failures) = 0, NULL, VALUES(last_sync_error)),
          clock_skew_ms = VALUES(clock_skew_ms), extension_seen_at = COALESCE(VALUES(extension_seen_at), extension_seen_at), went_offline_at = NULL`,
       [
         device.deviceId, device.employeeId, clip(input.agentVersion, 20), paused ? 'disabled' : 'running', state, app,

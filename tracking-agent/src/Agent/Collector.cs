@@ -126,7 +126,7 @@ namespace BscTracker
             Native.Foreground fg = null;
             if (state != "locked" && AppTracking)
             {
-                try { fg = Native.CurrentForeground(WindowTitles); } catch { fg = null; }
+                try { fg = Native.CurrentForeground(WindowTitles || WebsiteTracking); } catch { fg = null; }
                 if (fg != null && (fg.ProcessName.Equals("LockApp", StringComparison.OrdinalIgnoreCase) || fg.ProcessName.Equals("LogonUI", StringComparison.OrdinalIgnoreCase)))
                 {
                     state = "locked";
@@ -143,7 +143,15 @@ namespace BscTracker
                 if (browserKey != null)
                 {
                     next.Browser = Native.BrowserLabel(browserKey);
-                    if (WebsiteTracking) next.Domain = bridge.DomainFor(browserKey);
+                    if (WebsiteTracking)
+                    {
+                        next.Domain = bridge.DomainFor(browserKey);
+                        if (string.IsNullOrEmpty(next.Domain))
+                        {
+                            // Native fallback domain extraction from window title
+                            next.Domain = Native.ExtractDomainFromTitle(fg.Title, fg.ProcessName);
+                        }
+                    }
                 }
                 if (WindowTitles && state == "active" && !string.IsNullOrEmpty(fg.Title)) next.Title = fg.Title.Length > 250 ? fg.Title.Substring(0, 250) : fg.Title;
             }
@@ -173,11 +181,9 @@ namespace BscTracker
             }
             if (current.Key != next.Key) { Close(now); Open(next, now); return; }
 
-            // Roll intervals over every 60 s so data reaches the server promptly. An
-            // active interval only rolls over while input is recent, because it may
-            // still be re-classified as idle once the threshold is reached.
+            // Roll intervals over every 60 s so data reaches the server promptly.
             double age = (now - current.Start).TotalSeconds;
-            if (age >= 60 && (current.State != "active" || idleMs < 5000))
+            if (age >= 60)
             {
                 Close(now);
                 Open(next, now);

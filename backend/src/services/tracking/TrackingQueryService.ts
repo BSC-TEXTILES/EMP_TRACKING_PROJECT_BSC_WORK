@@ -59,9 +59,16 @@ const iso = (value: unknown): string | null => (value ? parseUtc(String(value))?
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function validDate(value: unknown, fallback = today()): string {
-  if (typeof value !== 'string' || !DATE_RE.test(value)) return fallback;
-  const parsed = Date.parse(`${value}T00:00:00Z`);
-  return Number.isNaN(parsed) ? fallback : value;
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  if (/^\d{2}-\d{2}-\d{4}$/.test(trimmed)) {
+    const [d, m, y] = trimmed.split('-');
+    const norm = `${y}-${m}-${d}`;
+    return !Number.isNaN(Date.parse(`${norm}T00:00:00Z`)) ? norm : fallback;
+  }
+  if (!DATE_RE.test(trimmed)) return fallback;
+  const parsed = Date.parse(`${trimmed}T00:00:00Z`);
+  return Number.isNaN(parsed) ? fallback : trimmed;
 }
 
 export function validRange(fromRaw: unknown, toRaw: unknown, maxDays = 31): { from: string; to: string } {
@@ -667,14 +674,21 @@ export async function buildDay(employeeId: number, date: string, settings: Track
   const lIdle = longest('idle');
   const toIso = (value: number) => new Date(value).toISOString();
 
+  const openSessionDuration = sessions.filter((s) => s.open).reduce((sum, s) => {
+    const startMs = s.startedAt ? (parseUtc(s.startedAt)?.getTime() ?? 0) : 0;
+    return sum + (startMs > 0 ? Math.max(0, Math.round((Date.now() - startMs) / 1000)) : 0);
+  }, 0);
+  const totalSessionSeconds = sessions.reduce((sum, s) => sum + s.seconds, 0) || openSessionDuration;
+  const activeSec = total.active > 0 ? total.active : (activity.length === 0 && openSessionDuration > 0 ? Math.min(openSessionDuration, 3600) : 0);
+
   return {
     summary: {
-      hasData: activity.length > 0,
+      hasData: activity.length > 0 || sessions.length > 0 || pointRaw.length > 0,
       firstLoginAt: firstLogin,
       lastLogoutAt: lastLogout,
       stillSignedIn: sessions.some((s) => s.open),
-      sessionSeconds: sessions.reduce((sum, s) => sum + s.seconds, 0),
-      activeSeconds: total.active,
+      sessionSeconds: totalSessionSeconds,
+      activeSeconds: activeSec,
       idleSeconds: total.idle,
       lockedSeconds: total.locked,
       sessionCount: sessions.length,
