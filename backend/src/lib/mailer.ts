@@ -178,6 +178,16 @@ async function deliver(row: {
     );
   } catch (error) {
     const message = describeSmtpError(error);
+    if (isSmtpRateLimit(error)) {
+      // Provider throttling: pause the whole queue and retry later without using up an attempt.
+      smtpPausedUntil = Date.now() + RATE_LIMIT_PAUSE_MS;
+      await execute(
+        "UPDATE email_deliveries SET status = 'queued', attempts = GREATEST(attempts - 1, 0), last_error = ?, next_attempt_at = DATE_ADD(NOW(3), INTERVAL 15 MINUTE) WHERE id = ?",
+        [message, row.id],
+      );
+      console.warn(`[mail] provider rate limit; queue paused 15 min (message ${row.id} kept for retry)`);
+      return;
+    }
     const current = await queryOne<{ attempts: number; max_attempts: number }>(
       'SELECT attempts, max_attempts FROM email_deliveries WHERE id = ?',
       [row.id],
@@ -225,6 +235,21 @@ async function loadAttachments(list: EmailTemplateData['attachments']): Promise<
     }
   }
   return result;
+}
+
+const RATE_LIMIT_PAUSE_MS = 15 * 60_000;
+/** Queue-wide pause after the provider rate-limits us; shared by every batch in this process. */
+let smtpPausedUntil = 0;
+
+/** True for provider throttling (e.g. Hostinger 451 "Ratelimit"), which must not burn retries. */
+export function isSmtpRateLimit(error: unknown): boolean {
+  const err = error as { responseCode?: number; message?: string; response?: string };
+  const text = `${err?.message ?? ''} ${err?.response ?? ''}`.toLowerCase();
+  return (err?.responseCode === 451 || err?.responseCode === 421 || err?.responseCode === 450) && /rate ?limit|too many|throttl/.test(text);
+}
+
+export function smtpPauseRemainingMs(): number {
+  return Math.max(0, smtpPausedUntil - Date.now());
 }
 
 /** Turns SMTP failures into an administrator-readable reason without exposing credentials. */
@@ -524,6 +549,7 @@ export async function deliverNow(id: number): Promise<{ status: 'accepted' | 'se
 
 /** Processes due queue rows. Returns counters for the job log. */
 export async function processEmailQueue(limit = 10): Promise<{ sent: number; failed: number; skipped: number }> {
+  if (smtpPauseRemainingMs() > 0) return { sent: 0, failed: 0, skipped: 0 };
   const rows = await query<{
     id: number;
     recipient_email: string;
@@ -545,14 +571,10 @@ export async function processEmailQueue(limit = 10): Promise<{ sent: number; fai
   let sent = 0;
   let failed = 0;
   let skipped = 0;
-  let consecutiveRateLimits = 0;
-  
+
   for (const row of rows) {
-    // Stop processing if we hit rate limits repeatedly
-    if (consecutiveRateLimits >= 3) {
-      console.log('[mail] Stopping queue processing due to repeated rate limits');
-      break;
-    }
+    // The provider throttled us (this or an earlier batch): leave the rest for later.
+    if (smtpPauseRemainingMs() > 0) break;
 
     const claimed = await execute(
       "UPDATE email_deliveries SET status = 'sending', attempts = attempts + 1 WHERE id = ? AND status IN ('queued','failed')",
@@ -566,21 +588,10 @@ export async function processEmailQueue(limit = 10): Promise<{ sent: number; fai
     
     if (after?.status === 'sent') {
       sent += 1;
-      consecutiveRateLimits = 0;
     } else if (after?.status === 'skipped') {
       skipped += 1;
-      consecutiveRateLimits = 0;
     } else if (after?.status === 'failed') {
       failed += 1;
-      // Check if this was a rate limit error
-      const errorRow = await queryOne<{ last_error: string | null }>('SELECT last_error FROM email_deliveries WHERE id = ?', [row.id]);
-      if (errorRow?.last_error?.includes('rate limit') || errorRow?.last_error?.includes('Ratelimit') || errorRow?.last_error?.includes('451')) {
-        consecutiveRateLimits += 1;
-        // Add a longer delay after rate limit in production
-        if (process.env.NODE_ENV !== 'test') {
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        }
-      }
     } else if (before?.status === 'sending') {
       failed += 1;
     }

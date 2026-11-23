@@ -69,3 +69,9 @@ tools/
 
 # Packaged release archives
 /release/
+
+# Code-signing material and dev (untrusted) agent builds - never commit
+*.pfx
+*.p12
+*.snk
+/tracking-agent/dist-dev/

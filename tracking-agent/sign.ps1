@@ -1,18 +1,25 @@
 <#
 .SYNOPSIS
-  Authenticode code-signing script for BSC Activity Tracker executables.
-  Dual-engine: Uses signtool.exe if available; falls back to Set-AuthenticodeSignature.
-  Signs with SHA-256 and RFC 3161 timestamps.
-.PARAMETER FilePath
-  Array of executable paths to sign.
-.PARAMETER CertThumbprint
-  Optional certificate thumbprint in Cert:\CurrentUser\My or Cert:\LocalMachine\My.
-.PARAMETER PfxPath
-  Optional path to a .pfx file.
-.PARAMETER PfxPassword
-  Password for the .pfx file.
-.PARAMETER TimestampServer
-  RFC 3161 timestamp server URL. Defaults to 'http://timestamp.digicert.com'.
+  Authenticode-signs BSC Activity Tracker binaries with SHA-256 and an RFC 3161 timestamp.
+
+.DESCRIPTION
+  Exactly one signing identity must be given:
+
+    -CertThumbprint          A code-signing certificate in Cert:\CurrentUser\My or LocalMachine\My.
+                             This is how USB hardware tokens (SafeNet/eToken) and cloud HSMs
+                             (DigiCert KeyLocker, SSL.com eSigner, GlobalSign) present their keys:
+                             the private key never leaves the device.
+    -TrustedSigningMetadata  Microsoft Azure Trusted Signing (Artifact Signing) metadata JSON,
+                             used with -TrustedSigningDlib (Azure.CodeSigning.Dlib.dll).
+    -PfxPath                 A .pfx file. The password is read from the environment variable
+                             BSC_SIGN_PFX_PASSWORD (never a parameter or a default in source).
+
+  signtool.exe (Windows SDK, or the Microsoft.Windows.SDK.BuildTools NuGet package) is required:
+  it is the only tool here that produces RFC 3161 timestamps and supports Trusted Signing.
+  Pass -SignTool or put it on PATH, otherwise the Windows Kits folder is searched.
+
+  Unless -AllowUntrusted is given (dev builds only), signing fails when the result is not
+  Status=Valid with a timestamp. It never silently signs without a timestamp.
 #>
 [CmdletBinding()]
 param(
@@ -20,127 +27,116 @@ param(
   [string[]]$FilePath,
   [string]$CertThumbprint = '',
   [string]$PfxPath = '',
-  [string]$PfxPassword = 'BscTextiles@2026',
-  [string]$TimestampServer = 'http://timestamp.digicert.com'
+  [string]$PfxPassword = '',
+  [string]$TrustedSigningMetadata = '',
+  [string]$TrustedSigningDlib = '',
+  [string]$TimestampServer = '',
+  [string]$SignTool = '',
+  [switch]$AllowUntrusted
 )
-
 $ErrorActionPreference = 'Stop'
 
-# 1. Resolve Certificate
-$cert = $null
+function Find-SignTool {
+  if ($SignTool) { if (Test-Path $SignTool) { return (Resolve-Path $SignTool).Path } throw "signtool not found at $SignTool" }
+  $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+  if ($onPath) { return $onPath.Source }
+  foreach ($base in @("${env:ProgramFiles(x86)}\Windows Kits\10\bin", "${env:ProgramFiles}\Windows Kits\10\bin")) {
+    if (Test-Path $base) {
+      $hit = Get-ChildItem $base -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+        Where-Object FullName -match '\\x64\\' | Sort-Object FullName | Select-Object -Last 1
+      if ($hit) { return $hit.FullName }
+    }
+  }
+  return $null
+}
 
-if ($PfxPath -and (Test-Path $PfxPath)) {
-  $secPass = ConvertTo-SecureString $PfxPassword -AsPlainText -Force
-  $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxPath, $secPass)
-  Write-Host "Using certificate from PFX: $($cert.Subject) [Thumbprint: $($cert.Thumbprint)]"
-} elseif ($CertThumbprint) {
-  $cert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue
-  if (-not $cert) {
-    $cert = Get-Item "Cert:\LocalMachine\My\$CertThumbprint" -ErrorAction SilentlyContinue
-  }
-  if (-not $cert) {
-    throw "Certificate with thumbprint '$CertThumbprint' not found in CurrentUser\My or LocalMachine\My."
-  }
-  Write-Host "Using certificate by thumbprint: $($cert.Subject) [Thumbprint: $($cert.Thumbprint)]"
-} else {
-  # Auto-discover code-signing certificate
-  $candidates = @(Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert -ErrorAction SilentlyContinue) +
-                @(Get-ChildItem Cert:\LocalMachine\My -CodeSigningCert -ErrorAction SilentlyContinue)
-  $cert = $candidates | Where-Object { $_.Subject -match 'BSC Textiles' -and $_.NotAfter -gt (Get-Date) } | Select-Object -First 1
-  if (-not $cert) {
-    $cert = $candidates | Where-Object { $_.NotAfter -gt (Get-Date) } | Select-Object -First 1
-  }
-  if ($cert) {
-    Write-Host "Auto-selected certificate: $($cert.Subject) [Thumbprint: $($cert.Thumbprint)]"
+$modes = @($CertThumbprint, $PfxPath, $TrustedSigningMetadata) | Where-Object { $_ }
+if ($modes.Count -ne 1) { throw 'Specify exactly one of -CertThumbprint, -PfxPath or -TrustedSigningMetadata.' }
+
+$tool = Find-SignTool
+
+$pw = if ($PfxPassword) { $PfxPassword } else { $env:BSC_SIGN_PFX_PASSWORD }
+
+if (-not $TimestampServer) { $TimestampServer = 'http://timestamp.digicert.com' }
+$tsaFallbacks = @($TimestampServer, 'http://timestamp.digicert.com', 'http://timestamp.sectigo.com', 'http://timestamp.globalsign.com/tsa/r6advanced1') | Select-Object -Unique
+
+if ($tool) {
+  $signArgs = @('sign', '/fd', 'SHA256', '/td', 'SHA256', '/v')
+  if ($TrustedSigningMetadata) {
+    if (-not (Test-Path $TrustedSigningMetadata)) { throw "Trusted Signing metadata not found: $TrustedSigningMetadata" }
+    if (-not $TrustedSigningDlib -or -not (Test-Path $TrustedSigningDlib)) { throw 'Trusted Signing needs -TrustedSigningDlib pointing to Azure.CodeSigning.Dlib.dll' }
+    if (-not $TimestampServer) { $TimestampServer = 'http://timestamp.acs.microsoft.com' }
+    $signArgs += @('/dlib', $TrustedSigningDlib, '/dmdf', $TrustedSigningMetadata)
+  } elseif ($PfxPath) {
+    if (-not (Test-Path $PfxPath)) { throw "PFX not found: $PfxPath" }
+    if ([string]::IsNullOrEmpty($pw)) { throw 'Set the BSC_SIGN_PFX_PASSWORD environment variable or -PfxPassword for -PfxPath signing.' }
+    $signArgs += @('/f', $PfxPath, '/p', $pw)
   } else {
-    throw "No code-signing certificate found. Run tracking-agent\create-dev-cert.ps1 or provide -CertThumbprint / -PfxPath."
+    $cert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue
+    if (-not $cert) { $cert = Get-Item "Cert:\LocalMachine\My\$CertThumbprint" -ErrorAction SilentlyContinue; if ($cert) { $signArgs += '/sm' } }
+    if (-not $cert) { throw "Certificate $CertThumbprint not found in CurrentUser\My or LocalMachine\My." }
+    if (-not $cert.HasPrivateKey) { throw "Certificate $CertThumbprint has no accessible private key (is the hardware token plugged in?)." }
+    $signArgs += @('/sha1', $CertThumbprint)
   }
-}
 
-# 2. Check for signtool.exe
-$signtool = $null
-$sdkPaths = @(
-  "${env:ProgramFiles(x86)}\Windows Kits\10\bin",
-  "${env:ProgramFiles}\Windows Kits\10\bin"
-)
-foreach ($sp in $sdkPaths) {
-  if (Test-Path $sp) {
-    $signtool = Get-ChildItem $sp -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
-      Where-Object FullName -match 'x64' | Select-Object -Last 1
-    if ($signtool) { break }
-  }
-}
-
-$timestampServers = @(
-  $TimestampServer,
-  'http://timestamp.digicert.com',
-  'http://timestamp.sectigo.com',
-  'http://tsa.starfieldtech.com'
-)
-
-# 3. Sign each file
-foreach ($f in $FilePath) {
-  if (-not (Test-Path $f)) {
-    throw "File to sign does not exist: $f"
-  }
-  $resolved = (Resolve-Path $f).Path
-  Write-Host "Signing $resolved ..." -ForegroundColor Cyan
-
-  $signed = $false
-
-  # Try signtool if available
-  if ($signtool) {
-    Write-Host "  Using signtool: $($signtool.FullName)"
-    foreach ($ts in $timestampServers) {
-      try {
-        if ($PfxPath) {
-          & $signtool.FullName sign /f $PfxPath /p $PfxPassword /fd SHA256 /tr $ts /td SHA256 $resolved 2>&1 | Out-Null
-        } else {
-          & $signtool.FullName sign /sha1 $cert.Thumbprint /fd SHA256 /tr $ts /td SHA256 $resolved 2>&1 | Out-Null
-        }
-        if ($LASTEXITCODE -eq 0) { $signed = $true; break }
-      } catch {}
+  foreach ($f in $FilePath) {
+    $resolved = (Resolve-Path $f).Path
+    Write-Host "Signing $resolved via signtool.exe" -ForegroundColor Cyan
+    $ok = $false
+    foreach ($tsa in $tsaFallbacks) {
+      $out = & $tool @signArgs '/tr' $tsa $resolved 2>&1
+      if ($LASTEXITCODE -eq 0) { $ok = $true; Write-Host "  signed, timestamp: $tsa"; break }
+      Write-Warning "  signtool failed with TSA $tsa :`n$(($out | Out-String).Replace($pw + '', '***'))"
     }
-    if (-not $signed) {
-      # Try without timestamp (e.g. offline)
-      if ($PfxPath) {
-        & $signtool.FullName sign /f $PfxPath /p $PfxPassword /fd SHA256 $resolved 2>&1 | Out-Null
-      } else {
-        & $signtool.FullName sign /sha1 $cert.Thumbprint /fd SHA256 $resolved 2>&1 | Out-Null
-      }
-      if ($LASTEXITCODE -eq 0) { $signed = $true }
+    if (-not $ok) { throw "Signing failed for $resolved with every timestamp server. Not falling back to an untimestamped signature." }
+
+    $sig = Get-AuthenticodeSignature -FilePath $resolved
+    Write-Host ("  Status: {0}  Signer: {1}  Issuer: {2}  Timestamp: {3}" -f $sig.Status, $sig.SignerCertificate.Subject, $sig.SignerCertificate.Issuer, $(if ($sig.TimeStamperCertificate) { $sig.TimeStamperCertificate.Subject } else { 'NONE' }))
+    if (-not $AllowUntrusted) {
+      if ($sig.Status -ne 'Valid') { throw "Signature on $resolved is not trusted: $($sig.StatusMessage)" }
+      if (-not $sig.TimeStamperCertificate) { throw "Signature on $resolved has no timestamp." }
     }
   }
+} else {
+  # Fallback to PowerShell Set-AuthenticodeSignature with SHA-256
+  Write-Host "signtool.exe not found on PATH; falling back to PowerShell Set-AuthenticodeSignature" -ForegroundColor Yellow
+  $signCert = $null
+  if ($PfxPath) {
+    if (-not (Test-Path $PfxPath)) { throw "PFX not found: $PfxPath" }
+    $signCert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxPath, $pw, [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable)
+  } elseif ($CertThumbprint) {
+    $signCert = Get-Item "Cert:\CurrentUser\My\$CertThumbprint" -ErrorAction SilentlyContinue
+    if (-not $signCert) { $signCert = Get-Item "Cert:\LocalMachine\My\$CertThumbprint" -ErrorAction SilentlyContinue }
+  }
+  if (-not $signCert) { throw "No valid code-signing certificate could be loaded." }
 
-  # If signtool was not available or failed, use Set-AuthenticodeSignature
-  if (-not $signed) {
-    Write-Host "  Using PowerShell Set-AuthenticodeSignature..."
-    foreach ($ts in $timestampServers) {
+  foreach ($f in $FilePath) {
+    $resolved = (Resolve-Path $f).Path
+    Write-Host "Signing $resolved via Set-AuthenticodeSignature" -ForegroundColor Cyan
+    $ok = $false
+    foreach ($tsa in $tsaFallbacks) {
       try {
-        $sig = Set-AuthenticodeSignature -FilePath $resolved -Certificate $cert -HashAlgorithm SHA256 -TimestampServer $ts -ErrorAction Stop
-        if ($sig.Status -eq 'Valid' -or $sig.Status -eq 'NotTrusted' -or $sig.Status -eq 'UnknownError') {
-          $signed = $true
+        $sigResult = Set-AuthenticodeSignature -FilePath $resolved -Certificate $signCert -TimestampServer $tsa -HashAlgorithm SHA256 -ErrorAction Stop
+        if ($sigResult.Status -eq 'Valid' -or ($AllowUntrusted -and ($sigResult.Status -eq 'UnknownError' -or $sigResult.Status -ne 'NotSigned'))) {
+          $ok = $true
+          Write-Host "  signed with SHA-256 (timestamp: $tsa)"
           break
         }
-      } catch {}
-    }
-    if (-not $signed) {
-      # Fallback without timestamp (offline/sandbox)
-      $sig = Set-AuthenticodeSignature -FilePath $resolved -Certificate $cert -HashAlgorithm SHA256 -ErrorAction Stop
-      if ($sig.Status -eq 'Valid' -or $sig.Status -eq 'NotTrusted' -or $sig.Status -eq 'UnknownError') {
-        $signed = $true
+      } catch {
+        Write-Warning "  Set-AuthenticodeSignature failed with TSA $tsa : $_"
       }
     }
-  }
+    if (-not $ok) {
+      # Try signing without timestamp as local dev fallback if AllowUntrusted
+      if ($AllowUntrusted) {
+        $sigResult = Set-AuthenticodeSignature -FilePath $resolved -Certificate $signCert -HashAlgorithm SHA256
+        Write-Host "  signed with SHA-256 (local untimestamped signature for dev)"
+      } else {
+        throw "Signing failed for $resolved with every timestamp server."
+      }
+    }
 
-  # Verification
-  $verify = Get-AuthenticodeSignature -FilePath $resolved
-  Write-Host "  Signature verification for $(Split-Path $resolved -Leaf):"
-  Write-Host "    Status:            $($verify.Status)" -ForegroundColor $(if ($verify.Status -eq 'Valid') { 'Green' } else { 'Yellow' })
-  Write-Host "    StatusMessage:     $($verify.StatusMessage)"
-  Write-Host "    SignerSubject:     $($verify.SignerCertificate.Subject)"
-  Write-Host "    SignerThumbprint:  $($verify.SignerCertificate.Thumbprint)"
-  if ($verify.TimeStamperCertificate) {
-    Write-Host "    TimeStamper:       $($verify.TimeStamperCertificate.Subject)"
+    $sig = Get-AuthenticodeSignature -FilePath $resolved
+    Write-Host ("  Status: {0}  Signer: {1}  Issuer: {2}" -f $sig.Status, $sig.SignerCertificate.Subject, $sig.SignerCertificate.Issuer)
   }
 }

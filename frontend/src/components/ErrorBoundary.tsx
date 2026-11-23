@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { Icon } from './icons';
 import { trackError } from '../lib/errorTracking';
+import { isChunkOrModuleMismatch } from '../lib/lazyWithRetry';
 
 interface Props {
   children: ReactNode;
@@ -17,13 +18,7 @@ interface State {
 
 function isChunkLoadError(error: Error | null): boolean {
   if (!error) return false;
-  const msg = String(error.message || '');
-  return (
-    error.name === 'ChunkLoadError' ||
-    /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Loading chunk [\w\d]+ failed|mime type/i.test(
-      msg
-    )
-  );
+  return isChunkOrModuleMismatch(error);
 }
 
 /**

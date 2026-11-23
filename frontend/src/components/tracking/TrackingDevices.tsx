@@ -8,6 +8,8 @@ import { useToast } from '../../contexts/ToastContext';
 import { ago, istDateTime, type DeviceInfo, type OverviewResponse } from '../../lib/tracking';
 
 type DeviceRow = DeviceInfo & { status: string; employeeName: string; employeeCode: string; locationCode: string | null };
+interface InstallerSignature { releaseGrade: boolean; signer: string | null; issuer: string | null; timestamped: boolean; problems: string[] }
+interface AgentInfo { installerVersion: string | null; sha256: string | null; signature: InstallerSignature | null }
 interface PendingCode { id: number; employee_id: number; code_hint: string; expires_at: string; created_at: string; full_name: string; employee_code: string; created_by_name: string | null }
 
 export function TrackingDevices({ canManage }: { canManage: boolean }) {
@@ -19,6 +21,11 @@ export function TrackingDevices({ canManage }: { canManage: boolean }) {
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [revoking, setRevoking] = useState<DeviceRow | null>(null);
   const [busy, setBusy] = useState(false);
+  const [agentInfo, setAgentInfo] = useState<AgentInfo | null>(null);
+
+  useEffect(() => {
+    api.get<AgentInfo>('/tracking/agent/info').then(setAgentInfo).catch(() => setAgentInfo(null));
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -86,10 +93,11 @@ export function TrackingDevices({ canManage }: { canManage: boolean }) {
             </ol>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-secondary" onClick={downloadInstaller}><Icon name="download" size={16} /> Download installer</button>
+            <button type="button" className="btn-secondary" onClick={downloadInstaller} disabled={agentInfo !== null && !agentInfo.signature}><Icon name="download" size={16} /> Download installer</button>
             {canManage && <button type="button" className="btn-primary" onClick={() => setEnrollOpen(true)}><Icon name="plus" size={16} /> Enrollment code</button>}
           </div>
         </div>
+        {agentInfo && <InstallerTrust info={agentInfo} />}
       </Card>
 
       {canManage && codes.length > 0 && (
@@ -254,5 +262,32 @@ function EnrollmentDialog({ open, onClose }: { open: boolean; onClose: () => voi
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Shows whether the published installer passed the signed release gate (tracking-agent/build.ps1). */
+function InstallerTrust({ info }: { info: AgentInfo }) {
+  const sig = info.signature;
+  if (!sig) {
+    return <p className="mt-3 text-sm text-ink-500">No installer has been built on this server yet.</p>;
+  }
+  if (sig.releaseGrade) {
+    return (
+      <p className="mt-3 flex flex-wrap items-center gap-2 text-sm text-ink-600">
+        <Badge tone="success">Trusted signature</Badge>
+        Version {info.installerVersion ?? '?'} · signed by <strong>{sig.signer}</strong>{sig.issuer ? ` (issued by ${sig.issuer})` : ''} · timestamped
+      </p>
+    );
+  }
+  return (
+    <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+      <p className="font-semibold">This installer is not signed with a trusted code-signing certificate.</p>
+      <p className="mt-1">Windows Smart App Control will block it on employee computers (&ldquo;could not verify its publisher&rdquo;). Do not ask employees to turn off Windows security. IT must rebuild it with the company&rsquo;s code-signing certificate (see docs/CODE_SIGNING.md).</p>
+      {sig.problems.length > 0 && (
+        <ul className="mt-2 list-disc pl-5 text-xs">
+          {sig.problems.slice(0, 5).map((p) => <li key={p}>{p}</li>)}
+        </ul>
+      )}
+    </div>
   );
 }

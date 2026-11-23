@@ -1,19 +1,21 @@
 <#
 .SYNOPSIS
-  Generates a local SHA-256 Authenticode code-signing certificate for development,
-  testing, and lab environments for "BSC Textiles Pvt Ltd".
+  DEV/TEST ONLY. Generates a SELF-SIGNED code-signing certificate for local test builds
+  (build.ps1 -DevSign). Windows Smart App Control and SmartScreen will ALWAYS treat binaries
+  signed with it as "unverified publisher" on every PC - it can never be used for a release,
+  and build.ps1 refuses to put such a build in dist\. Do not install it on employee PCs.
 .PARAMETER Subject
   Distinguished name for the certificate. Defaults to "CN=BSC Textiles Pvt Ltd, O=BSC Textiles Pvt Ltd, C=IN".
 .PARAMETER ExportPfxPath
-  Optional path to export the certificate as a PKCS#12 (.pfx) bundle.
+  Optional path to export the certificate as a PKCS#12 (.pfx) bundle (requires -Password).
 .PARAMETER Password
-  Password for the exported PFX. Defaults to "BscTextiles@2026".
+  Password for the exported PFX (no default; never commit it).
 #>
 [CmdletBinding()]
 param(
   [string]$Subject = "CN=BSC Textiles Pvt Ltd, O=BSC Textiles Pvt Ltd, C=IN",
   [string]$ExportPfxPath = "",
-  [string]$Password = "BscTextiles@2026"
+  [string]$Password = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,21 +40,8 @@ if ($existing) {
   Write-Host "Generated new certificate: $($cert.Thumbprint)" -ForegroundColor Green
 }
 
-# Add to CurrentUser\TrustedPublisher so publisher is explicitly trusted
-try {
-  $pubStore = New-Object System.Security.Cryptography.X509Certificates.X509Store([System.Security.Cryptography.X509Certificates.StoreName]::TrustedPublisher, [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-  $pubStore.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-  $alreadyInPub = $pubStore.Certificates | Where-Object { $_.Thumbprint -eq $cert.Thumbprint }
-  if (-not $alreadyInPub) {
-    $pubStore.Add($cert)
-    Write-Host "Trusted in CurrentUser\TrustedPublisher store." -ForegroundColor Green
-  }
-  $pubStore.Close()
-} catch {
-  Write-Warning "Could not add to CurrentUser\TrustedPublisher store: $($_.Exception.Message)"
-}
-
 if ($ExportPfxPath) {
+  if (-not $Password) { throw 'Pass -Password to export a PFX.' }
   $dir = Split-Path -Parent $ExportPfxPath
   if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
   $secPass = ConvertTo-SecureString $Password -AsPlainText -Force

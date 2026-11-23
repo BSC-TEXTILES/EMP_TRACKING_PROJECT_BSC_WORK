@@ -16,8 +16,8 @@ using Microsoft.Win32;
 [assembly: AssemblyCompany("BSC Textiles Pvt Ltd")]
 [assembly: AssemblyProduct("BSC Activity Tracker")]
 [assembly: AssemblyCopyright("Copyright © 2026 BSC Textiles Pvt Ltd. All rights reserved.")]
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.1.0.0")]
+[assembly: AssemblyFileVersion("2.1.0.0")]
 
 namespace BscTracker
 {

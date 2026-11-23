@@ -155,9 +155,14 @@ namespace BscTracker
             error = null;
             try
             {
-                string url = path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                    ? path
-                    : server + (path.StartsWith("/") ? path : "/" + path);
+                // Only paths on the enrolled server are accepted; an absolute URL in a server
+                // response could otherwise point the updater at another host.
+                if (string.IsNullOrEmpty(path) || !path.StartsWith("/") || path.StartsWith("//") || path.Contains("://") || path.Contains(".."))
+                {
+                    error = "Refusing update path that is not on the enrolled server: " + path;
+                    return false;
+                }
+                string url = server + path;
 
                 HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
                 request.Method = "GET";

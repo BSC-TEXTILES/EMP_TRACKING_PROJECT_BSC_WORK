@@ -288,26 +288,33 @@ namespace BscTracker
                     bool required = Api.Bool(update, "required", false);
                     string downloadPath = Api.Str(update, "downloadPath");
                     string expectedSha256 = Api.Str(update, "sha256");
-                    string expectedPublisher = Api.Str(update, "publisher") ?? Product.Publisher;
                     tray.ShowBalloonTip(10000, Product.Name, "Version " + latest + " is available" + (required ? " and required by your administrator" : "") + ". Ask IT to update, or download it from the HRMS.", required ? ToolTipIcon.Warning : ToolTipIcon.Info);
                     if (required && !string.IsNullOrEmpty(downloadPath))
                     {
-                        StartBackground("auto-update", delegate { ApplySecureUpdate(latest, downloadPath, expectedSha256, expectedPublisher); });
+                        StartBackground("auto-update", delegate { ApplySecureUpdate(latest, downloadPath, expectedSha256); });
                     }
                 }
                 RefreshTray();
             });
         }
 
-        void ApplySecureUpdate(string targetVersion, string downloadPath, string expectedSha256, string expectedPublisher)
+        void ApplySecureUpdate(string targetVersion, string downloadPath, string expectedSha256)
         {
+            string destFile = null;
+            FileStream hold = null;
             try
             {
                 DeviceIdentity id = identity;
                 if (id == null) return;
+                if (string.IsNullOrEmpty(expectedSha256))
+                {
+                    Log.Warn("Update " + targetVersion + " offered without a SHA-256; ignored.");
+                    return;
+                }
                 Log.Info("Starting verified update download for version " + targetVersion + "...");
-                string tempDir = Path.GetTempPath();
-                string destFile = Path.Combine(tempDir, "BSC-Activity-Tracker-Setup-" + targetVersion + ".exe");
+                string dir = Path.Combine(Path.GetTempPath(), "BSCActivityTrackerUpdate");
+                Directory.CreateDirectory(dir);
+                destFile = Path.Combine(dir, "BSC-Activity-Tracker-Setup-" + targetVersion + ".exe");
                 string downloadErr;
                 if (!Api.DownloadFile(server, downloadPath, destFile, id.Token, out downloadErr))
                 {
@@ -315,34 +322,38 @@ namespace BscTracker
                     return;
                 }
 
-                if (!string.IsNullOrEmpty(expectedSha256))
+                // Hold a read lock from verification until the installer has started, so the
+                // verified file cannot be swapped for another one in between.
+                hold = new FileStream(destFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+                string computedHash = SignatureVerifier.FileSha256Hex(destFile);
+                if (!string.Equals(computedHash, expectedSha256.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
-                    string computedHash = SignatureVerifier.FileSha256Hex(destFile);
-                    if (!string.Equals(computedHash, expectedSha256.Trim(), StringComparison.OrdinalIgnoreCase))
-                    {
-                        Log.Error("SECURITY ALERT: Update file hash mismatch! Expected: " + expectedSha256 + ", got: " + computedHash);
-                        try { File.Delete(destFile); } catch { }
-                        return;
-                    }
+                    Log.Error("SECURITY ALERT: Update file hash mismatch! Expected: " + expectedSha256 + ", got: " + computedHash);
+                    return;
                 }
-
                 string signErr;
-                if (!SignatureVerifier.VerifyPublisher(destFile, expectedPublisher ?? Product.Publisher, out signErr))
+                if (!SignatureVerifier.VerifyPublisher(destFile, out signErr))
                 {
-                    Log.Error("SECURITY ALERT: Update signature verification failed: " + signErr);
-                    try { File.Delete(destFile); } catch { }
+                    Log.Error("SECURITY ALERT: Update rejected: " + signErr);
                     return;
                 }
 
-                Log.Info("Update verified successfully (Authenticode & SHA-256). Executing installer...");
-                ProcessStartInfo psi = new ProcessStartInfo(destFile, "/install /repair /quiet /nolaunch");
+                Log.Info("Update verified (WinVerifyTrust + publisher + SHA-256). Starting installer...");
+                ProcessStartInfo psi = new ProcessStartInfo(destFile, "/repair /quiet");
                 psi.UseShellExecute = true;
                 psi.Verb = "runas";
                 Process.Start(psi);
+                Thread.Sleep(3000);
+                destFile = null; // keep the file; the installer is using it
             }
             catch (Exception ex)
             {
                 Log.Error("Auto-update error: " + ex.Message);
+            }
+            finally
+            {
+                if (hold != null) hold.Dispose();
+                if (destFile != null) { try { File.Delete(destFile); } catch { } }
             }
         }
 

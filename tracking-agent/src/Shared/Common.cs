@@ -2,6 +2,7 @@
 // Language level: C# 5 (.NET Framework 4.8 csc, ships with Windows).
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -16,7 +17,7 @@ namespace BscTracker
         public const string Name = "BSC Activity Tracker";
         public const string Publisher = "BSC Textiles Pvt Ltd";
         public const string Copyright = "Copyright © 2026 BSC Textiles Pvt Ltd. All rights reserved.";
-        public const string Version = "2.0.0";
+        public const string Version = "2.1.0";
         public const string ExeName = "BSCActivityTracker.exe";
         public const string SetupName = "BSC-Activity-Tracker-Setup.exe";
         public const string RegistryPath = @"SOFTWARE\BSC Textiles\Activity Tracker";
@@ -118,31 +119,34 @@ namespace BscTracker
             }
         }
 
-        public static bool VerifyPublisher(string filePath, string expectedPublisher, out string error)
+        /// <summary>
+        /// Full Authenticode check via WinVerifyTrust (the same API Windows uses): the signature
+        /// must be cryptographically intact (file unmodified), chain to a root trusted by this
+        /// PC, and not be revoked. Then the signing certificate's CN must equal the publisher
+        /// this build was signed with (BuildInfo.ExpectedSigner, baked in at build time) - the
+        /// server cannot widen that list. Self-signed or tampered files are rejected.
+        /// </summary>
+        public static bool VerifyPublisher(string filePath, out string error)
         {
             error = null;
-            if (!File.Exists(filePath))
+            if (!File.Exists(filePath)) { error = "File does not exist: " + filePath; return false; }
+            int trust = WinTrust.Verify(filePath);
+            if (trust != 0)
             {
-                error = "File does not exist: " + filePath;
+                error = "Authenticode verification failed (0x" + trust.ToString("X8") + "): " + WinTrust.Describe(trust);
                 return false;
             }
             try
             {
-                X509Certificate cert = X509Certificate.CreateFromSignedFile(filePath);
-                if (cert == null || cert.Handle == IntPtr.Zero)
+                X509Certificate2 cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(filePath));
+                string cn = cert.GetNameInfo(X509NameType.SimpleName, false);
+                string expected = ExpectedSigner;
+                if (!string.Equals(cn, expected, StringComparison.Ordinal))
                 {
-                    error = "File is not digitally signed.";
+                    error = "Publisher mismatch. Expected signer CN '" + expected + "', found '" + cn + "'.";
                     return false;
                 }
-                string subject = cert.Subject;
-                if (!string.IsNullOrEmpty(subject) &&
-                    (subject.IndexOf(expectedPublisher, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                     subject.IndexOf("BSC Textiles", StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    return true;
-                }
-                error = "Publisher mismatch. Expected: " + expectedPublisher + ", found: " + subject;
-                return false;
+                return true;
             }
             catch (Exception ex)
             {
@@ -150,5 +154,93 @@ namespace BscTracker
                 return false;
             }
         }
+
+        public static string ExpectedSigner
+        {
+            get { return Product.Publisher; }
+        }
+    }
+
+    internal static class WinTrust
+    {
+        static readonly Guid GenericVerifyV2 = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct FileInfo
+        {
+            public uint cbStruct;
+            [MarshalAs(UnmanagedType.LPWStr)] public string pcwszFilePath;
+            public IntPtr hFile;
+            public IntPtr pgKnownSubject;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct TrustData
+        {
+            public uint cbStruct;
+            public IntPtr pPolicyCallbackData;
+            public IntPtr pSIPClientData;
+            public uint dwUIChoice;
+            public uint fdwRevocationChecks;
+            public uint dwUnionChoice;
+            public IntPtr pFile;
+            public uint dwStateAction;
+            public IntPtr hWVTStateData;
+            public IntPtr pwszURLReference;
+            public uint dwProvFlags;
+            public uint dwUIContext;
+            public IntPtr pSignatureSettings;
+        }
+
+        [DllImport("wintrust.dll", ExactSpelling = true, SetLastError = false, CharSet = CharSet.Unicode)]
+        static extern int WinVerifyTrust(IntPtr hwnd, [MarshalAs(UnmanagedType.LPStruct)] Guid action, ref TrustData data);
+
+        const uint WTD_UI_NONE = 2, WTD_REVOKE_WHOLECHAIN = 1, WTD_CHOICE_FILE = 1;
+        const uint WTD_STATEACTION_VERIFY = 1, WTD_STATEACTION_CLOSE = 2;
+        const uint WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT = 0x80;
+
+        public static int Verify(string path)
+        {
+            FileInfo fi = new FileInfo();
+            fi.cbStruct = (uint)Marshal.SizeOf(typeof(FileInfo));
+            fi.pcwszFilePath = path;
+            IntPtr pFile = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(FileInfo)));
+            Marshal.StructureToPtr(fi, pFile, false);
+            TrustData data = new TrustData();
+            data.cbStruct = (uint)Marshal.SizeOf(typeof(TrustData));
+            data.dwUIChoice = WTD_UI_NONE;
+            data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+            data.dwUnionChoice = WTD_CHOICE_FILE;
+            data.pFile = pFile;
+            data.dwStateAction = WTD_STATEACTION_VERIFY;
+            data.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
+            try
+            {
+                return WinVerifyTrust(IntPtr.Zero, GenericVerifyV2, ref data);
+            }
+            finally
+            {
+                data.dwStateAction = WTD_STATEACTION_CLOSE;
+                WinVerifyTrust(IntPtr.Zero, GenericVerifyV2, ref data);
+                Marshal.DestroyStructure(pFile, typeof(FileInfo));
+                Marshal.FreeHGlobal(pFile);
+            }
+        }
+
+        public static string Describe(int code)
+        {
+            switch ((uint)code)
+            {
+                case 0x800B0100: return "file is not signed";
+                case 0x800B0109: return "certificate chains to an untrusted root (self-signed or private CA)";
+                case 0x80096010: return "signature does not match the file (file modified)";
+                case 0x800B0101: return "certificate expired and signature has no timestamp";
+                case 0x800B010C: return "certificate revoked";
+                case 0x80092013: return "revocation server unreachable";
+                case 0x800B0111: return "publisher explicitly distrusted";
+                default: return "untrusted";
+            }
+        }
     }
 }
+
