@@ -331,6 +331,13 @@ async function ensureDatabaseReady(): Promise<void> {
         } catch (hierErr) {
           console.warn('[startup] Reporting hierarchy check note:', hierErr);
         }
+        try {
+          const { TravelService } = await import('./services/TravelService.js');
+          await TravelService.ensureTablesExist();
+          console.log('[startup] Travel & ticket booking tables verified.');
+        } catch (travelErr) {
+          console.warn('[startup] Travel tables check note:', travelErr);
+        }
         // Ensure email delivery and mailbox schema readiness
         try {
           const colCheckDeliveries = await queryOne<{ cnt: number | string }>(

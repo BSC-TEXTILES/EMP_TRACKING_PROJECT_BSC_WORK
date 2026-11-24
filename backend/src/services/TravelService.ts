@@ -217,6 +217,68 @@ export interface BookingFilters {
 }
 
 export class TravelService {
+  private static tablesReadyPromise: Promise<void> | null = null;
+
+  /**
+   * Ensure travel ticket counting tables and schema columns exist on the database
+   */
+  public static async ensureTablesExist(): Promise<void> {
+    if (!this.tablesReadyPromise) {
+      this.tablesReadyPromise = (async () => {
+        try {
+          await execute(`CREATE TABLE IF NOT EXISTS daily_ticket_counts (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            booking_date DATE NOT NULL,
+            location_id BIGINT UNSIGNED NOT NULL,
+            ticket_type ENUM('bus', 'train') NOT NULL,
+            ticket_count INT UNSIGNED NOT NULL DEFAULT 1,
+            is_cancelled TINYINT(1) NOT NULL DEFAULT 0,
+            ticket_number VARCHAR(255) NULL,
+            employee_id BIGINT UNSIGNED NOT NULL,
+            notes VARCHAR(255) NULL,
+            created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_dtc_date_loc (booking_date, location_id),
+            KEY idx_dtc_loc_date (location_id, booking_date),
+            KEY idx_dtc_type (ticket_type),
+            KEY idx_dtc_cancelled (is_cancelled),
+            KEY idx_dtc_emp (employee_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+          await execute(`CREATE TABLE IF NOT EXISTS daily_ticket_count_edits (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            daily_ticket_count_id BIGINT UNSIGNED NOT NULL,
+            previous_count INT UNSIGNED NOT NULL,
+            new_count INT UNSIGNED NOT NULL,
+            edited_by BIGINT UNSIGNED NOT NULL,
+            reason VARCHAR(255) NULL,
+            created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            PRIMARY KEY (id),
+            KEY idx_dtce_record (daily_ticket_count_id)
+          ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+
+          const colCheck = await queryOne<{ cnt: number | string }>(
+            "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'daily_ticket_counts' AND column_name = 'is_cancelled'",
+          );
+          if (!colCheck || Number(colCheck.cnt) === 0) {
+            await execute('ALTER TABLE daily_ticket_counts ADD COLUMN is_cancelled TINYINT(1) NOT NULL DEFAULT 0 AFTER ticket_count');
+          }
+
+          const colCheckNum = await queryOne<{ cnt: number | string }>(
+            "SELECT COUNT(*) AS cnt FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'daily_ticket_counts' AND column_name = 'ticket_number'",
+          );
+          if (!colCheckNum || Number(colCheckNum.cnt) === 0) {
+            await execute('ALTER TABLE daily_ticket_counts ADD COLUMN ticket_number VARCHAR(255) NULL AFTER is_cancelled');
+          }
+        } catch (err) {
+          console.warn('[travel] ensureTablesExist warning:', err);
+        }
+      })();
+    }
+    await this.tablesReadyPromise;
+  }
+
   /**
    * Resolve location filter clause for SQL queries based on actor's allowed stores
    */
@@ -252,6 +314,7 @@ export class TravelService {
    * Get Live Travel & Ticket Booking Summary for Dashboard
    */
   static async getSummary(user: AuthUser, locationId?: number): Promise<TravelSummary> {
+    await this.ensureTablesExist();
     const todayStr = getIndianToday();
     const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, locationId, 'd');
 
@@ -512,6 +575,7 @@ export class TravelService {
       locationId?: number;
     },
   ) {
+    await this.ensureTablesExist();
     if (!['bus', 'train'].includes(input.ticketType)) {
       throw ApiError.badRequest("Ticket type must be either 'bus' or 'train'.");
     }
@@ -586,6 +650,7 @@ export class TravelService {
    * List date-wise ticket booking history aggregated by (booking_date, location_id)
    */
   static async listDailyHistory(user: AuthUser, filters: DailyHistoryFilters = {}) {
+    await this.ensureTablesExist();
     const todayStr = getIndianToday();
     const yesterdayStr = getIndianYesterday();
     const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, filters.locationId, 'd');
@@ -767,6 +832,7 @@ export class TravelService {
     bookingDate: string,
     locationId?: number,
   ): Promise<DailyTicketEntryItem[]> {
+    await this.ensureTablesExist();
     const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, locationId, 'd');
 
     const rows = await query<{
