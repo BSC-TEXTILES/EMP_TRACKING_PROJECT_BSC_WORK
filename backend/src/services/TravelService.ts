@@ -29,6 +29,7 @@ export interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
     pendingBookings: number;
@@ -39,6 +40,7 @@ export interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
   };
@@ -46,6 +48,7 @@ export interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
     totalAmount: number;
@@ -54,6 +57,7 @@ export interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalEntries: number;
   };
   byStatus: {
@@ -71,6 +75,7 @@ export interface TravelSummary {
     todayTickets: number;
     todayBus: number;
     todayTrain: number;
+    todayCancelled: number;
     weekTickets: number;
     monthTickets: number;
     totalTickets: number;
@@ -90,6 +95,7 @@ export interface DailyHistoryFilters {
   startDate?: string;
   endDate?: string;
   ticketType?: 'bus' | 'train' | 'all';
+  statusFilter?: 'all' | 'booked' | 'cancelled';
   locationId?: number;
   search?: string;
   page?: number;
@@ -103,7 +109,9 @@ export interface DailyHistoryItem {
   storeName: string;
   busTickets: number;
   trainTickets: number;
+  cancelledTickets: number;
   totalTickets: number;
+  ticketNumbers: string;
   entryCount: number;
   latestUpdatedAt: string;
   updatedByEmployeeName: string;
@@ -118,6 +126,8 @@ export interface DailyTicketEntryItem {
   storeName: string;
   ticketType: 'bus' | 'train';
   ticketCount: number;
+  isCancelled: boolean;
+  ticketNumber: string | null;
   employeeId: number;
   employeeName: string;
   employeeCode: string;
@@ -250,12 +260,14 @@ export class TravelService {
       total_tickets: number;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_entries: number;
     }>(
       `SELECT
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
         COUNT(*) AS total_entries
        FROM daily_ticket_counts d
        WHERE d.booking_date = ? ${locClause}`,
@@ -267,12 +279,14 @@ export class TravelService {
       total_tickets: number;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_entries: number;
     }>(
       `SELECT
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
         COUNT(*) AS total_entries
        FROM daily_ticket_counts d
        WHERE d.booking_date >= DATE_SUB(?, INTERVAL WEEKDAY(?) DAY)
@@ -285,12 +299,14 @@ export class TravelService {
       total_tickets: number;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_entries: number;
     }>(
       `SELECT
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
         COUNT(*) AS total_entries
        FROM daily_ticket_counts d
        WHERE d.booking_date >= DATE_FORMAT(?, '%Y-%m-01')
@@ -303,12 +319,14 @@ export class TravelService {
       total_tickets: number;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_entries: number;
     }>(
       `SELECT
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
         COUNT(*) AS total_entries
        FROM daily_ticket_counts d
        WHERE 1 = 1 ${locClause}`,
@@ -335,6 +353,7 @@ export class TravelService {
       today_tickets: number;
       today_bus: number;
       today_train: number;
+      today_cancelled: number;
       week_tickets: number;
       month_tickets: number;
       total_tickets: number;
@@ -347,24 +366,30 @@ export class TravelService {
         COALESCE((
           SELECT SUM(d.ticket_count)
           FROM daily_ticket_counts d
-          WHERE d.location_id = l.id AND d.booking_date = ?
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.is_cancelled = 0
         ), 0) AS today_tickets,
         COALESCE((
           SELECT SUM(d.ticket_count)
           FROM daily_ticket_counts d
-          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'bus'
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'bus' AND d.is_cancelled = 0
         ), 0) AS today_bus,
         COALESCE((
           SELECT SUM(d.ticket_count)
           FROM daily_ticket_counts d
-          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'train'
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'train' AND d.is_cancelled = 0
         ), 0) AS today_train,
+        COALESCE((
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.is_cancelled = 1
+        ), 0) AS today_cancelled,
         COALESCE((
           SELECT SUM(d.ticket_count)
           FROM daily_ticket_counts d
           WHERE d.location_id = l.id
             AND d.booking_date >= DATE_SUB(?, INTERVAL WEEKDAY(?) DAY)
             AND d.booking_date <= ?
+            AND d.is_cancelled = 0
         ), 0) AS week_tickets,
         COALESCE((
           SELECT SUM(d.ticket_count)
@@ -372,11 +397,12 @@ export class TravelService {
           WHERE d.location_id = l.id
             AND d.booking_date >= DATE_FORMAT(?, '%Y-%m-01')
             AND d.booking_date <= ?
+            AND d.is_cancelled = 0
         ), 0) AS month_tickets,
         COALESCE((
           SELECT SUM(d.ticket_count)
           FROM daily_ticket_counts d
-          WHERE d.location_id = l.id
+          WHERE d.location_id = l.id AND d.is_cancelled = 0
         ), 0) AS total_tickets,
         COALESCE((
           SELECT COUNT(*)
@@ -386,7 +412,7 @@ export class TravelService {
        FROM locations l
        ${storeLocFilter}
        ORDER BY l.id ASC`,
-      [todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, ...storeLocParams],
+      [todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, ...storeLocParams],
     );
 
     // 6. User's assigned store
@@ -399,6 +425,7 @@ export class TravelService {
     );
 
     const totalTodayTickets = Number(todayStats?.total_tickets ?? 0);
+    const todayCancelled = Number(todayStats?.cancelled_tickets ?? 0);
     const totalTodayEntries = Number(todayStats?.total_entries ?? 0);
 
     return {
@@ -406,16 +433,18 @@ export class TravelService {
         totalTickets: totalTodayTickets,
         busTickets: Number(todayStats?.bus_tickets ?? 0),
         trainTickets: Number(todayStats?.train_tickets ?? 0),
+        cancelledTickets: todayCancelled,
         totalBookings: totalTodayEntries,
         totalEntries: totalTodayEntries,
         pendingBookings: 0,
         confirmedBookings: totalTodayTickets,
-        cancelledBookings: 0,
+        cancelledBookings: todayCancelled,
       },
       thisWeek: {
         totalTickets: Number(weekStats?.total_tickets ?? 0),
         busTickets: Number(weekStats?.bus_tickets ?? 0),
         trainTickets: Number(weekStats?.train_tickets ?? 0),
+        cancelledTickets: Number(weekStats?.cancelled_tickets ?? 0),
         totalBookings: Number(weekStats?.total_entries ?? 0),
         totalEntries: Number(weekStats?.total_entries ?? 0),
       },
@@ -423,6 +452,7 @@ export class TravelService {
         totalTickets: Number(monthStats?.total_tickets ?? 0),
         busTickets: Number(monthStats?.bus_tickets ?? 0),
         trainTickets: Number(monthStats?.train_tickets ?? 0),
+        cancelledTickets: Number(monthStats?.cancelled_tickets ?? 0),
         totalBookings: Number(monthStats?.total_entries ?? 0),
         totalEntries: Number(monthStats?.total_entries ?? 0),
         totalAmount: 0,
@@ -431,13 +461,14 @@ export class TravelService {
         totalTickets: Number(overallStats?.total_tickets ?? 0),
         busTickets: Number(overallStats?.bus_tickets ?? 0),
         trainTickets: Number(overallStats?.train_tickets ?? 0),
+        cancelledTickets: Number(overallStats?.cancelled_tickets ?? 0),
         totalEntries: Number(overallStats?.total_entries ?? 0),
       },
       byStatus: {
         requested: 0,
         pending: 0,
         confirmed: totalTodayTickets,
-        cancelled: 0,
+        cancelled: todayCancelled,
         rejected: 0,
         completed: 0,
       },
@@ -448,6 +479,7 @@ export class TravelService {
         todayTickets: Number(r.today_tickets),
         todayBus: Number(r.today_bus),
         todayTrain: Number(r.today_train),
+        todayCancelled: Number(r.today_cancelled),
         weekTickets: Number(r.week_tickets),
         monthTickets: Number(r.month_tickets),
         totalTickets: Number(r.total_tickets),
@@ -466,15 +498,16 @@ export class TravelService {
   }
 
   /**
-   * Record a simplified daily ticket count (Bus or Train)
-   * Automatically assigns today's Indian date and employee's store.
-   * Multiple submissions on the same day add to the day's total.
+   * Record a simplified daily ticket count (Bus or Train, Booked or Cancelled)
+   * With optional Ticket / PNR Number reference.
    */
   static async recordDailyCount(
     user: AuthUser,
     input: {
       ticketType: 'bus' | 'train';
       ticketCount: number;
+      isCancelled?: boolean;
+      ticketNumber?: string | null;
       notes?: string | null;
       locationId?: number;
     },
@@ -510,35 +543,42 @@ export class TravelService {
     }
 
     const bookingDate = getIndianToday();
+    const isCancelled = input.isCancelled ? 1 : 0;
+    const ticketNumber = input.ticketNumber ? input.ticketNumber.trim() : null;
     const notes = input.notes ? input.notes.trim() : null;
 
     const result = await execute(
       `INSERT INTO daily_ticket_counts (
-        booking_date, location_id, ticket_type, ticket_count, employee_id, notes
-      ) VALUES (?, ?, ?, ?, ?, ?)`,
-      [bookingDate, targetLocationId, input.ticketType, count, user.id, notes],
+        booking_date, location_id, ticket_type, ticket_count, is_cancelled, ticket_number, employee_id, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [bookingDate, targetLocationId, input.ticketType, count, isCancelled, ticketNumber, user.id, notes],
     );
 
     const insertedId = result.insertId;
 
     broadcastEvent('travel:updated', {
-      action: 'ticket_recorded',
+      action: isCancelled ? 'ticket_cancelled' : 'ticket_recorded',
       id: insertedId,
       bookingDate,
       locationId: targetLocationId,
       ticketType: input.ticketType,
       ticketCount: count,
+      isCancelled: Boolean(isCancelled),
+      ticketNumber,
       recordedBy: user.id,
     });
 
+    const statusWord = isCancelled ? 'cancelled' : 'booked';
     return {
       success: true,
-      message: `Successfully recorded ${count} ${input.ticketType} ticket${count > 1 ? 's' : ''} for today (${bookingDate}).`,
+      message: `Successfully recorded ${count} ${statusWord} ${input.ticketType} ticket${count > 1 ? 's' : ''} for today (${bookingDate}).`,
       recordId: insertedId,
       bookingDate,
       locationId: targetLocationId,
       ticketType: input.ticketType,
       ticketCount: count,
+      isCancelled: Boolean(isCancelled),
+      ticketNumber,
     };
   }
 
@@ -586,10 +626,16 @@ export class TravelService {
       params.push(filters.ticketType);
     }
 
+    if (filters.statusFilter === 'booked') {
+      conditions.push('d.is_cancelled = 0');
+    } else if (filters.statusFilter === 'cancelled') {
+      conditions.push('d.is_cancelled = 1');
+    }
+
     if (filters.search && filters.search.trim()) {
       const q = `%${filters.search.trim()}%`;
-      conditions.push('(l.name LIKE ? OR l.code LIKE ?)');
-      params.push(q, q);
+      conditions.push('(l.name LIKE ? OR l.code LIKE ? OR d.ticket_number LIKE ?)');
+      params.push(q, q, q);
     }
 
     const whereClause = conditions.join(' AND ');
@@ -598,13 +644,15 @@ export class TravelService {
     const summaryRow = await queryOne<{
       total_bus: number;
       total_train: number;
+      total_cancelled: number;
       grand_total: number;
       total_entries: number;
     }>(
       `SELECT
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS total_bus,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS total_train,
-        COALESCE(SUM(d.ticket_count), 0) AS grand_total,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_bus,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS total_train,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS total_cancelled,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS grand_total,
         COUNT(*) AS total_entries
        FROM daily_ticket_counts d
        JOIN locations l ON l.id = d.location_id
@@ -634,7 +682,9 @@ export class TravelService {
       store_name: string;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_tickets: number;
+      ticket_numbers: string | null;
       entry_count: number;
       latest_updated_at: string;
       updated_by_name: string | null;
@@ -645,9 +695,11 @@ export class TravelService {
         d.location_id,
         l.code AS store_code,
         l.name AS store_name,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets,
+        GROUP_CONCAT(DISTINCT NULLIF(TRIM(d.ticket_number), '') SEPARATOR ', ') AS ticket_numbers,
         COUNT(*) AS entry_count,
         DATE_FORMAT(MAX(d.updated_at), '%Y-%m-%d %H:%i:%s') AS latest_updated_at,
         (
@@ -682,7 +734,9 @@ export class TravelService {
       storeName: r.store_name,
       busTickets: Number(r.bus_tickets),
       trainTickets: Number(r.train_tickets),
+      cancelledTickets: Number(r.cancelled_tickets),
       totalTickets: Number(r.total_tickets),
+      ticketNumbers: r.ticket_numbers || '',
       entryCount: Number(r.entry_count),
       latestUpdatedAt: r.latest_updated_at,
       updatedByEmployeeName: r.updated_by_name || 'System',
@@ -693,6 +747,7 @@ export class TravelService {
       summary: {
         totalBus: Number(summaryRow?.total_bus ?? 0),
         totalTrain: Number(summaryRow?.total_train ?? 0),
+        totalCancelled: Number(summaryRow?.total_cancelled ?? 0),
         grandTotal: Number(summaryRow?.grand_total ?? 0),
         totalEntries: Number(summaryRow?.total_entries ?? 0),
       },
@@ -722,6 +777,8 @@ export class TravelService {
       store_name: string;
       ticket_type: 'bus' | 'train';
       ticket_count: number;
+      is_cancelled: number;
+      ticket_number: string | null;
       employee_id: number;
       employee_name: string;
       employee_code: string;
@@ -737,6 +794,8 @@ export class TravelService {
         l.name AS store_name,
         d.ticket_type,
         d.ticket_count,
+        COALESCE(d.is_cancelled, 0) AS is_cancelled,
+        d.ticket_number,
         d.employee_id,
         e.full_name AS employee_name,
         e.employee_code,
@@ -795,6 +854,8 @@ export class TravelService {
       storeName: r.store_name,
       ticketType: r.ticket_type,
       ticketCount: Number(r.ticket_count),
+      isCancelled: Boolean(r.is_cancelled),
+      ticketNumber: r.ticket_number,
       employeeId: Number(r.employee_id),
       employeeName: r.employee_name,
       employeeCode: r.employee_code,
@@ -915,9 +976,11 @@ export class TravelService {
       'Booking Date',
       'Store Code',
       'Store Name',
-      'Bus Tickets',
-      'Train Tickets',
-      'Total Tickets',
+      'Bus Tickets Booked',
+      'Train Tickets Booked',
+      'Cancelled Tickets',
+      'Net Total Tickets',
+      'Ticket Numbers / PNRs',
       'Entries Recorded',
       'Last Updated By',
       'Last Updated At',
@@ -933,7 +996,9 @@ export class TravelService {
           escapeCsv(item.storeName),
           escapeCsv(item.busTickets),
           escapeCsv(item.trainTickets),
+          escapeCsv(item.cancelledTickets),
           escapeCsv(item.totalTickets),
+          escapeCsv(item.ticketNumbers),
           escapeCsv(item.entryCount),
           escapeCsv(`${item.updatedByEmployeeName} (${item.updatedByEmployeeCode})`),
           escapeCsv(item.latestUpdatedAt),
@@ -949,7 +1014,9 @@ export class TravelService {
         escapeCsv(''),
         escapeCsv(result.summary.totalBus),
         escapeCsv(result.summary.totalTrain),
+        escapeCsv(result.summary.totalCancelled),
         escapeCsv(result.summary.grandTotal),
+        escapeCsv(''),
         escapeCsv(result.summary.totalEntries),
         escapeCsv(''),
         escapeCsv(''),
@@ -984,13 +1051,15 @@ export class TravelService {
       booking_date: string;
       bus_tickets: number;
       train_tickets: number;
+      cancelled_tickets: number;
       total_tickets: number;
     }>(
       `SELECT
         DATE_FORMAT(d.booking_date, '%Y-%m-%d') AS booking_date,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
-        COALESCE(SUM(d.ticket_count), 0) AS total_tickets
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' AND d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS cancelled_tickets,
+        COALESCE(SUM(CASE WHEN d.is_cancelled = 0 THEN d.ticket_count ELSE 0 END), 0) - COALESCE(SUM(CASE WHEN d.is_cancelled = 1 THEN d.ticket_count ELSE 0 END), 0) AS total_tickets
        FROM daily_ticket_counts d
        WHERE ${dateFilter} ${locClause}
        GROUP BY d.booking_date
@@ -1002,6 +1071,7 @@ export class TravelService {
       date: r.booking_date,
       bus: Number(r.bus_tickets),
       train: Number(r.train_tickets),
+      cancelled: Number(r.cancelled_tickets),
       total: Number(r.total_tickets),
     }));
   }
@@ -1526,13 +1596,14 @@ export class TravelService {
       await txExecute(
         conn,
         `INSERT INTO daily_ticket_counts (
-          booking_date, location_id, ticket_type, ticket_count, employee_id, notes
-        ) VALUES (?, ?, ?, ?, ?, ?)`,
+          booking_date, location_id, ticket_type, ticket_count, is_cancelled, ticket_number, employee_id, notes
+        ) VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
         [
           input.bookingDate || getIndianToday(),
           locationId,
           input.transportType,
           passengerCount,
+          input.pnrOrTicketNumber || null,
           input.employeeId,
           input.purpose || 'HR Booking',
         ],

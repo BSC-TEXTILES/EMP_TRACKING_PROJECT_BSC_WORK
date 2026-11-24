@@ -224,4 +224,45 @@ describe('BSC Textiles Simplified Daily Ticket Count & Tracking System', () => {
     expect(todayPoint).toBeDefined();
     expect(todayPoint?.total).toBeGreaterThan(0);
   });
+
+  it('13. Records cancelled tickets and specific ticket / PNR numbers', async () => {
+    const res = await TravelService.recordDailyCount(belEmployee, {
+      ticketType: 'bus',
+      ticketCount: 3,
+      isCancelled: true,
+      ticketNumber: 'PNR-CAN-991, PNR-CAN-992',
+      notes: 'Customer schedule cancellation - Belagavi bus refund',
+    });
+
+    expect(res.success).toBe(true);
+    expect(res.isCancelled).toBe(true);
+    expect(res.ticketNumber).toBe('PNR-CAN-991, PNR-CAN-992');
+
+    // Retrieve date entries and verify cancelled flag and ticket numbers
+    const entries = await TravelService.getDateEntries(belEmployee, todayStr, 1);
+    const cancelledEntry = entries.find((e) => e.id === res.recordId);
+    expect(cancelledEntry).toBeDefined();
+    expect(cancelledEntry?.isCancelled).toBe(true);
+    expect(cancelledEntry?.ticketNumber).toBe('PNR-CAN-991, PNR-CAN-992');
+  });
+
+  it('14. Computes daily net tickets dynamically taking cancellations into account', async () => {
+    const summary = await TravelService.getSummary(superAdmin);
+    expect(summary.today.cancelledTickets).toBeGreaterThanOrEqual(3);
+
+    // List history for today
+    const history = await TravelService.listDailyHistory(superAdmin, { datePreset: 'today' });
+    expect(history.summary.totalCancelled).toBeGreaterThanOrEqual(3);
+    expect(history.summary.grandTotal).toBe(
+      history.summary.totalBus + history.summary.totalTrain - history.summary.totalCancelled,
+    );
+  });
+
+  it('15. Includes cancelled tickets and ticket numbers in Excel CSV export', async () => {
+    const csv = await TravelService.exportDailyHistory(superAdmin, { datePreset: 'today' });
+    expect(csv).toContain('Cancelled Tickets');
+    expect(csv).toContain('Net Total Tickets');
+    expect(csv).toContain('Ticket Numbers / PNRs');
+    expect(csv).toContain('PNR-CAN-991');
+  });
 });

@@ -13,6 +13,7 @@ interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
     pendingBookings: number;
@@ -23,6 +24,7 @@ interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
   };
@@ -30,6 +32,7 @@ interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalBookings: number;
     totalEntries: number;
     totalAmount: number;
@@ -38,6 +41,7 @@ interface TravelSummary {
     totalTickets: number;
     busTickets: number;
     trainTickets: number;
+    cancelledTickets: number;
     totalEntries: number;
   };
   byStore: Array<{
@@ -47,6 +51,7 @@ interface TravelSummary {
     todayTickets: number;
     todayBus: number;
     todayTrain: number;
+    todayCancelled: number;
     weekTickets: number;
     monthTickets: number;
     totalTickets: number;
@@ -68,7 +73,9 @@ interface DailyHistoryItem {
   storeName: string;
   busTickets: number;
   trainTickets: number;
+  cancelledTickets: number;
   totalTickets: number;
+  ticketNumbers: string;
   entryCount: number;
   latestUpdatedAt: string;
   updatedByEmployeeName: string;
@@ -79,6 +86,7 @@ interface DailyHistoryResponse {
   summary: {
     totalBus: number;
     totalTrain: number;
+    totalCancelled: number;
     grandTotal: number;
     totalEntries: number;
   };
@@ -97,6 +105,8 @@ interface DailyTicketEntryItem {
   storeName: string;
   ticketType: 'bus' | 'train';
   ticketCount: number;
+  isCancelled: boolean;
+  ticketNumber: string | null;
   employeeId: number;
   employeeName: string;
   employeeCode: string;
@@ -136,6 +146,8 @@ export function TravelBookingDashboard() {
 
   // New Simple Booking Entry State
   const [entryType, setEntryType] = useState<'bus' | 'train'>('bus');
+  const [isCancelled, setIsCancelled] = useState<boolean>(false);
+  const [ticketNumber, setTicketNumber] = useState<string>('');
   const [entryCount, setEntryCount] = useState<string>('1');
   const [entryNotes, setEntryNotes] = useState<string>('');
   const [submittingEntry, setSubmittingEntry] = useState(false);
@@ -145,6 +157,7 @@ export function TravelBookingDashboard() {
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [filterType, setFilterType] = useState<'all' | 'bus' | 'train'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'booked' | 'cancelled'>('all');
   const [filterLocationId, setFilterLocationId] = useState<string>('all');
   const [historyPage, setHistoryPage] = useState<number>(1);
   const [historyData, setHistoryData] = useState<DailyHistoryResponse | null>(null);
@@ -186,6 +199,7 @@ export function TravelBookingDashboard() {
         if (customEndDate) params.append('endDate', customEndDate);
       }
       if (filterType !== 'all') params.append('ticketType', filterType);
+      if (filterStatus !== 'all') params.append('statusFilter', filterStatus);
       if (filterLocationId !== 'all') params.append('locationId', filterLocationId);
       params.append('page', String(historyPage));
       params.append('limit', '15');
@@ -206,7 +220,7 @@ export function TravelBookingDashboard() {
 
   useEffect(() => {
     fetchHistory();
-  }, [datePreset, customStartDate, customEndDate, filterType, filterLocationId, historyPage]);
+  }, [datePreset, customStartDate, customEndDate, filterType, filterStatus, filterLocationId, historyPage]);
 
   // Real-time synchronization
   useSocketEvent('travel:updated', () => {
@@ -231,12 +245,17 @@ export function TravelBookingDashboard() {
       const res = await api.post<{ success: boolean; message: string }>('/travel/counts', {
         ticketType: entryType,
         ticketCount: count,
+        isCancelled,
+        ticketNumber: ticketNumber.trim() || undefined,
         notes: entryNotes ? entryNotes.trim() : undefined,
       });
 
-      toast(res.message || `Successfully recorded ${count} ${entryType} ticket(s).`, 'success');
+      const actionText = isCancelled ? 'cancelled' : 'booked';
+      toast(res.message || `Successfully recorded ${count} ${actionText} ${entryType} ticket(s).`, 'success');
       setEntryCount('1');
+      setTicketNumber('');
       setEntryNotes('');
+      setIsCancelled(false);
       fetchSummary();
       fetchHistory();
     } catch (err) {
@@ -313,6 +332,7 @@ export function TravelBookingDashboard() {
       if (customEndDate) params.append('endDate', customEndDate);
     }
     if (filterType !== 'all') params.append('ticketType', filterType);
+    if (filterStatus !== 'all') params.append('statusFilter', filterStatus);
     if (filterLocationId !== 'all') params.append('locationId', filterLocationId);
 
     window.open(`/api/travel/daily-history/export?${params.toString()}`, '_blank');
@@ -399,29 +419,27 @@ export function TravelBookingDashboard() {
       ) : summary ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Card className="card-pad border-l-4 border-l-brand-600 bg-white">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Today Total</span>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-ink-500">Today Net Total</span>
             <p className="mt-1 text-2xl font-black text-brand-700">{summary.today.totalTickets}</p>
-            <span className="text-xs text-ink-500">tickets booked today</span>
+            <span className="text-xs text-ink-500">net tickets today</span>
           </Card>
 
           <Card className="card-pad border-l-4 border-l-blue-600 bg-white">
             <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700">Today Bus</span>
             <p className="mt-1 text-2xl font-black text-blue-800">{summary.today.busTickets}</p>
-            <span className="text-xs text-ink-500">bus tickets</span>
+            <span className="text-xs text-ink-500">bus tickets booked</span>
           </Card>
 
           <Card className="card-pad border-l-4 border-l-emerald-600 bg-white">
             <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Today Train</span>
             <p className="mt-1 text-2xl font-black text-emerald-800">{summary.today.trainTickets}</p>
-            <span className="text-xs text-ink-500">train tickets</span>
+            <span className="text-xs text-ink-500">train tickets booked</span>
           </Card>
 
-          <Card className="card-pad border-l-4 border-l-indigo-600 bg-white">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">This Week</span>
-            <p className="mt-1 text-2xl font-black text-indigo-800">{summary.thisWeek.totalTickets}</p>
-            <span className="text-xs text-ink-500">
-              Bus: {summary.thisWeek.busTickets} | Train: {summary.thisWeek.trainTickets}
-            </span>
+          <Card className="card-pad border-l-4 border-l-rose-500 bg-white">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700">Today Cancelled</span>
+            <p className="mt-1 text-2xl font-black text-rose-600">{summary.today.cancelledTickets}</p>
+            <span className="text-xs text-ink-500">cancelled tickets</span>
           </Card>
 
           <Card className="card-pad border-l-4 border-l-purple-600 bg-white">
@@ -435,7 +453,7 @@ export function TravelBookingDashboard() {
           <Card className="card-pad border-l-4 border-l-amber-600 bg-white">
             <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Overall Total</span>
             <p className="mt-1 text-2xl font-black text-amber-800">{summary.overall.totalTickets}</p>
-            <span className="text-xs text-ink-500">all-time records</span>
+            <span className="text-xs text-ink-500">all-time net tickets</span>
           </Card>
         </div>
       ) : null}
@@ -451,12 +469,46 @@ export function TravelBookingDashboard() {
               </span>
               <div>
                 <h3 className="text-sm font-bold text-ink-900">Record Daily Ticket Count</h3>
-                <p className="text-[11px] text-ink-500">Quick entry for today's ticket count</p>
+                <p className="text-[11px] text-ink-500">Quick entry for today's ticket count & cancellations</p>
               </div>
             </div>
           </div>
 
           <form onSubmit={handleSubmitCount} className="space-y-4">
+            {/* Status / Nature: Booked vs Cancelled */}
+            <div>
+              <label className="block text-xs font-bold text-ink-700 mb-1.5">
+                Entry Status <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCancelled(false)}
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition ${
+                    !isCancelled
+                      ? 'border-emerald-600 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20 shadow-xs'
+                      : 'border-slate-200 bg-white text-ink-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon name="check" className={`h-4 w-4 ${!isCancelled ? 'text-emerald-600' : 'text-ink-400'}`} />
+                  <span>Booked Ticket</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsCancelled(true)}
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition ${
+                    isCancelled
+                      ? 'border-rose-600 bg-rose-50 text-rose-900 ring-2 ring-rose-500/20 shadow-xs'
+                      : 'border-slate-200 bg-white text-ink-600 hover:bg-slate-50'
+                  }`}
+                >
+                  <Icon name="x" className={`h-4 w-4 ${isCancelled ? 'text-rose-600' : 'text-ink-400'}`} />
+                  <span>Cancelled Ticket</span>
+                </button>
+              </div>
+            </div>
+
             {/* A. Ticket Type Selection */}
             <div>
               <label className="block text-xs font-bold text-ink-700 mb-1.5">
@@ -466,7 +518,7 @@ export function TravelBookingDashboard() {
                 <button
                   type="button"
                   onClick={() => setEntryType('bus')}
-                  className={`flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition ${
                     entryType === 'bus'
                       ? 'border-blue-600 bg-blue-50/80 text-blue-900 ring-2 ring-blue-500/20 shadow-xs'
                       : 'border-slate-200 bg-white text-ink-600 hover:bg-slate-50'
@@ -479,7 +531,7 @@ export function TravelBookingDashboard() {
                 <button
                   type="button"
                   onClick={() => setEntryType('train')}
-                  className={`flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-bold transition ${
+                  className={`flex items-center justify-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition ${
                     entryType === 'train'
                       ? 'border-emerald-600 bg-emerald-50/80 text-emerald-900 ring-2 ring-emerald-500/20 shadow-xs'
                       : 'border-slate-200 bg-white text-ink-600 hover:bg-slate-50'
@@ -491,10 +543,11 @@ export function TravelBookingDashboard() {
               </div>
             </div>
 
-            {/* B. Total Number of Tickets Booked */}
+            {/* B. Total Number of Tickets Booked / Cancelled */}
             <div>
               <label htmlFor="ticket-count-input" className="block text-xs font-bold text-ink-700 mb-1.5">
-                Total Number of Tickets Booked <span className="text-rose-500">*</span>
+                {isCancelled ? 'Number of Tickets Cancelled' : 'Total Number of Tickets Booked'}{' '}
+                <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
                 <input
@@ -513,7 +566,25 @@ export function TravelBookingDashboard() {
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-ink-500">
-                Positive whole numbers only (min: 1). Multiple entries automatically add to today's total.
+                Positive whole numbers only (min: 1).
+              </p>
+            </div>
+
+            {/* Ticket Number / PNR Reference Number (Optional) */}
+            <div>
+              <label htmlFor="ticket-number-input" className="block text-xs font-medium text-ink-700 mb-1">
+                Ticket Number / PNR Ref (Optional)
+              </label>
+              <input
+                id="ticket-number-input"
+                type="text"
+                value={ticketNumber}
+                onChange={(e) => setTicketNumber(e.target.value)}
+                placeholder="e.g. PNR-8392104, BUS-TKT-991"
+                className="input font-mono text-xs py-2 px-3 w-full"
+              />
+              <p className="mt-1 text-[11px] text-ink-500">
+                Log the specific ticket numbers or PNR references for this entry.
               </p>
             </div>
 
@@ -558,7 +629,9 @@ export function TravelBookingDashboard() {
             <button
               type="submit"
               disabled={submittingEntry}
-              className="btn-primary w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 shadow-xs"
+              className={`w-full py-2.5 text-xs font-bold flex items-center justify-center gap-2 shadow-xs rounded-xl text-white transition ${
+                isCancelled ? 'bg-rose-600 hover:bg-rose-700' : 'btn-primary'
+              }`}
             >
               {submittingEntry ? (
                 <>
@@ -567,8 +640,8 @@ export function TravelBookingDashboard() {
                 </>
               ) : (
                 <>
-                  <Icon name="check" className="h-4 w-4" />
-                  <span>Submit Ticket Count</span>
+                  <Icon name={isCancelled ? 'x' : 'check'} className="h-4 w-4" />
+                  <span>{isCancelled ? 'Submit Cancelled Ticket Count' : 'Submit Ticket Count'}</span>
                 </>
               )}
             </button>
@@ -594,7 +667,8 @@ export function TravelBookingDashboard() {
                   <th className="py-2.5 px-3">Store Location</th>
                   <th className="py-2.5 px-3 text-right">Today Bus</th>
                   <th className="py-2.5 px-3 text-right">Today Train</th>
-                  <th className="py-2.5 px-3 text-right">Today Total</th>
+                  <th className="py-2.5 px-3 text-right text-rose-600">Cancelled</th>
+                  <th className="py-2.5 px-3 text-right font-bold text-brand-700">Net Today</th>
                   <th className="py-2.5 px-3 text-right">This Week</th>
                   <th className="py-2.5 px-3 text-right">This Month</th>
                   <th className="py-2.5 px-3 text-right">All-Time</th>
@@ -614,6 +688,7 @@ export function TravelBookingDashboard() {
                       </td>
                       <td className="py-2.5 px-3 text-right font-medium text-blue-700">{store.todayBus}</td>
                       <td className="py-2.5 px-3 text-right font-medium text-emerald-700">{store.todayTrain}</td>
+                      <td className="py-2.5 px-3 text-right font-medium text-rose-600">{store.todayCancelled}</td>
                       <td className="py-2.5 px-3 text-right font-bold text-brand-700 bg-brand-50/40">
                         {store.todayTickets}
                       </td>
@@ -624,7 +699,7 @@ export function TravelBookingDashboard() {
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="py-6 text-center text-ink-500">
+                    <td colSpan={8} className="py-6 text-center text-ink-500">
                       No store allocations recorded yet.
                     </td>
                   </tr>
@@ -641,7 +716,7 @@ export function TravelBookingDashboard() {
           <div>
             <h3 className="text-base font-bold text-ink-900">Daily Ticket Booking History</h3>
             <p className="text-xs text-ink-500">
-              Date-wise consolidated bus and train totals dynamically calculated from database records.
+              Date-wise consolidated bus, train, cancelled tickets and ticket numbers dynamically calculated from database records.
             </p>
           </div>
 
@@ -649,13 +724,16 @@ export function TravelBookingDashboard() {
           {historyData && (
             <div className="flex flex-wrap items-center gap-2 text-xs font-semibold">
               <span className="rounded-lg bg-blue-50 border border-blue-200 px-2.5 py-1 text-blue-800">
-                Bus: {historyData.summary.totalBus}
+                Bus Booked: {historyData.summary.totalBus}
               </span>
               <span className="rounded-lg bg-emerald-50 border border-emerald-200 px-2.5 py-1 text-emerald-800">
-                Train: {historyData.summary.totalTrain}
+                Train Booked: {historyData.summary.totalTrain}
+              </span>
+              <span className="rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1 text-rose-700">
+                Cancelled: {historyData.summary.totalCancelled}
               </span>
               <span className="rounded-lg bg-indigo-50 border border-indigo-200 px-2.5 py-1 text-indigo-800 font-bold">
-                Grand Total: {historyData.summary.grandTotal}
+                Grand Net Total: {historyData.summary.grandTotal}
               </span>
             </div>
           )}
@@ -715,7 +793,7 @@ export function TravelBookingDashboard() {
             </div>
           )}
 
-          {/* Type & Store Dropdowns */}
+          {/* Type, Status & Store Dropdowns */}
           <div className="flex items-center gap-2">
             <select
               value={filterType}
@@ -728,6 +806,19 @@ export function TravelBookingDashboard() {
               <option value="all">All Modes (Bus & Train)</option>
               <option value="bus">Bus Only</option>
               <option value="train">Train Only</option>
+            </select>
+
+            <select
+              value={filterStatus}
+              onChange={(e) => {
+                setFilterStatus(e.target.value as any);
+                setHistoryPage(1);
+              }}
+              className="input py-1 px-2.5 text-xs font-medium"
+            >
+              <option value="all">All (Booked & Cancelled)</option>
+              <option value="booked">Booked Only</option>
+              <option value="cancelled">Cancelled Only</option>
             </select>
 
             {isHrOrAdmin && (
@@ -755,9 +846,11 @@ export function TravelBookingDashboard() {
               <tr>
                 <th className="py-2.5 px-4">Booking Date</th>
                 <th className="py-2.5 px-4">Store</th>
-                <th className="py-2.5 px-4 text-right">Bus Tickets</th>
-                <th className="py-2.5 px-4 text-right">Train Tickets</th>
-                <th className="py-2.5 px-4 text-right">Total Tickets</th>
+                <th className="py-2.5 px-4 text-right">Bus Booked</th>
+                <th className="py-2.5 px-4 text-right">Train Booked</th>
+                <th className="py-2.5 px-4 text-right text-rose-600">Cancelled</th>
+                <th className="py-2.5 px-4 text-right">Net Tickets</th>
+                <th className="py-2.5 px-4">Ticket / PNR Nos.</th>
                 <th className="py-2.5 px-4">Updated By</th>
                 <th className="py-2.5 px-4 text-right print:hidden">Action</th>
               </tr>
@@ -766,7 +859,7 @@ export function TravelBookingDashboard() {
               {loadingHistory ? (
                 Array.from({ length: 5 }).map((_, i) => (
                   <tr key={i}>
-                    <td colSpan={7} className="py-3 px-4">
+                    <td colSpan={9} className="py-3 px-4">
                       <Skeleton className="h-6 w-full" />
                     </td>
                   </tr>
@@ -790,8 +883,18 @@ export function TravelBookingDashboard() {
                     </td>
                     <td className="py-3 px-4 text-right font-bold text-blue-700">{row.busTickets}</td>
                     <td className="py-3 px-4 text-right font-bold text-emerald-700">{row.trainTickets}</td>
+                    <td className="py-3 px-4 text-right font-bold text-rose-600">{row.cancelledTickets}</td>
                     <td className="py-3 px-4 text-right font-black text-brand-700 bg-brand-50/30 text-sm">
                       {row.totalTickets}
+                    </td>
+                    <td className="py-3 px-4 text-ink-600 font-mono text-[11px] max-w-xs truncate" title={row.ticketNumbers || ''}>
+                      {row.ticketNumbers ? (
+                        <span className="bg-slate-100 text-ink-800 px-1.5 py-0.5 rounded border border-slate-200">
+                          {row.ticketNumbers}
+                        </span>
+                      ) : (
+                        <span className="text-ink-400 italic">None logged</span>
+                      )}
                     </td>
                     <td className="py-3 px-4 text-ink-600">
                       <div>
@@ -814,7 +917,7 @@ export function TravelBookingDashboard() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={7} className="py-12">
+                  <td colSpan={9} className="py-12">
                     <EmptyState
                       title="No Ticket Bookings Recorded"
                       description="No bus or train tickets found for the selected date range and store filters."
@@ -832,10 +935,11 @@ export function TravelBookingDashboard() {
                   </td>
                   <td className="py-3 px-4 text-right text-blue-800 text-sm">{historyData.summary.totalBus}</td>
                   <td className="py-3 px-4 text-right text-emerald-800 text-sm">{historyData.summary.totalTrain}</td>
+                  <td className="py-3 px-4 text-right text-rose-600 text-sm">{historyData.summary.totalCancelled}</td>
                   <td className="py-3 px-4 text-right text-brand-700 text-base font-black bg-brand-50">
                     {historyData.summary.grandTotal}
                   </td>
-                  <td colSpan={2} className="py-3 px-4 text-ink-500 text-[11px]">
+                  <td colSpan={3} className="py-3 px-4 text-ink-500 text-[11px]">
                     Total Submissions: {historyData.summary.totalEntries}
                   </td>
                 </tr>
@@ -879,7 +983,7 @@ export function TravelBookingDashboard() {
       >
         <div className="space-y-4">
           <p className="text-xs text-ink-500">
-            Individual booking count submissions for this date. Authorized HR users can correct counts if entered erroneously.
+            Individual booking count and cancellation submissions for this date with recorded ticket numbers. Authorized HR users can correct counts if entered erroneously.
           </p>
 
           {loadingBreakdown ? (
@@ -896,7 +1000,9 @@ export function TravelBookingDashboard() {
                     <th className="py-2.5 px-3">Entry ID</th>
                     <th className="py-2.5 px-3">Time</th>
                     <th className="py-2.5 px-3">Type</th>
+                    <th className="py-2.5 px-3">Status</th>
                     <th className="py-2.5 px-3 text-right">Count</th>
+                    <th className="py-2.5 px-3">Ticket / PNR No.</th>
                     <th className="py-2.5 px-3">Entered By</th>
                     <th className="py-2.5 px-3">Remarks</th>
                     {isHrOrAdmin && <th className="py-2.5 px-3 text-right">Action</th>}
@@ -915,8 +1021,19 @@ export function TravelBookingDashboard() {
                           {item.ticketType}
                         </Badge>
                       </td>
-                      <td className="py-2.5 px-3 text-right font-black text-ink-900 text-sm">
-                        {item.ticketCount}
+                      <td className="py-2.5 px-3">
+                        <Badge
+                          tone={item.isCancelled ? 'danger' : 'success'}
+                          className="text-[10px] uppercase font-bold px-2 py-0.5"
+                        >
+                          {item.isCancelled ? 'Cancelled' : 'Booked'}
+                        </Badge>
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-black text-sm ${item.isCancelled ? 'text-rose-600' : 'text-ink-900'}`}>
+                        {item.isCancelled ? `-${item.ticketCount}` : item.ticketCount}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-ink-700">
+                        {item.ticketNumber || <span className="text-ink-400 italic font-sans">None</span>}
                       </td>
                       <td className="py-2.5 px-3">
                         <span className="font-semibold text-ink-900">{item.employeeName}</span>

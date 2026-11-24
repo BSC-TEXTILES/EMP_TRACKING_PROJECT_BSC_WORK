@@ -16,6 +16,8 @@ travelRouter.get('/dashboard', requireAny('admin.dashboard', 'employees.view.all
 const RecordDailyCountSchema = z.object({
     ticketType: z.enum(['bus', 'train']),
     ticketCount: z.number().int().positive('Total ticket count must be a positive whole number (minimum 1)'),
+    isCancelled: z.boolean().optional(),
+    ticketNumber: z.string().max(255).optional().nullable(),
     notes: z.string().max(255).optional().nullable(),
     locationId: z.number().int().positive().optional(),
 });
@@ -25,6 +27,8 @@ travelRouter.post('/counts', requireAny('employees.manage', 'travel.manage', 'tr
     const result = await TravelService.recordDailyCount(user, {
         ticketType: body.ticketType,
         ticketCount: body.ticketCount,
+        isCancelled: body.isCancelled,
+        ticketNumber: body.ticketNumber,
         notes: body.notes || undefined,
         locationId: body.locationId,
     });
@@ -37,6 +41,7 @@ travelRouter.get('/daily-history', requireAny('admin.dashboard', 'employees.view
     const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
     const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
     const ticketType = req.query.ticketType;
+    const statusFilter = req.query.statusFilter;
     const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
     const search = req.query.search ? String(req.query.search) : undefined;
     const page = req.query.page ? Number(req.query.page) : 1;
@@ -46,6 +51,7 @@ travelRouter.get('/daily-history', requireAny('admin.dashboard', 'employees.view
         startDate,
         endDate,
         ticketType,
+        statusFilter,
         locationId,
         search,
         page,
@@ -83,6 +89,7 @@ travelRouter.get('/daily-history/export', requireAny('admin.dashboard', 'employe
     const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
     const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
     const ticketType = req.query.ticketType;
+    const statusFilter = req.query.statusFilter;
     const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
     const search = req.query.search ? String(req.query.search) : undefined;
     const csv = await TravelService.exportDailyHistory(user, {
@@ -90,6 +97,7 @@ travelRouter.get('/daily-history/export', requireAny('admin.dashboard', 'employe
         startDate,
         endDate,
         ticketType,
+        statusFilter,
         locationId,
         search,
     });

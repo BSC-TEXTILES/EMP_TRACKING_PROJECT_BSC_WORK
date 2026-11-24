@@ -45,6 +45,7 @@ interface HrDashboardData {
       totalTickets: number;
       busTickets: number;
       trainTickets: number;
+      cancelledTickets?: number;
       totalBookings: number;
       pendingBookings: number;
       confirmedBookings: number;
@@ -54,12 +55,14 @@ interface HrDashboardData {
       totalTickets: number;
       busTickets: number;
       trainTickets: number;
+      cancelledTickets?: number;
       totalBookings: number;
     };
     thisMonth: {
       totalTickets: number;
       busTickets: number;
       trainTickets: number;
+      cancelledTickets?: number;
       totalBookings: number;
       totalAmount: number;
     };
@@ -67,6 +70,7 @@ interface HrDashboardData {
       totalTickets: number;
       busTickets: number;
       trainTickets: number;
+      cancelledTickets?: number;
       totalEntries: number;
     };
     byStatus: {
@@ -464,8 +468,8 @@ export default function HrDashboard() {
                           <span className="h-2 w-2 rounded-full bg-rose-500" />
                           <span>Cancelled</span>
                         </td>
-                        <td className="py-2 px-4 text-right font-semibold text-rose-800">{data.travelSummary.today.cancelledBookings}</td>
-                        <td className="py-2 px-4 text-right text-rose-500">Historical only</td>
+                        <td className="py-2 px-4 text-right font-semibold text-rose-800">{data.travelSummary.today.cancelledTickets ?? data.travelSummary.today.cancelledBookings}</td>
+                        <td className="py-2 px-4 text-right text-rose-500">Cancelled today</td>
                       </tr>
                     </tbody>
                   </table>
