@@ -26,7 +26,25 @@ hierarchyRouter.get('/analytics', asyncHandler(async (req, res) => {
         locationId: req.query.locationId,
     }));
 }));
-hierarchyRouter.put('/employees/:id/assignment', requireAny('hierarchy.manage'), asyncHandler(async (req, res) => {
+hierarchyRouter.get('/history', asyncHandler(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(await HierarchyService.history(currentUser(req), req.query));
+}));
+hierarchyRouter.get('/history/export', asyncHandler(async (req, res) => {
+    const csv = await HierarchyService.historyExport(currentUser(req), req.query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="organisation-history-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+}));
+hierarchyRouter.put('/reorder', requireAny('hierarchy.manage', 'locations.manage'), asyncHandler(async (req, res) => {
+    const body = parseBody(z.object({
+        managerId: z.number().int().positive().nullable().optional(),
+        locationId: z.number().int().positive().nullable().optional(),
+        employeeIds: z.array(z.number().int().positive()).min(1).max(200),
+    }), req.body);
+    res.json(await HierarchyService.reorder(currentUser(req), body, clientIp(req)));
+}));
+hierarchyRouter.put('/employees/:id/assignment', requireAny('hierarchy.manage', 'locations.manage', 'leave.approve.hr'), asyncHandler(async (req, res) => {
     const body = parseBody(z.object({
         managerId: z.number().int().positive().nullable().optional(),
         locationId: z.number().int().positive().optional(),

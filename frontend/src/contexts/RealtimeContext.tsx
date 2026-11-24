@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { useAuth } from './AuthContext';
-import { useToast } from './ToastContext';
+import { useToast, type ToastTone } from './ToastContext';
 import { ensureFreshAccess } from '../lib/api';
 import { API_ORIGIN, isNative, nativeTokens } from '../lib/native';
 import { showDesktopNotification, playMessageSound, registerWebPushSubscription, pushDeviceId } from '../lib/notifications';
@@ -177,7 +177,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     });
     socket.on('notification:new', (payload: { type?: string; title?: string; body?: string | null; link?: string | null; priority?: string }) => {
       if (payload?.title && !SELF_ALERTING_TYPES.has(payload.type ?? '')) {
-        toastRef.current.toast(payload.title, 'info');
+        const tone: ToastTone = payload.priority === 'critical' || payload.priority === 'high' ? 'error' : 'info';
+        const msg = payload.body ?? payload.title;
+        toastRef.current.toast(msg, tone, payload.body ? payload.title : undefined);
         void showDesktopNotification(payload.title, {
           body: payload.body,
           link: payload.link,

@@ -19,6 +19,7 @@ import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, locationEmployeeIds, subtreeIds } from '../lib/scope.js';
 import { PresenceService, type PresenceEntry } from './PresenceService.js';
 import type { AuthUser } from './AuthService.js';
+import { broadcastEvent } from '../realtime/io.js';
 
 export const ROOT_ROLE_SLUG = 'super_admin';
 export const COMPANY_LOCATION_CODES = ['ALL', 'BEL', 'DAV', 'SHI', 'HQ'] as const;
@@ -55,6 +56,7 @@ interface NodeRow {
   photo_url: string | null;
   manager_id: number | null;
   manager_name: string | null;
+  hierarchy_order: number;
   department_id: number | null;
   department_name: string | null;
   designation_title: string | null;
@@ -92,6 +94,7 @@ export interface HierarchyNode {
   photoUrl: string | null;
   managerId: number | null;
   managerName: string | null;
+  hierarchyOrder: number;
   departmentId: number | null;
   department: string | null;
   designation: string | null;
@@ -203,14 +206,39 @@ export class HierarchyService {
   /** Closes the open assignment and opens a new one, inside the caller's transaction. */
   static async recordManagerChange(
     conn: PoolConnection,
-    input: { employeeId: number; managerId: number | null; previousManagerId: number | null; locationId: number | null; reason: string; source: string; actorId: number | null },
+    input: {
+      employeeId: number;
+      managerId: number | null;
+      previousManagerId: number | null;
+      locationId: number | null;
+      previousLocationId?: number | null;
+      departmentId?: number | null;
+      previousDepartmentId?: number | null;
+      reason: string;
+      source: string;
+      actorId: number | null;
+    },
   ): Promise<void> {
     await txExecute(conn, 'UPDATE reporting_assignments SET effective_to = NOW(3) WHERE employee_id = ? AND effective_to IS NULL', [input.employeeId]);
     await txExecute(
       conn,
-      `INSERT INTO reporting_assignments (employee_id, manager_id, previous_manager_id, location_id, reason, source, assigned_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [input.employeeId, input.managerId, input.previousManagerId, input.locationId, input.reason.slice(0, 160), input.source, input.actorId],
+      `INSERT INTO reporting_assignments (
+        employee_id, manager_id, previous_manager_id, location_id,
+        previous_department_id, department_id, previous_location_id,
+        reason, source, assigned_by
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.employeeId,
+        input.managerId,
+        input.previousManagerId,
+        input.locationId,
+        input.previousDepartmentId ?? null,
+        input.departmentId ?? null,
+        input.previousLocationId ?? null,
+        input.reason.slice(0, 160),
+        input.source,
+        input.actorId,
+      ],
     );
   }
 
@@ -326,6 +354,7 @@ export class HierarchyService {
     }
     const rows = await query<NodeRow>(
       `SELECT e.id, e.employee_code, e.full_name, e.email, e.mobile, e.photo_url, e.manager_id, m.full_name AS manager_name,
+              e.hierarchy_order,
               e.department_id, d.name AS department_name, dg.title AS designation_title,
               e.location_id, l.code AS location_code, l.name AS location_name,
               r.slug AS role_slug, r.name AS role_name, r.level AS role_level, e.joining_date,
@@ -347,7 +376,7 @@ export class HierarchyService {
        LEFT JOIN locations l ON l.id = e.location_id
        LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = ?
        WHERE ${clauses.join(' AND ')}
-       ORDER BY r.level DESC, e.full_name`,
+       ORDER BY e.hierarchy_order ASC, r.level DESC, e.full_name`,
       params,
     );
     const rootId = await HierarchyService.rootId();
@@ -374,6 +403,7 @@ export class HierarchyService {
         photoUrl: row.photo_url,
         managerId: row.manager_id ? Number(row.manager_id) : null,
         managerName: row.manager_name,
+        hierarchyOrder: Number(row.hierarchy_order ?? 0),
         departmentId: row.department_id ? Number(row.department_id) : null,
         department: row.department_name,
         designation: row.designation_title,
@@ -696,49 +726,352 @@ export class HierarchyService {
   // ------------------------------------------------------------ management
 
   static async assign(actor: AuthUser, employeeId: number, input: { managerId?: number | null; locationId?: number; reason?: string }, ip?: string) {
-    if (!actor.permissions.includes('hierarchy.manage')) throw ApiError.forbidden('Only a Super Admin can change reporting relationships.');
-    if (input.managerId === undefined && input.locationId === undefined) throw ApiError.badRequest('Nothing to update.');
+    const scope = await HierarchyService.scope(actor);
     const reason = (input.reason ?? '').trim() || 'Changed in the reporting hierarchy';
-    return transaction(async (conn) => {
-      const target = await txQueryOne<{ id: number; full_name: string; manager_id: number | null; location_id: number | null; status: string }>(
-        conn, 'SELECT id, full_name, manager_id, location_id, status FROM employees WHERE id = ? FOR UPDATE', [employeeId],
+    if (input.managerId === undefined && input.locationId === undefined) throw ApiError.badRequest('Nothing to update.');
+
+    const result = await transaction(async (conn) => {
+      const target = await txQueryOne<{ id: number; full_name: string; manager_id: number | null; location_id: number | null; department_id: number | null; status: string }>(
+        conn, 'SELECT id, full_name, manager_id, location_id, department_id, status FROM employees WHERE id = ? FOR UPDATE', [employeeId],
       );
       if (!target || ['deleted', 'rejected'].includes(target.status)) throw ApiError.notFound('Employee not found');
+
+      if (!actor.permissions.includes('hierarchy.manage')) {
+        const hasLocationPerm = actor.permissions.includes('locations.manage') || actor.permissions.includes('leave.approve.hr');
+        if (!hasLocationPerm || (scope.locationIds !== null && (!target.location_id || !scope.locationIds.includes(Number(target.location_id))))) {
+          throw ApiError.forbidden('You do not have permission to change reporting relationships for this location.');
+        }
+      }
+
       const rootId = await HierarchyService.rootId(conn);
-      const before = { managerId: target.manager_id ? Number(target.manager_id) : null, locationId: target.location_id ? Number(target.location_id) : null };
+      const before = {
+        managerId: target.manager_id ? Number(target.manager_id) : null,
+        locationId: target.location_id ? Number(target.location_id) : null,
+      };
       const after = { ...before };
+
+      let newManagerName: string | null = null;
+      let previousManagerName: string | null = null;
+      if (before.managerId) {
+        const pm = await txQueryOne<{ full_name: string }>(conn, 'SELECT full_name FROM employees WHERE id = ?', [before.managerId]);
+        previousManagerName = pm?.full_name ?? null;
+      }
+
+      if (input.locationId !== undefined) {
+        const loc = await txQueryOne<{ id: number }>(conn, 'SELECT id FROM locations WHERE id = ? AND is_active = 1', [input.locationId]);
+        if (!loc) throw ApiError.badRequest('That location does not exist or is inactive.');
+        after.locationId = Number(input.locationId);
+      }
 
       if (input.managerId !== undefined) {
         if (employeeId === rootId) throw ApiError.badRequest('The Software Manager is the top of the hierarchy and does not report to anyone.');
         const managerId = input.managerId ?? rootId;
         if (!managerId) throw ApiError.badRequest('Choose a reporting manager.');
         if (managerId === employeeId) throw ApiError.badRequest('An employee cannot report to themselves.');
-        const manager = await txQueryOne<{ id: number }>(conn, "SELECT id FROM employees WHERE id = ? AND status = 'active'", [managerId]);
+        const manager = await txQueryOne<{ id: number; full_name: string; location_id: number | null; status: string }>(
+          conn, "SELECT id, full_name, location_id, status FROM employees WHERE id = ? AND status = 'active'", [managerId],
+        );
         if (!manager) throw ApiError.badRequest('The selected manager is not an active employee.');
+        newManagerName = manager.full_name;
+
+        // Prevent circular loops
         const below = await txQuery<{ id: number }>(
           conn,
           `WITH RECURSIVE sub AS (SELECT id FROM employees WHERE id = ? UNION SELECT e.id FROM employees e JOIN sub s ON e.manager_id = s.id) SELECT id FROM sub`,
           [employeeId],
         );
         if (below.some((b) => Number(b.id) === managerId)) throw ApiError.badRequest('That manager reports (directly or indirectly) to this employee.');
+
+        // Enforce store location boundary: manager should belong to employee's store or manage that store
+        const targetStoreId = after.locationId;
+        const managerStoreId = manager.location_id ? Number(manager.location_id) : null;
+        if (managerId !== rootId && targetStoreId && managerStoreId !== targetStoreId) {
+          const isStoreManager = await txQueryOne<{ id: number }>(
+            conn,
+            'SELECT id FROM employee_locations WHERE employee_id = ? AND location_id = ?',
+            [managerId, targetStoreId],
+          );
+          if (!isStoreManager && !actor.permissions.includes('hierarchy.manage')) {
+            throw ApiError.badRequest('Reporting managers must belong to the same location. Transfer store location first.');
+          }
+        }
+
         after.managerId = managerId;
       }
-      if (input.locationId !== undefined) {
-        const loc = await txQueryOne<{ id: number }>(conn, 'SELECT id FROM locations WHERE id = ? AND is_active = 1', [input.locationId]);
-        if (!loc) throw ApiError.badRequest('That location does not exist or is inactive.');
-        after.locationId = Number(input.locationId);
+
+      if (after.managerId === before.managerId && after.locationId === before.locationId) {
+        return { changed: false, employeeId, employeeName: target.full_name, previousManagerId: before.managerId, managerId: after.managerId };
       }
-      if (after.managerId === before.managerId && after.locationId === before.locationId) return { changed: false };
 
       await txExecute(conn, 'UPDATE employees SET manager_id = ?, location_id = ? WHERE id = ?', [after.managerId, after.locationId, employeeId]);
-      if (after.managerId !== before.managerId) {
+      if (after.managerId !== before.managerId || after.locationId !== before.locationId) {
         await HierarchyService.recordManagerChange(conn, {
-          employeeId, managerId: after.managerId, previousManagerId: before.managerId, locationId: after.locationId, reason, source: 'manual', actorId: actor.id,
+          employeeId,
+          managerId: after.managerId,
+          previousManagerId: before.managerId,
+          locationId: after.locationId,
+          previousLocationId: before.locationId,
+          departmentId: target.department_id ? Number(target.department_id) : null,
+          previousDepartmentId: target.department_id ? Number(target.department_id) : null,
+          reason,
+          source: 'manual',
+          actorId: actor.id,
         });
       }
       await recordAudit({ actorId: actor.id, action: 'hierarchy.assignment_changed', entityType: 'employee', entityId: employeeId, before, after: { ...after, reason }, ip });
-      return { changed: true };
+      return {
+        changed: true,
+        employeeId,
+        employeeName: target.full_name,
+        previousManagerId: before.managerId,
+        previousManagerName,
+        managerId: after.managerId,
+        managerName: newManagerName,
+        locationId: after.locationId,
+      };
     });
+
+    if (result.changed) {
+      broadcastEvent('hierarchy:updated', {
+        employeeId: result.employeeId,
+        employeeName: result.employeeName,
+        previousManagerId: result.previousManagerId,
+        previousManagerName: result.previousManagerName,
+        managerId: result.managerId,
+        managerName: result.managerName,
+        locationId: result.locationId,
+      });
+    }
+
+    return result;
+  }
+
+  /** Updates the visual hierarchy order for siblings under a manager / department / store. */
+  static async reorder(actor: AuthUser, input: { managerId?: number | null; locationId?: number | null; employeeIds: number[] }, ip?: string) {
+    if (!actor.permissions.includes('hierarchy.manage') && !actor.permissions.includes('locations.manage')) {
+      throw ApiError.forbidden('You do not have permission to reorder employees.');
+    }
+    const employeeIds = [...new Set(input.employeeIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (employeeIds.length === 0) return { reordered: 0 };
+    await transaction(async (conn) => {
+      for (let i = 0; i < employeeIds.length; i++) {
+        await txExecute(conn, 'UPDATE employees SET hierarchy_order = ? WHERE id = ?', [i, employeeIds[i]]);
+      }
+    });
+    broadcastEvent('hierarchy:updated', {
+      managerId: input.managerId ?? null,
+      locationId: input.locationId ?? null,
+      reordered: employeeIds.length,
+    });
+    await recordAudit({ actorId: actor.id, action: 'hierarchy.reordered', entityType: 'employee', after: { managerId: input.managerId, employeeIds }, ip });
+    return { reordered: employeeIds.length };
+  }
+
+  /** Comprehensive audit change history for employee reporting managers, departments & store locations. */
+  static async history(user: AuthUser, filters: {
+    locationId?: unknown;
+    employeeId?: unknown;
+    managerId?: unknown;
+    from?: string;
+    to?: string;
+    search?: string;
+    source?: string;
+    page?: unknown;
+    pageSize?: unknown;
+  }) {
+    const scope = await HierarchyService.scope(user);
+    if (scope.mode === 'own') throw ApiError.forbidden('Change history is available to administrators and managers only.');
+    const locationId = await HierarchyService.requestedLocation(scope, filters.locationId);
+    const page = Math.max(1, Number(filters.page) || 1);
+    const pageSize = Math.min(100, Math.max(10, Number(filters.pageSize) || 25));
+    const offset = (page - 1) * pageSize;
+
+    const clauses: string[] = ['1 = 1'];
+    const params: unknown[] = [];
+
+    if (scope.ids !== null) {
+      if (scope.ids.length === 0) return { items: [], total: 0, page, pageSize, totalPages: 0 };
+      clauses.push(`ra.employee_id IN (${inClause(scope.ids)})`);
+      params.push(...scope.ids);
+    }
+    if (locationId) {
+      clauses.push('(ra.location_id = ? OR ra.previous_location_id = ?)');
+      params.push(locationId, locationId);
+    }
+    if (filters.employeeId) {
+      clauses.push('ra.employee_id = ?');
+      params.push(Number(filters.employeeId));
+    }
+    if (filters.managerId) {
+      clauses.push('(ra.manager_id = ? OR ra.previous_manager_id = ?)');
+      params.push(Number(filters.managerId), Number(filters.managerId));
+    }
+    if (filters.source && ['manual', 'auto', 'transfer', 'import'].includes(String(filters.source))) {
+      clauses.push('ra.source = ?');
+      params.push(String(filters.source));
+    }
+    if (filters.from && /^\d{4}-\d{2}-\d{2}$/.test(filters.from)) {
+      clauses.push('ra.effective_from >= ?');
+      params.push(`${filters.from} 00:00:00`);
+    }
+    if (filters.to && /^\d{4}-\d{2}-\d{2}$/.test(filters.to)) {
+      clauses.push('ra.effective_from <= ?');
+      params.push(`${filters.to} 23:59:59`);
+    }
+    if (filters.search && typeof filters.search === 'string' && filters.search.trim()) {
+      const term = `%${filters.search.trim()}%`;
+      clauses.push('(e.full_name LIKE ? OR e.employee_code LIKE ? OR m.full_name LIKE ? OR pm.full_name LIKE ?)');
+      params.push(term, term, term, term);
+    }
+
+    const where = clauses.join(' AND ');
+    const countRow = await queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total
+       FROM reporting_assignments ra
+       JOIN employees e ON e.id = ra.employee_id
+       LEFT JOIN employees m ON m.id = ra.manager_id
+       LEFT JOIN employees pm ON pm.id = ra.previous_manager_id
+       WHERE ${where}`,
+      params,
+    );
+    const total = Number(countRow?.total ?? 0);
+
+    const rows = await query<{
+      id: number;
+      employee_id: number;
+      employee_name: string;
+      employee_code: string;
+      employee_photo: string | null;
+      manager_id: number | null;
+      manager_name: string | null;
+      manager_code: string | null;
+      previous_manager_id: number | null;
+      previous_manager_name: string | null;
+      previous_manager_code: string | null;
+      location_id: number | null;
+      location_code: string | null;
+      location_name: string | null;
+      previous_location_id: number | null;
+      previous_location_code: string | null;
+      previous_location_name: string | null;
+      department_id: number | null;
+      department_name: string | null;
+      previous_department_id: number | null;
+      previous_department_name: string | null;
+      reason: string | null;
+      source: string;
+      effective_from: string;
+      effective_to: string | null;
+      assigned_by: number | null;
+      assigned_by_name: string | null;
+    }>(
+      `SELECT ra.id, ra.employee_id, e.full_name AS employee_name, e.employee_code, e.photo_url AS employee_photo,
+              ra.manager_id, m.full_name AS manager_name, m.employee_code AS manager_code,
+              ra.previous_manager_id, pm.full_name AS previous_manager_name, pm.employee_code AS previous_manager_code,
+              ra.location_id, l.code AS location_code, l.name AS location_name,
+              ra.previous_location_id, pl.code AS previous_location_code, pl.name AS previous_location_name,
+              ra.department_id, d.name AS department_name,
+              ra.previous_department_id, pd.name AS previous_department_name,
+              ra.reason, ra.source, ra.effective_from, ra.effective_to,
+              ra.assigned_by, ab.full_name AS assigned_by_name
+       FROM reporting_assignments ra
+       JOIN employees e ON e.id = ra.employee_id
+       LEFT JOIN employees m ON m.id = ra.manager_id
+       LEFT JOIN employees pm ON pm.id = ra.previous_manager_id
+       LEFT JOIN locations l ON l.id = ra.location_id
+       LEFT JOIN locations pl ON pl.id = ra.previous_location_id
+       LEFT JOIN departments d ON d.id = ra.department_id
+       LEFT JOIN departments pd ON pd.id = ra.previous_department_id
+       LEFT JOIN employees ab ON ab.id = ra.assigned_by
+       WHERE ${where}
+       ORDER BY ra.effective_from DESC, ra.id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset],
+    );
+
+    return {
+      total,
+      page,
+      pageSize,
+      totalPages: Math.ceil(total / pageSize),
+      items: rows.map((r) => ({
+        id: Number(r.id),
+        employeeId: Number(r.employee_id),
+        employeeName: r.employee_name,
+        employeeCode: r.employee_code,
+        employeePhoto: r.employee_photo,
+        managerId: r.manager_id ? Number(r.manager_id) : null,
+        managerName: r.manager_name,
+        managerCode: r.manager_code,
+        previousManagerId: r.previous_manager_id ? Number(r.previous_manager_id) : null,
+        previousManagerName: r.previous_manager_name,
+        previousManagerCode: r.previous_manager_code,
+        locationId: r.location_id ? Number(r.location_id) : null,
+        locationCode: r.location_code,
+        locationName: r.location_name,
+        previousLocationId: r.previous_location_id ? Number(r.previous_location_id) : null,
+        previousLocationCode: r.previous_location_code,
+        previousLocationName: r.previous_location_name,
+        departmentId: r.department_id ? Number(r.department_id) : null,
+        departmentName: r.department_name,
+        previousDepartmentId: r.previous_department_id ? Number(r.previous_department_id) : null,
+        previousDepartmentName: r.previous_department_name,
+        reason: r.reason,
+        source: r.source,
+        effectiveFrom: toIso(r.effective_from),
+        effectiveTo: toIso(r.effective_to),
+        assignedBy: r.assigned_by ? Number(r.assigned_by) : null,
+        assignedByName: r.assigned_by_name,
+      })),
+    };
+  }
+
+  /** Exports organisation reporting and store change history as CSV. */
+  static async historyExport(user: AuthUser, filters: {
+    locationId?: unknown;
+    employeeId?: unknown;
+    managerId?: unknown;
+    from?: string;
+    to?: string;
+    search?: string;
+    source?: string;
+  }): Promise<string> {
+    const data = await HierarchyService.history(user, { ...filters, page: 1, pageSize: 5000 });
+    const escapeCsv = (val: string | number | null | undefined): string => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+    const headers = [
+      'Date & Time (UTC)',
+      'Employee Code',
+      'Employee Name',
+      'Previous Manager',
+      'New Manager',
+      'Store Location',
+      'Previous Location',
+      'Department',
+      'Updated By',
+      'Source',
+      'Reason',
+    ];
+    const lines = [headers.join(',')];
+    for (const item of data.items) {
+      lines.push([
+        escapeCsv(item.effectiveFrom),
+        escapeCsv(item.employeeCode),
+        escapeCsv(item.employeeName),
+        escapeCsv(item.previousManagerName ?? 'None'),
+        escapeCsv(item.managerName ?? 'Software Manager / Root'),
+        escapeCsv(item.locationName ? `${item.locationName} (${item.locationCode})` : '—'),
+        escapeCsv(item.previousLocationName ? `${item.previousLocationName} (${item.previousLocationCode})` : '—'),
+        escapeCsv(item.departmentName ?? '—'),
+        escapeCsv(item.assignedByName ?? 'System Auto'),
+        escapeCsv(item.source),
+        escapeCsv(item.reason ?? 'Reporting relationship update'),
+      ].join(','));
+    }
+    return lines.join('\r\n');
   }
 
   static async locationManagers(user: AuthUser, locationId: number) {

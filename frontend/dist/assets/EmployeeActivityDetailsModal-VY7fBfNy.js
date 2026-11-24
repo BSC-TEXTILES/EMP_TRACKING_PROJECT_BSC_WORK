@@ -1,0 +1,1 @@
+import{a as e,r as i}from"./index-7zWc38n3.js";function s({open:a,onClose:n,employeeId:t,initialDate:r}){const c=e();return i.useEffect(()=>{!a||!t||(c(`/activity-tracking/${t}${r?`?date=${encodeURIComponent(r)}`:""}`),n())},[a,t]),null}export{s as E};

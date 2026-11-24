@@ -5,8 +5,9 @@ import { api, errorMessage } from '../lib/api';
 import { useDocumentTitle } from '../lib/hooks';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
-import { Badge, Card, EmptyState, Field, Modal, PageHeader, Skeleton, Tabs } from '../components/ui';
+import { Avatar, Badge, Card, EmptyState, Field, Modal, PageHeader, Skeleton, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
+import { cx, formatDateTime } from '../lib/format';
 
 interface LocationItem {
   id: number;
@@ -404,6 +405,7 @@ export default function Organization() {
       <Tabs
         tabs={[
           { value: 'hierarchy', label: 'Reporting hierarchy' },
+          { value: 'history', label: 'Audit & Change History' },
           { value: 'departments', label: 'Departments' },
           { value: 'locations', label: 'Locations' },
           { value: 'roles', label: 'Roles' },
@@ -415,6 +417,8 @@ export default function Organization() {
 
       {tab === 'hierarchy' ? (
         <ReportingHierarchy />
+      ) : tab === 'history' ? (
+        <OrganisationChangeHistory />
       ) : !structure || loading ? (
         <Card className="card-pad">
           <Skeleton lines={8} />
@@ -1222,6 +1226,356 @@ export default function Organization() {
           </div>
         )}
       </Modal>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------- change history
+
+interface HistoryItem {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  employeeCode: string;
+  employeePhoto: string | null;
+  managerId: number | null;
+  managerName: string | null;
+  managerCode: string | null;
+  previousManagerId: number | null;
+  previousManagerName: string | null;
+  previousManagerCode: string | null;
+  locationId: number | null;
+  locationCode: string | null;
+  locationName: string | null;
+  previousLocationId: number | null;
+  previousLocationCode: string | null;
+  previousLocationName: string | null;
+  departmentId: number | null;
+  departmentName: string | null;
+  previousDepartmentId: number | null;
+  previousDepartmentName: string | null;
+  reason: string | null;
+  source: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  assignedBy: number | null;
+  assignedByName: string | null;
+}
+
+interface HistoryResponse {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  items: HistoryItem[];
+}
+
+function OrganisationChangeHistory() {
+  const toast = useToast();
+  const [data, setData] = useState<HistoryResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [location, setLocation] = useState<string>('all');
+  const [search, setSearch] = useState('');
+  const [source, setSource] = useState('all');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(25);
+
+  const fetchHistory = async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (location !== 'all') params.set('locationId', location);
+      if (search.trim()) params.set('search', search.trim());
+      if (source !== 'all') params.set('source', source);
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      params.set('page', String(page));
+      params.set('pageSize', String(pageSize));
+
+      const res = await api.get<HistoryResponse>(`/hierarchy/history?${params.toString()}`);
+      setData(res);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchHistory();
+  }, [location, source, from, to, page]);
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPage(1);
+    void fetchHistory();
+  };
+
+  const handleExportCsv = () => {
+    const params = new URLSearchParams();
+    if (location !== 'all') params.set('locationId', location);
+    if (search.trim()) params.set('search', search.trim());
+    if (source !== 'all') params.set('source', source);
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    window.open(`/api/hierarchy/history/export?${params.toString()}`, '_blank');
+  };
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const STORES = [
+    { id: 'all', label: 'All Stores' },
+    { id: '1', label: 'BEL – Belagavi' },
+    { id: '2', label: 'DAV – Davanagere' },
+    { id: '3', label: 'SHI – Shivamogga' },
+    { id: '7', label: 'HQ – Executive Office' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {/* Controls & Filter Bar */}
+      <Card className="card-pad space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-ink-900">Organisation Audit & Change Log</h3>
+            <p className="text-xs text-ink-500">
+              Complete history of reporting manager changes, store location transfers, and hierarchy adjustments.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn-secondary btn-sm inline-flex items-center gap-1.5"
+              onClick={handlePrint}
+              title="Print change log report"
+            >
+              <Icon name="report" size={14} />
+              <span>Print / PDF</span>
+            </button>
+            <button
+              type="button"
+              className="btn-primary btn-sm inline-flex items-center gap-1.5 !bg-brand-600 hover:!bg-brand-700 !text-white"
+              onClick={handleExportCsv}
+              title="Export all filtered history records to CSV"
+            >
+              <Icon name="download" size={14} />
+              <span>Export CSV</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Store Location Tabs */}
+        <div className="flex flex-wrap gap-2 border-b border-ink-100 pb-3" role="group" aria-label="Store Filter">
+          {STORES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={cx(
+                'rounded-lg px-3 py-1.5 text-xs font-semibold transition',
+                location === s.id
+                  ? 'bg-brand-600 text-white shadow-xs'
+                  : 'bg-ink-100 text-ink-700 hover:bg-ink-200',
+              )}
+              onClick={() => {
+                setLocation(s.id);
+                setPage(1);
+              }}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search & Filters */}
+        <form onSubmit={handleSearchSubmit} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="relative lg:col-span-2">
+            <Icon name="search" size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+            <input
+              className="input w-full pl-9 text-xs"
+              placeholder="Search employee or manager name / code..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <select
+              className="input w-full text-xs"
+              value={source}
+              onChange={(e) => {
+                setSource(e.target.value);
+                setPage(1);
+              }}
+              aria-label="Change Source"
+            >
+              <option value="all">All Sources</option>
+              <option value="manual">Manual Reassign (Drag-and-Drop)</option>
+              <option value="auto">System / Auto Hierarchy</option>
+              <option value="transfer">Store Transfer</option>
+            </select>
+          </div>
+
+          <div>
+            <input
+              type="date"
+              className="input w-full text-xs"
+              value={from}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                setPage(1);
+              }}
+              aria-label="From Date"
+              placeholder="From Date"
+            />
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              type="date"
+              className="input w-full text-xs"
+              value={to}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setPage(1);
+              }}
+              aria-label="To Date"
+              placeholder="To Date"
+            />
+            <button type="submit" className="btn-secondary btn-sm px-3" title="Apply Search">
+              <Icon name="search" size={14} />
+            </button>
+          </div>
+        </form>
+      </Card>
+
+      {/* History Table */}
+      <Card className="overflow-hidden">
+        {loading && !data ? (
+          <div className="p-5">
+            <Skeleton lines={8} />
+          </div>
+        ) : !data || data.items.length === 0 ? (
+          <div className="p-8 text-center">
+            <EmptyState
+              compact
+              title="No organisation changes recorded"
+              description="No reporting manager, department, or location changes match the current filters."
+            />
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="border-b border-ink-100 bg-ink-50/70 font-semibold text-ink-700 uppercase tracking-wider text-[11px]">
+                <tr>
+                  <th className="px-4 py-3">Timestamp</th>
+                  <th className="px-4 py-3">Employee</th>
+                  <th className="px-4 py-3">Previous Manager</th>
+                  <th className="px-4 py-3">New Reporting Manager</th>
+                  <th className="px-4 py-3">Store Location</th>
+                  <th className="px-4 py-3">Source & Actor</th>
+                  <th className="px-4 py-3">Reason</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100 bg-white">
+                {data.items.map((row) => (
+                  <tr key={row.id} className="hover:bg-ink-50/50 transition">
+                    <td className="px-4 py-3 font-mono text-[11px] text-ink-500 whitespace-nowrap">
+                      {formatDateTime(row.effectiveFrom)}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar name={row.employeeName} src={row.employeePhoto} size={30} />
+                        <div>
+                          <div className="font-semibold text-ink-900">{row.employeeName}</div>
+                          <div className="font-mono text-[11px] text-ink-400">{row.employeeCode}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-ink-600 whitespace-nowrap">
+                      {row.previousManagerName ? (
+                        <div>
+                          <div className="font-medium text-ink-800">{row.previousManagerName}</div>
+                          <div className="font-mono text-[10px] text-ink-400">{row.previousManagerCode ?? ''}</div>
+                        </div>
+                      ) : (
+                        <span className="text-ink-400 italic">None / Root</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5 font-medium text-brand-700">
+                        <Icon name="arrowRight" size={13} className="text-brand-500 shrink-0" />
+                        <div>
+                          <div className="font-semibold text-ink-900">{row.managerName ?? 'Software Manager / Root'}</div>
+                          {row.managerCode && <div className="font-mono text-[10px] text-ink-400">{row.managerCode}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      {row.locationName ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                          <span className="font-mono">{row.locationCode}</span>
+                          <span className="font-normal text-slate-500">· {row.locationName}</span>
+                        </span>
+                      ) : (
+                        <span className="text-ink-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
+                        <Badge tone={row.source === 'manual' ? 'success' : row.source === 'auto' ? 'brand' : 'warning'}>
+                          {row.source === 'manual' ? 'Drag & Drop' : row.source}
+                        </Badge>
+                        <span className="text-[11px] text-ink-500">
+                          by {row.assignedByName ?? 'System'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-ink-600 max-w-[220px] truncate" title={row.reason ?? ''}>
+                      {row.reason ?? 'Reporting relationship update'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Pagination Footer */}
+        {data && data.total > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 bg-ink-50/50 px-4 py-3 text-xs text-ink-500">
+            <div>
+              Showing <span className="font-semibold text-ink-800">{((page - 1) * pageSize) + 1}</span> to{' '}
+              <span className="font-semibold text-ink-800">{Math.min(page * pageSize, data.total)}</span> of{' '}
+              <span className="font-semibold text-ink-800">{data.total}</span> changes
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </button>
+              <span className="font-medium text-ink-700">
+                Page {page} of {data.totalPages || 1}
+              </span>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={page >= data.totalPages || loading}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

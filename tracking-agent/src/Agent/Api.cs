@@ -27,6 +27,7 @@ namespace BscTracker
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             ServicePointManager.Expect100Continue = false;
+            ServicePointManager.DefaultConnectionLimit = 50;
         }
 
         /// <summary>HTTPS is required except for a server on this machine (development).</summary>
@@ -43,6 +44,11 @@ namespace BscTracker
 
         public static ApiResult Post(string server, string path, object body, string token)
         {
+            return PostInternal(server, path, body, token, true);
+        }
+
+        static ApiResult PostInternal(string server, string path, object body, string token, bool allowRetry)
+        {
             ApiResult result = new ApiResult();
             try
             {
@@ -51,9 +57,11 @@ namespace BscTracker
                 request.ContentType = "application/json";
                 request.Accept = "application/json";
                 request.UserAgent = "BSCActivityTracker/" + Product.Version;
-                request.Timeout = 20000;
-                request.ReadWriteTimeout = 20000;
+                request.Timeout = 25000;
+                request.ReadWriteTimeout = 25000;
                 request.AllowAutoRedirect = false;
+                request.KeepAlive = false;
+                request.Proxy = null;
                 if (token != null) request.Headers["Authorization"] = "Bearer " + token;
                 byte[] payload = Encoding.UTF8.GetBytes(Json.Serialize(body ?? new Dictionary<string, object>()));
                 request.ContentLength = payload.Length;
@@ -66,6 +74,11 @@ namespace BscTracker
             }
             catch (WebException ex)
             {
+                if (allowRetry && (ex.Status == WebExceptionStatus.KeepAliveFailure || ex.Status == WebExceptionStatus.ConnectionClosed || ex.Status == WebExceptionStatus.Timeout))
+                {
+                    // Stale connection or reverse proxy timeout: retry once immediately with fresh socket
+                    return PostInternal(server, path, body, token, false);
+                }
                 HttpWebResponse response = ex.Response as HttpWebResponse;
                 if (response != null)
                 {

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode, type DragEvent } from 'react';
 import { api, errorMessage } from '../lib/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
+import { useSocketEvent } from '../contexts/RealtimeContext';
 import { Avatar, Badge, Card, EmptyState, Field, Modal, Skeleton, StatCard, Tabs } from './ui';
 import { BarChart, LineChart } from './Charts';
 import { Icon } from './icons';
@@ -22,6 +23,7 @@ export interface HierarchyNode {
   photoUrl: string | null;
   managerId: number | null;
   managerName: string | null;
+  hierarchyOrder?: number;
   departmentId: number | null;
   department: string | null;
   designation: string | null;
@@ -146,6 +148,7 @@ export default function ReportingHierarchy() {
   const [assignFor, setAssignFor] = useState<{ location: LocationSummary; kind: 'managers' | 'hr' } | null>(null);
   const [addingLocation, setAddingLocation] = useState(false);
   const [deletingLocation, setDeletingLocation] = useState<LocationSummary | null>(null);
+  const [movingNode, setMovingNode] = useState<HierarchyNode | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -160,6 +163,10 @@ export default function ReportingHierarchy() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useSocketEvent('hierarchy:updated', () => {
+    void load();
+  });
 
   // Live statuses refresh every 30 seconds while the page is visible.
   useEffect(() => {
@@ -245,8 +252,11 @@ export default function ReportingHierarchy() {
               groupBy={groupBy}
               searching={Boolean(search.trim()) || department !== 'all'}
               collapsed={collapsed}
+              canManage={data.scope.canManage}
               onToggle={toggle}
               onOpen={setDrawer}
+              onReload={load}
+              onMove={(node) => setMovingNode(node)}
               actions={{
                 onManagers: data.scope.canManage ? (l) => setAssignFor({ location: l, kind: 'managers' }) : undefined,
                 onHr: data.scope.canManage || data.scope.canManageLocations ? (l) => setAssignFor({ location: l, kind: 'hr' }) : undefined,
@@ -283,6 +293,18 @@ export default function ReportingHierarchy() {
           onClose={() => setDeletingLocation(null)}
           onDeleted={() => {
             if (location === deletingLocation.id) setLocation('all');
+            void load();
+          }}
+        />
+      )}
+      {movingNode && (
+        <MoveEmployeeModal
+          employee={movingNode}
+          employees={data.employees}
+          locations={data.locations}
+          onClose={() => setMovingNode(null)}
+          onMoved={() => {
+            setMovingNode(null);
             void load();
           }}
         />
@@ -379,19 +401,73 @@ function LocationSwitcher({ locations, total, value, allLocations, onChange, onA
 
 // --------------------------------------------------------------- tree view
 
-function NodeRow({ node, depth, hasChildren, isCollapsed, onToggle, onOpen }: {
-  node: HierarchyNode; depth: number; hasChildren: boolean; isCollapsed: boolean; onToggle: () => void; onOpen: (id: number) => void;
+function NodeRow({
+  node,
+  depth,
+  hasChildren,
+  isCollapsed,
+  canManage,
+  isDragging,
+  isDragOver,
+  onToggle,
+  onOpen,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onMove,
+}: {
+  node: HierarchyNode;
+  depth: number;
+  hasChildren: boolean;
+  isCollapsed: boolean;
+  canManage: boolean;
+  isDragging?: boolean;
+  isDragOver?: boolean;
+  onToggle: () => void;
+  onOpen: (id: number) => void;
+  onDragStart?: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: () => void;
+  onDragOver?: (e: DragEvent<HTMLDivElement>) => void;
+  onDragLeave?: () => void;
+  onDrop?: (e: DragEvent<HTMLDivElement>) => void;
+  onMove?: (node: HierarchyNode) => void;
 }) {
   const state = WORK_STATE[node.workState];
   const att = ATTENDANCE[node.attendance.status];
+  const isDraggable = canManage && !node.isRoot;
+
   return (
-    <div className={cx('group flex items-center gap-2 rounded-xl border bg-white px-2.5 py-2 transition hover:border-brand-300 hover:shadow-sm', depth === 0 ? 'border-ink-200' : 'border-ink-100')}>
+    <div
+      draggable={isDraggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={cx(
+        'group relative flex items-center gap-2 rounded-xl border bg-white px-2.5 py-2 transition select-none',
+        depth === 0 ? 'border-ink-200' : 'border-ink-100',
+        isDragging && 'opacity-40 border-dashed border-brand-500 bg-brand-50/40 scale-[0.99]',
+        isDragOver && 'ring-2 ring-brand-500 border-brand-500 bg-brand-50 shadow-md',
+        !isDragging && !isDragOver && 'hover:border-brand-300 hover:shadow-sm',
+      )}
+    >
+      {isDraggable && (
+        <span
+          className="cursor-grab active:cursor-grabbing text-ink-300 hover:text-brand-600 p-0.5 rounded transition"
+          title="Drag to change reporting manager"
+        >
+          <Icon name="gripVertical" size={14} />
+        </span>
+      )}
       {hasChildren ? (
         <button type="button" className="rounded p-1 text-ink-500 hover:bg-ink-100" onClick={onToggle} aria-label={isCollapsed ? 'Expand' : 'Collapse'} aria-expanded={!isCollapsed}>
           <Icon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={14} />
         </button>
       ) : (
-        <span className="w-6" />
+        <span className="w-5" />
       )}
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2.5 text-left" onClick={() => onOpen(node.id)}>
         <span className="relative">
@@ -410,20 +486,132 @@ function NodeRow({ node, depth, hasChildren, isCollapsed, onToggle, onOpen }: {
           </span>
         </span>
       </button>
+
+      {isDraggable && onMove && (
+        <button
+          type="button"
+          className="opacity-0 group-hover:opacity-100 focus:opacity-100 rounded p-1 text-ink-400 hover:text-brand-600 hover:bg-ink-100 transition hidden sm:inline-flex"
+          title="Move / Reassign reporting manager"
+          onClick={(e) => {
+            e.stopPropagation();
+            onMove(node);
+          }}
+        >
+          <Icon name="arrowRightLeft" size={13} />
+        </button>
+      )}
+
       <span className="hidden sm:inline-flex"><Badge tone={att.tone}>{att.label}</Badge></span>
       <Badge tone={state.tone}>{state.label}</Badge>
+
+      {isDragOver && (
+        <div className="pointer-events-none absolute -bottom-6 left-8 z-20 flex items-center gap-1 rounded bg-brand-700 px-2 py-0.5 text-[11px] font-medium text-white shadow-md animate-pulse">
+          <Icon name="userCheck" size={12} /> Drop to report to {node.name}
+        </div>
+      )}
     </div>
   );
 }
 
 interface LocationActions { onManagers?: (l: LocationSummary) => void; onHr?: (l: LocationSummary) => void; onDelete?: (l: LocationSummary) => void }
 
-function TreeView({ data, nodes, location, groupBy, searching, collapsed, onToggle, onOpen, actions }: {
-  data: Overview; nodes: HierarchyNode[]; location: number | 'all'; groupBy: 'reporting' | 'department'; searching: boolean;
-  collapsed: Set<string>; onToggle: (key: string) => void; onOpen: (id: number) => void; actions: LocationActions;
+function TreeView({
+  data,
+  nodes,
+  location,
+  groupBy,
+  searching,
+  collapsed,
+  canManage,
+  onToggle,
+  onOpen,
+  onReload,
+  onMove,
+  actions,
+}: {
+  data: Overview;
+  nodes: HierarchyNode[];
+  location: number | 'all';
+  groupBy: 'reporting' | 'department';
+  searching: boolean;
+  collapsed: Set<string>;
+  canManage: boolean;
+  onToggle: (key: string) => void;
+  onOpen: (id: number) => void;
+  onReload: () => void;
+  onMove: (node: HierarchyNode) => void;
+  actions: LocationActions;
 }) {
+  const toast = useToast();
+  const [draggedNode, setDraggedNode] = useState<HierarchyNode | null>(null);
+  const [dragOverNodeId, setDragOverNodeId] = useState<number | null>(null);
+  const [undoItem, setUndoItem] = useState<{ empId: number; restoreManagerId: number | null; prevManagerName: string | null; empName: string; targetName: string } | null>(null);
+
   const sections = data.locations.filter((l) => location === 'all' || l.id === location);
   const unassigned = nodes.filter((n) => !n.isRoot && !data.locations.some((l) => l.id === n.locationId));
+
+  // Circular reference check: returns true if targetId is inside parentId's reporting chain
+  const isDescendant = useCallback((parentId: number, targetId: number): boolean => {
+    if (parentId === targetId) return true;
+    const directReports = data.employees.filter((e) => e.managerId === parentId);
+    return directReports.some((r) => isDescendant(r.id, targetId));
+  }, [data.employees]);
+
+  const handleDropOnTarget = async (targetManager: HierarchyNode) => {
+    setDragOverNodeId(null);
+    if (!draggedNode) return;
+    if (draggedNode.id === targetManager.id) {
+      setDraggedNode(null);
+      return;
+    }
+
+    if (isDescendant(draggedNode.id, targetManager.id)) {
+      toast.error(`Cannot assign ${draggedNode.name} to report to subordinate ${targetManager.name} (circular hierarchy).`);
+      setDraggedNode(null);
+      return;
+    }
+
+    if (draggedNode.locationId !== targetManager.locationId && !targetManager.isRoot) {
+      toast.error(`Store boundary: ${draggedNode.name} is in ${draggedNode.locationName ?? 'store'}, while ${targetManager.name} is in ${targetManager.locationName ?? 'store'}. Transfer location first.`);
+      setDraggedNode(null);
+      return;
+    }
+
+    const empId = draggedNode.id;
+    const empName = draggedNode.name;
+    const previousManagerId = draggedNode.managerId;
+    const previousManagerName = draggedNode.managerName;
+    const targetName = targetManager.name;
+
+    try {
+      const res = await api.put<{ changed: boolean }>(`/hierarchy/employees/${empId}/assignment`, {
+        managerId: targetManager.id,
+        reason: `Reassigned under ${targetName} via organisation drag-and-drop`,
+      });
+      if (res.changed) {
+        toast.success(`Moved ${empName} under ${targetName}.`);
+        setUndoItem({ empId, restoreManagerId: previousManagerId, prevManagerName: previousManagerName, empName, targetName });
+        onReload();
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setDraggedNode(null);
+    }
+  };
+
+  const handleUndo = async (empId: number, restoreManagerId: number | null, prevManagerName: string | null, empName: string) => {
+    try {
+      await api.put(`/hierarchy/employees/${empId}/assignment`, {
+        managerId: restoreManagerId,
+        reason: 'Undo reporting manager reassignment',
+      });
+      toast.info(`Restored ${empName}'s reporting manager to ${prevManagerName ?? 'Software Manager / Root'}`);
+      onReload();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
 
   const renderReporting = (list: HierarchyNode[], key: string) => {
     const ids = new Set(list.map((n) => n.id));
@@ -434,16 +622,58 @@ function TreeView({ data, nodes, location, groupBy, searching, collapsed, onTogg
         children.get(n.managerId)!.push(n);
       }
     }
-    // Managers first, then by name.
-    const order = (a: HierarchyNode, b: HierarchyNode) => (b.directReports > 0 ? 1 : 0) - (a.directReports > 0 ? 1 : 0) || b.roleLevel - a.roleLevel || a.name.localeCompare(b.name);
+    // Managers first, then by hierarchyOrder or name.
+    const order = (a: HierarchyNode, b: HierarchyNode) =>
+      (a.hierarchyOrder ?? 0) - (b.hierarchyOrder ?? 0) ||
+      (b.directReports > 0 ? 1 : 0) - (a.directReports > 0 ? 1 : 0) ||
+      b.roleLevel - a.roleLevel ||
+      a.name.localeCompare(b.name);
     const tops = list.filter((n) => n.managerId === null || !ids.has(n.managerId)).sort(order);
+
     const render = (n: HierarchyNode, depth: number): ReactNode => {
       const kids = (children.get(n.id) ?? []).sort(order);
       const k = `${key}:${n.id}`;
       const isCollapsed = !searching && collapsed.has(k);
+      const isDraggingThis = draggedNode?.id === n.id;
+      const isOverThis = dragOverNodeId === n.id && draggedNode?.id !== n.id;
+
       return (
-        <div key={n.id}>
-          <NodeRow node={n} depth={depth} hasChildren={kids.length > 0} isCollapsed={isCollapsed} onToggle={() => onToggle(k)} onOpen={onOpen} />
+        <div key={n.id} className="relative">
+          <NodeRow
+            node={n}
+            depth={depth}
+            hasChildren={kids.length > 0}
+            isCollapsed={isCollapsed}
+            canManage={canManage}
+            isDragging={isDraggingThis}
+            isDragOver={isOverThis}
+            onToggle={() => onToggle(k)}
+            onOpen={onOpen}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('text/plain', String(n.id));
+              e.dataTransfer.effectAllowed = 'move';
+              setDraggedNode(n);
+            }}
+            onDragEnd={() => {
+              setDraggedNode(null);
+              setDragOverNodeId(null);
+            }}
+            onDragOver={(e) => {
+              if (draggedNode && draggedNode.id !== n.id && !isDescendant(draggedNode.id, n.id)) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (dragOverNodeId !== n.id) setDragOverNodeId(n.id);
+              }
+            }}
+            onDragLeave={() => {
+              if (dragOverNodeId === n.id) setDragOverNodeId(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              void handleDropOnTarget(n);
+            }}
+            onMove={onMove}
+          />
           {kids.length > 0 && !isCollapsed && (
             <div className="ml-4 mt-1.5 space-y-1.5 border-l-2 border-dashed border-ink-200 pl-3 sm:ml-6">{kids.map((c) => render(c, depth + 1))}</div>
           )}
@@ -473,7 +703,17 @@ function TreeView({ data, nodes, location, groupBy, searching, collapsed, onTogg
               {!isCollapsed && (
                 <div className="space-y-1.5">
                   {members.sort((a, b) => b.roleLevel - a.roleLevel || a.name.localeCompare(b.name)).map((n) => (
-                    <NodeRow key={n.id} node={n} depth={0} hasChildren={false} isCollapsed={false} onToggle={() => undefined} onOpen={onOpen} />
+                    <NodeRow
+                      key={n.id}
+                      node={n}
+                      depth={0}
+                      hasChildren={false}
+                      isCollapsed={false}
+                      canManage={canManage}
+                      onToggle={() => undefined}
+                      onOpen={onOpen}
+                      onMove={onMove}
+                    />
                   ))}
                 </div>
               )}
@@ -486,6 +726,36 @@ function TreeView({ data, nodes, location, groupBy, searching, collapsed, onTogg
 
   return (
     <div className="space-y-3">
+      {undoItem && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-brand-300 bg-brand-50 px-4 py-2.5 text-xs text-brand-900 shadow-xs">
+          <div className="flex items-center gap-2">
+            <Icon name="checkCircle" size={16} className="text-brand-600 shrink-0" />
+            <span>
+              Reassigned <strong>{undoItem.empName}</strong> to report to <strong>{undoItem.targetName}</strong>.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="btn-primary btn-sm inline-flex items-center gap-1 !bg-brand-700 hover:!bg-brand-800 text-white font-semibold"
+              onClick={() => {
+                void handleUndo(undoItem.empId, undoItem.restoreManagerId, undoItem.prevManagerName, undoItem.empName);
+                setUndoItem(null);
+              }}
+            >
+              <Icon name="undo" size={13} /> Undo Move
+            </button>
+            <button
+              type="button"
+              className="rounded p-1 text-ink-400 hover:text-ink-600"
+              onClick={() => setUndoItem(null)}
+              title="Dismiss"
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        </div>
+      )}
       {sections.map((l) => {
         const members = nodes.filter((n) => n.locationId === l.id && !n.isRoot);
         const key = `loc:${l.id}`;
@@ -540,6 +810,117 @@ function TreeView({ data, nodes, location, groupBy, searching, collapsed, onTogg
         </Card>
       )}
     </div>
+  );
+}
+
+// --------------------------------------------------- move employee modal
+
+function MoveEmployeeModal({
+  employee,
+  employees,
+  locations,
+  onClose,
+  onMoved,
+}: {
+  employee: HierarchyNode;
+  employees: HierarchyNode[];
+  locations: LocationSummary[];
+  onClose: () => void;
+  onMoved: () => void;
+}) {
+  const toast = useToast();
+  const [managerId, setManagerId] = useState<string>(employee.managerId ? String(employee.managerId) : '');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // Eligible managers: employees in the same location (or root), excluding self and direct/indirect reports
+  const isDescendant = (parentId: number, targetId: number): boolean => {
+    if (parentId === targetId) return true;
+    const directReports = employees.filter((e) => e.managerId === parentId);
+    return directReports.some((r) => isDescendant(r.id, targetId));
+  };
+
+  const eligibleManagers = employees.filter(
+    (m) =>
+      m.id !== employee.id &&
+      !isDescendant(employee.id, m.id) &&
+      (m.isRoot || m.locationId === employee.locationId),
+  );
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!managerId) {
+      toast.error('Please select a reporting manager.');
+      return;
+    }
+    setSaving(true);
+    try {
+      const selectedManager = employees.find((m) => m.id === Number(managerId));
+      await api.put(`/hierarchy/employees/${employee.id}/assignment`, {
+        managerId: Number(managerId),
+        reason: reason.trim() || `Reassigned reporting manager to ${selectedManager?.name ?? 'manager'}`,
+      });
+      toast.success(`Successfully reassigned ${employee.name} to report to ${selectedManager?.name ?? 'manager'}.`);
+      onMoved();
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open title="Move / Reassign Reporting Manager" onClose={onClose} size="md">
+      <form onSubmit={handleSave} className="space-y-4">
+        <div className="flex items-center gap-3 rounded-xl border border-ink-200 bg-ink-50/50 p-3">
+          <Avatar name={employee.name} src={employee.photoUrl} size={42} />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-ink-900">{employee.name}</p>
+            <p className="truncate text-xs text-ink-500">
+              {employee.employeeCode} · {employee.designation ?? employee.roleName} · {employee.locationCode ?? '—'}
+            </p>
+            <p className="mt-0.5 text-xs text-ink-600">
+              Current Manager: <span className="font-medium text-ink-800">{employee.managerName ?? 'Software Manager / Root'}</span>
+            </p>
+          </div>
+        </div>
+
+        <Field label="Select Target Reporting Manager" required hint="Choose an authorized manager within the same store location or the Software Manager.">
+          <select
+            className="input w-full"
+            value={managerId}
+            onChange={(e) => setManagerId(e.target.value)}
+            disabled={saving}
+          >
+            <option value="">-- Choose New Reporting Manager --</option>
+            {eligibleManagers.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} ({m.employeeCode}) — {m.designation ?? m.roleName} {m.isRoot ? '· Super Admin (Root)' : ''}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Reason for Reassignment (Optional)">
+          <input
+            className="input w-full"
+            placeholder="e.g. Store team reorganization, direct supervisor change"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            disabled={saving}
+          />
+        </Field>
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-ink-100">
+          <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button type="submit" className="btn-primary" disabled={saving || !managerId}>
+            {saving ? 'Saving...' : 'Confirm Reassign'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
