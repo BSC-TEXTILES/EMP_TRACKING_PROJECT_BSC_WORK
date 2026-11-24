@@ -3,8 +3,10 @@ import { z } from 'zod';
 import { asyncHandler, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { HrService } from '../services/HrService.js';
+import { travelRouter } from './travel.js';
 export const hrRouter = Router();
 hrRouter.use(authenticate);
+hrRouter.use('/travel', travelRouter);
 // HR Dashboard Metrics
 hrRouter.get('/dashboard', requireAny('admin.dashboard', 'employees.view.all', 'employees.view.team', 'reports.view.all'), asyncHandler(async (req, res) => {
     const user = currentUser(req);

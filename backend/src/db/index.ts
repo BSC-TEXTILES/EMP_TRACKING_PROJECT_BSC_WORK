@@ -31,6 +31,7 @@ result.on('connection', (connection) => {
 return result;
 }
 export let pool: Pool = createPool();
+export type { Pool, PoolConnection, ResultSetHeader, RowDataPacket };
 export async function reloadPool(): Promise<void> { const old = pool; pool = createPool(); await old.end(); }
 
 export type SqlParams = ReadonlyArray<unknown>;

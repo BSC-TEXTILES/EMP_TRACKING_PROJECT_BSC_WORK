@@ -40,6 +40,48 @@ interface HrDashboardData {
     days: number;
     status: string;
   }>;
+  travelSummary?: {
+    today: {
+      totalTickets: number;
+      busTickets: number;
+      trainTickets: number;
+      totalBookings: number;
+      pendingBookings: number;
+      confirmedBookings: number;
+      cancelledBookings: number;
+    };
+    thisWeek: {
+      totalTickets: number;
+      busTickets: number;
+      trainTickets: number;
+      totalBookings: number;
+    };
+    thisMonth: {
+      totalTickets: number;
+      busTickets: number;
+      trainTickets: number;
+      totalBookings: number;
+      totalAmount: number;
+    };
+    byStatus: {
+      requested: number;
+      pending: number;
+      confirmed: number;
+      cancelled: number;
+      rejected: number;
+      completed: number;
+    };
+    byStore: Array<{
+      locationId: number;
+      code: string;
+      name: string;
+      todayTickets: number;
+      todayBus: number;
+      todayTrain: number;
+      monthTickets: number;
+      activeBookings: number;
+    }>;
+  };
 }
 
 export default function HrDashboard() {
@@ -199,6 +241,15 @@ export default function HrDashboard() {
               </div>
               <span className="text-xs font-semibold text-ink-900">Performance</span>
             </Link>
+            <Link
+              to="/hr/travel"
+              className="card-pad flex flex-col items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-center transition hover:border-indigo-500 hover:shadow-sm"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                <Icon name="ticket" className="h-5 w-5" />
+              </div>
+              <span className="text-xs font-semibold text-ink-900">Travel & Tickets</span>
+            </Link>
           </div>
 
           {/* Primary Live Metric Cards */}
@@ -281,6 +332,173 @@ export default function HrDashboard() {
               </div>
             </Card>
           </div>
+
+          {/* Travel & Ticket Booking Section */}
+          {data.travelSummary && (
+            <Card className="overflow-hidden border border-slate-200 bg-white p-5 shadow-xs">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
+                    <Icon name="ticket" className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-ink-900">Travel & Ticket Booking</h3>
+                    <p className="text-xs text-ink-500">
+                      Live daily bus & train ticket bookings across BSC Textiles stores (BEL, DAV, SHI & HQ)
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Link
+                    to="/hr/travel"
+                    className="btn-secondary text-xs font-semibold flex items-center gap-1.5 px-3 py-1.5"
+                  >
+                    <span>Open Travel Dashboard</span>
+                    <Icon name="arrowRight" className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              </div>
+
+              {/* Live Metric Cards Grid */}
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+                <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-indigo-800">Total Today</span>
+                  <p className="mt-1 text-2xl font-black text-indigo-900">{data.travelSummary.today.totalTickets}</p>
+                  <span className="text-[11px] text-indigo-700">passenger tickets</span>
+                </div>
+
+                <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-800">Bus Tickets</span>
+                  <p className="mt-1 text-2xl font-black text-blue-900">{data.travelSummary.today.busTickets}</p>
+                  <span className="text-[11px] text-blue-700">booked today</span>
+                </div>
+
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800">Train Tickets</span>
+                  <p className="mt-1 text-2xl font-black text-emerald-900">{data.travelSummary.today.trainTickets}</p>
+                  <span className="text-[11px] text-emerald-700">booked today</span>
+                </div>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-800">Pending</span>
+                  <p className="mt-1 text-2xl font-black text-amber-900">{data.travelSummary.today.pendingBookings}</p>
+                  <span className="text-[11px] text-amber-700">awaiting confirmation</span>
+                </div>
+
+                <div className="rounded-xl border border-teal-100 bg-teal-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-teal-800">Confirmed</span>
+                  <p className="mt-1 text-2xl font-black text-teal-900">{data.travelSummary.today.confirmedBookings}</p>
+                  <span className="text-[11px] text-teal-700">active bookings</span>
+                </div>
+
+                <div className="rounded-xl border border-rose-100 bg-rose-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-800">Cancelled</span>
+                  <p className="mt-1 text-2xl font-black text-rose-900">{data.travelSummary.today.cancelledBookings}</p>
+                  <span className="text-[11px] text-rose-700">excluded from active</span>
+                </div>
+
+                <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-purple-800">This Month</span>
+                  <p className="mt-1 text-2xl font-black text-purple-900">{data.travelSummary.thisMonth.totalTickets}</p>
+                  <span className="text-[11px] text-purple-700">month-to-date tickets</span>
+                </div>
+              </div>
+
+              {/* Summary Table & Store Comparison */}
+              <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <div className="bg-slate-50 px-4 py-2 border-b border-slate-200">
+                    <span className="text-xs font-bold text-ink-800">Today's Booking Register Breakdown</span>
+                  </div>
+                  <table className="w-full text-left text-xs">
+                    <thead className="border-b border-slate-200 bg-slate-100/70 font-semibold text-ink-700">
+                      <tr>
+                        <th className="py-2.5 px-4">Booking Type</th>
+                        <th className="py-2.5 px-4 text-right">Today's Bookings</th>
+                        <th className="py-2.5 px-4 text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-ink-800">
+                      <tr>
+                        <td className="py-2 px-4 flex items-center gap-2 font-medium">
+                          <span className="h-2 w-2 rounded-full bg-blue-500" />
+                          <span>Bus tickets</span>
+                        </td>
+                        <td className="py-2 px-4 text-right font-bold text-ink-900">{data.travelSummary.today.busTickets}</td>
+                        <td className="py-2 px-4 text-right text-ink-500">Active today</td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 px-4 flex items-center gap-2 font-medium">
+                          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                          <span>Train tickets</span>
+                        </td>
+                        <td className="py-2 px-4 text-right font-bold text-ink-900">{data.travelSummary.today.trainTickets}</td>
+                        <td className="py-2 px-4 text-right text-ink-500">Active today</td>
+                      </tr>
+                      <tr className="bg-slate-50/80 font-bold">
+                        <td className="py-2 px-4 flex items-center gap-2 text-brand-700">
+                          <span className="h-2 w-2 rounded-full bg-brand-600" />
+                          <span>Total tickets</span>
+                        </td>
+                        <td className="py-2 px-4 text-right text-brand-700">{data.travelSummary.today.totalTickets}</td>
+                        <td className="py-2 px-4 text-right text-brand-600 font-semibold">Today's total</td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 px-4 flex items-center gap-2 text-amber-700">
+                          <span className="h-2 w-2 rounded-full bg-amber-500" />
+                          <span>Pending</span>
+                        </td>
+                        <td className="py-2 px-4 text-right font-semibold text-amber-800">{data.travelSummary.today.pendingBookings}</td>
+                        <td className="py-2 px-4 text-right text-amber-600">Awaiting sign-off</td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 px-4 flex items-center gap-2 text-teal-700">
+                          <span className="h-2 w-2 rounded-full bg-teal-500" />
+                          <span>Confirmed</span>
+                        </td>
+                        <td className="py-2 px-4 text-right font-semibold text-teal-800">{data.travelSummary.today.confirmedBookings}</td>
+                        <td className="py-2 px-4 text-right text-teal-600">Confirmed & active</td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 px-4 flex items-center gap-2 text-rose-700">
+                          <span className="h-2 w-2 rounded-full bg-rose-500" />
+                          <span>Cancelled</span>
+                        </td>
+                        <td className="py-2 px-4 text-right font-semibold text-rose-800">{data.travelSummary.today.cancelledBookings}</td>
+                        <td className="py-2 px-4 text-right text-rose-500">Historical only</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Store comparison */}
+                <div className="overflow-hidden rounded-xl border border-slate-200">
+                  <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 flex items-center justify-between">
+                    <span className="text-xs font-bold text-ink-800">Store-Wise Ticket Allocation</span>
+                    <span className="text-[11px] text-ink-500">Live operational data</span>
+                  </div>
+                  <div className="p-3 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+                    {data.travelSummary.byStore.map((st) => (
+                      <div key={st.locationId} className="flex flex-col items-center rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-center">
+                        <Badge tone="info" className="mb-1 text-[11px] font-mono">
+                          {st.code}
+                        </Badge>
+                        <span className="text-xs font-semibold text-ink-800">{st.name.replace(/ Store$/, '')}</span>
+                        <p className="mt-1 text-xl font-black text-brand-600">{st.todayTickets}</p>
+                        <span className="text-[10px] text-ink-500">
+                          {st.todayBus} bus &bull; {st.todayTrain} train
+                        </span>
+                        <div className="mt-2 w-full pt-1.5 border-t border-slate-200 text-[10px] text-ink-600 flex justify-between">
+                          <span>Month:</span>
+                          <span className="font-bold">{st.monthTickets}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
 
           {/* Location & Department Breakdowns */}
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

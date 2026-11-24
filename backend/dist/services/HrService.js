@@ -1,6 +1,7 @@
 import { execute, query, queryOne } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, assertEmployeeAccess, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
+import { TravelService } from './TravelService.js';
 export class HrService {
     /** Live HR dashboard statistics calculated directly from operational database records */
     static async getDashboard(user, locationId) {
@@ -138,6 +139,7 @@ export class HrService {
                 days: Number(r.days),
                 status: r.status,
             })),
+            travelSummary: await TravelService.getSummary(user, locationId),
         };
     }
     /** Employee Document management */

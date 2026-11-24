@@ -34,6 +34,7 @@ import { groupsRouter } from './groups.js';
 import { hierarchyRouter } from './hierarchy.js';
 import { issuesRouter } from './issues.js';
 import { hrRouter } from './hr.js';
+import { travelRouter } from './travel.js';
 import { asyncHandler } from '../lib/http.js';
 
 export const apiRouter = Router();
@@ -80,5 +81,6 @@ apiRouter.use('/groups', groupsRouter);
 apiRouter.use('/hierarchy', hierarchyRouter);
 apiRouter.use('/issues', issuesRouter);
 apiRouter.use('/hr', hrRouter);
+apiRouter.use('/travel', travelRouter);
 apiRouter.use('/downloads', publicDownloadsRouter);
 apiRouter.use('/location-schedules', locationOfficeSchedulesRouter);

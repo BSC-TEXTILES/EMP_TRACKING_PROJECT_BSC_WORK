@@ -2,6 +2,7 @@ import { execute, query, queryOne } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, assertEmployeeAccess, locationEmployeeClause, requestedLocation, subtreeIds } from '../lib/scope.js';
 import type { AuthUser } from './AuthService.js';
+import { TravelService, type TravelSummary } from './TravelService.js';
 
 export interface HrDashboardMetrics {
   totalEmployees: number;
@@ -16,6 +17,7 @@ export interface HrDashboardMetrics {
   pendingDocumentVerifications: number;
   departmentCounts: Array<{ id: number; name: string; count: number }>;
   locationCounts: Array<{ id: number; code: string; name: string; count: number }>;
+  travelSummary?: TravelSummary;
   recentJoinings: Array<{
     id: number;
     employeeCode: string;
@@ -240,6 +242,7 @@ export class HrService {
         days: Number(r.days),
         status: r.status,
       })),
+      travelSummary: await TravelService.getSummary(user, locationId),
     };
   }
 

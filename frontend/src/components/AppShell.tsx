@@ -309,6 +309,7 @@ export function AppShell() {
                 { to: '/leave', label: 'Leave Approvals', icon: 'leave', show: true },
                 { to: '/hr/payroll', label: 'Salary & Payroll', icon: 'wallet', show: canAny('employees.manage', 'org.manage', 'admin.dashboard') },
                 { to: '/hr/documents', label: 'Employee Documents', icon: 'file', show: canAny('employees.manage', 'employees.view.all') },
+                { to: '/hr/travel', label: 'Travel & Ticket Booking', icon: 'ticket', show: true },
                 { to: '/hr/announcements', label: 'HR Announcements', icon: 'bell', show: true },
               ],
             },

@@ -119,6 +119,10 @@ export const PERMISSION_DEFINITIONS: PermissionDefinition[] = [
 
   { code: 'analytics.view', module: 'analytics', action: 'view', description: 'View team analytics' },
   { code: 'analytics.view.all', module: 'analytics', action: 'view.all', description: 'View organisation analytics' },
+  { code: 'travel.view.own', module: 'travel', action: 'view.own', description: 'View own travel bookings' },
+  { code: 'travel.view.team', module: 'travel', action: 'view.team', description: 'View team travel bookings' },
+  { code: 'travel.view.all', module: 'travel', action: 'view.all', description: 'View organisation travel bookings' },
+  { code: 'travel.manage', module: 'travel', action: 'manage', description: 'Create, update and manage travel bookings' },
   { code: 'reports.export', module: 'exports', action: 'export', description: 'Download CSV/Excel/PDF reports' },
   { code: 'audit.view', module: 'audit', action: 'view', description: 'View audit trail' },
   { code: 'settings.manage', module: 'settings', action: 'manage', description: 'Manage system settings' },

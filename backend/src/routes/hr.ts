@@ -3,10 +3,12 @@ import { z } from 'zod';
 import { ApiError, asyncHandler, intParam, parseBody } from '../lib/http.js';
 import { authenticate, currentUser, requireAny } from '../middleware/auth.js';
 import { HrService } from '../services/HrService.js';
+import { travelRouter } from './travel.js';
 import type { AuthedRequest } from '../middleware/auth.js';
 
 export const hrRouter = Router();
 hrRouter.use(authenticate);
+hrRouter.use('/travel', travelRouter);
 
 // HR Dashboard Metrics
 hrRouter.get(
