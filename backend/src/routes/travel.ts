@@ -8,7 +8,7 @@ import type { AuthedRequest } from '../middleware/auth.js';
 export const travelRouter = Router();
 travelRouter.use(authenticate);
 
-// 1. Dashboard summary
+// 1. Dashboard summary (Real-time live metrics)
 travelRouter.get(
   '/dashboard',
   requireAny(
@@ -29,7 +29,181 @@ travelRouter.get(
   }),
 );
 
-// 2. List bookings with filters
+// 2. Record simplified daily ticket count (Bus or Train)
+const RecordDailyCountSchema = z.object({
+  ticketType: z.enum(['bus', 'train']),
+  ticketCount: z.number().int().positive('Total ticket count must be a positive whole number (minimum 1)'),
+  notes: z.string().max(255).optional().nullable(),
+  locationId: z.number().int().positive().optional(),
+});
+
+travelRouter.post(
+  '/counts',
+  requireAny(
+    'employees.manage',
+    'travel.manage',
+    'travel.view.own',
+    'travel.view.team',
+    'travel.view.all',
+    'admin.dashboard',
+  ),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const body = parseBody(RecordDailyCountSchema, req.body);
+    const result = await TravelService.recordDailyCount(user, {
+      ticketType: body.ticketType,
+      ticketCount: body.ticketCount,
+      notes: body.notes || undefined,
+      locationId: body.locationId,
+    });
+    res.status(201).json(result);
+  }),
+);
+
+// 3. List Date-Wise Ticket Booking History
+travelRouter.get(
+  '/daily-history',
+  requireAny(
+    'admin.dashboard',
+    'employees.view.all',
+    'employees.view.team',
+    'employees.manage',
+    'reports.view.all',
+    'travel.view.all',
+    'travel.view.team',
+    'travel.view.own',
+  ),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const datePreset = req.query.datePreset as any;
+    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+    const ticketType = req.query.ticketType as 'bus' | 'train' | 'all' | undefined;
+    const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
+    const search = req.query.search ? String(req.query.search) : undefined;
+    const page = req.query.page ? Number(req.query.page) : 1;
+    const limit = req.query.limit ? Number(req.query.limit) : 20;
+
+    const result = await TravelService.listDailyHistory(user, {
+      datePreset,
+      startDate,
+      endDate,
+      ticketType,
+      locationId,
+      search,
+      page,
+      limit,
+    });
+    res.json(result);
+  }),
+);
+
+// 4. Get detailed individual entries for a specific date and store
+travelRouter.get(
+  '/daily-history/entries',
+  requireAny(
+    'admin.dashboard',
+    'employees.view.all',
+    'employees.view.team',
+    'employees.manage',
+    'reports.view.all',
+    'travel.view.all',
+    'travel.view.team',
+    'travel.view.own',
+  ),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const date = req.query.date ? String(req.query.date) : undefined;
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw ApiError.badRequest('A valid date in YYYY-MM-DD format is required.');
+    }
+    const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
+    const entries = await TravelService.getDateEntries(user, date, locationId);
+    res.json(entries);
+  }),
+);
+
+// 5. Edit and correct a previously entered ticket count (HR / Admin only)
+const EditTicketCountSchema = z.object({
+  ticketCount: z.number().int().positive('Corrected ticket count must be a positive whole number (minimum 1)'),
+  reason: z.string().max(255).optional(),
+});
+
+travelRouter.patch(
+  '/counts/:id',
+  requireAny('employees.manage', 'travel.manage', 'admin.dashboard'),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const id = intParam(req.params.id);
+    const body = parseBody(EditTicketCountSchema, req.body);
+    const result = await TravelService.editTicketCount(user, id, body.ticketCount, body.reason);
+    res.json(result);
+  }),
+);
+
+// 6. Export Date-Wise History to Excel CSV
+travelRouter.get(
+  '/daily-history/export',
+  requireAny(
+    'admin.dashboard',
+    'employees.view.all',
+    'employees.view.team',
+    'employees.manage',
+    'reports.view.all',
+    'travel.view.all',
+  ),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const datePreset = req.query.datePreset as any;
+    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+    const ticketType = req.query.ticketType as 'bus' | 'train' | 'all' | undefined;
+    const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
+    const search = req.query.search ? String(req.query.search) : undefined;
+
+    const csv = await TravelService.exportDailyHistory(user, {
+      datePreset,
+      startDate,
+      endDate,
+      ticketType,
+      locationId,
+      search,
+    });
+
+    const filename = `BSC_Daily_Ticket_Booking_Report_${new Date().toISOString().split('T')[0]}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  }),
+);
+
+// 7. Daily chart trend
+travelRouter.get(
+  '/reports/chart',
+  requireAny(
+    'admin.dashboard',
+    'employees.view.all',
+    'employees.view.team',
+    'employees.manage',
+    'travel.view.all',
+    'travel.view.team',
+    'reports.view.all',
+  ),
+  asyncHandler(async (req: AuthedRequest, res) => {
+    const user = currentUser(req);
+    const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
+    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
+    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
+
+    const chart = await TravelService.getDailyChart(user, { locationId, startDate, endDate });
+    res.json(chart);
+  }),
+);
+
+// =========================================================================
+// Legacy Booking Endpoints
+// =========================================================================
+
 travelRouter.get(
   '/bookings',
   requireAny(
@@ -71,7 +245,6 @@ travelRouter.get(
   }),
 );
 
-// 3. Get single booking
 travelRouter.get(
   '/bookings/:id',
   requireAny(
@@ -91,7 +264,6 @@ travelRouter.get(
   }),
 );
 
-// 4. Create booking
 const PassengerSchema = z.object({
   passengerName: z.string().min(2).max(150),
   age: z.number().int().min(1).max(120).optional().nullable(),
@@ -137,7 +309,6 @@ travelRouter.post(
   }),
 );
 
-// 5. Update booking
 const UpdateBookingSchema = z.object({
   transportType: z.enum(['bus', 'train']).optional(),
   status: z.enum(['requested', 'pending', 'confirmed', 'cancelled', 'rejected', 'completed']).optional(),
@@ -174,7 +345,6 @@ travelRouter.put(
   }),
 );
 
-// 6. Update booking status / Cancel booking
 const StatusSchema = z.object({
   status: z.enum(['requested', 'pending', 'confirmed', 'cancelled', 'rejected', 'completed']),
   cancellationReason: z.string().max(255).optional(),
@@ -193,30 +363,6 @@ travelRouter.patch(
   }),
 );
 
-// 7. Daily chart trend
-travelRouter.get(
-  '/reports/chart',
-  requireAny(
-    'admin.dashboard',
-    'employees.view.all',
-    'employees.view.team',
-    'employees.manage',
-    'travel.view.all',
-    'travel.view.team',
-    'reports.view.all',
-  ),
-  asyncHandler(async (req: AuthedRequest, res) => {
-    const user = currentUser(req);
-    const locationId = req.query.locationId ? Number(req.query.locationId) : undefined;
-    const startDate = req.query.startDate ? String(req.query.startDate) : undefined;
-    const endDate = req.query.endDate ? String(req.query.endDate) : undefined;
-
-    const chart = await TravelService.getDailyChart(user, { locationId, startDate, endDate });
-    res.json(chart);
-  }),
-);
-
-// 8. Export CSV for Excel reports
 travelRouter.get(
   '/reports/export',
   requireAny(

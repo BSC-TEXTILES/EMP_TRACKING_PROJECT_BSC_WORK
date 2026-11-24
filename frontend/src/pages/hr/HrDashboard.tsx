@@ -63,6 +63,12 @@ interface HrDashboardData {
       totalBookings: number;
       totalAmount: number;
     };
+    overall?: {
+      totalTickets: number;
+      busTickets: number;
+      trainTickets: number;
+      totalEntries: number;
+    };
     byStatus: {
       requested: number;
       pending: number;
@@ -360,47 +366,41 @@ export default function HrDashboard() {
               </div>
 
               {/* Live Metric Cards Grid */}
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
                 <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 text-center">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-indigo-800">Total Today</span>
                   <p className="mt-1 text-2xl font-black text-indigo-900">{data.travelSummary.today.totalTickets}</p>
-                  <span className="text-[11px] text-indigo-700">passenger tickets</span>
+                  <span className="text-[11px] text-indigo-700">tickets booked today</span>
                 </div>
 
                 <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-3 text-center">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-800">Bus Tickets</span>
                   <p className="mt-1 text-2xl font-black text-blue-900">{data.travelSummary.today.busTickets}</p>
-                  <span className="text-[11px] text-blue-700">booked today</span>
+                  <span className="text-[11px] text-blue-700">bus tickets today</span>
                 </div>
 
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/50 p-3 text-center">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-emerald-800">Train Tickets</span>
                   <p className="mt-1 text-2xl font-black text-emerald-900">{data.travelSummary.today.trainTickets}</p>
-                  <span className="text-[11px] text-emerald-700">booked today</span>
-                </div>
-
-                <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-3 text-center">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-800">Pending</span>
-                  <p className="mt-1 text-2xl font-black text-amber-900">{data.travelSummary.today.pendingBookings}</p>
-                  <span className="text-[11px] text-amber-700">awaiting confirmation</span>
+                  <span className="text-[11px] text-emerald-700">train tickets today</span>
                 </div>
 
                 <div className="rounded-xl border border-teal-100 bg-teal-50/50 p-3 text-center">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-teal-800">Confirmed</span>
-                  <p className="mt-1 text-2xl font-black text-teal-900">{data.travelSummary.today.confirmedBookings}</p>
-                  <span className="text-[11px] text-teal-700">active bookings</span>
-                </div>
-
-                <div className="rounded-xl border border-rose-100 bg-rose-50/50 p-3 text-center">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-rose-800">Cancelled</span>
-                  <p className="mt-1 text-2xl font-black text-rose-900">{data.travelSummary.today.cancelledBookings}</p>
-                  <span className="text-[11px] text-rose-700">excluded from active</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-teal-800">This Week</span>
+                  <p className="mt-1 text-2xl font-black text-teal-900">{data.travelSummary.thisWeek.totalTickets}</p>
+                  <span className="text-[11px] text-teal-700">week-to-date tickets</span>
                 </div>
 
                 <div className="rounded-xl border border-purple-100 bg-purple-50/50 p-3 text-center">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-purple-800">This Month</span>
                   <p className="mt-1 text-2xl font-black text-purple-900">{data.travelSummary.thisMonth.totalTickets}</p>
                   <span className="text-[11px] text-purple-700">month-to-date tickets</span>
+                </div>
+
+                <div className="rounded-xl border border-amber-100 bg-amber-50/50 p-3 text-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-800">Overall Total</span>
+                  <p className="mt-1 text-2xl font-black text-amber-900">{data.travelSummary.overall?.totalTickets ?? data.travelSummary.today.totalTickets}</p>
+                  <span className="text-[11px] text-amber-700">all-time tickets</span>
                 </div>
               </div>
 

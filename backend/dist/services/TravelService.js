@@ -1,12 +1,30 @@
-import { query, queryOne, transaction, txExecute } from '../db/index.js';
+import { execute, query, queryOne, transaction, txExecute } from '../db/index.js';
 import { ApiError } from '../lib/http.js';
 import { allowedLocationIds, requestedLocation } from '../lib/scope.js';
 import { broadcastEvent } from '../realtime/io.js';
+export function getIndianToday() {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(new Date());
+}
+export function getIndianYesterday() {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Kolkata',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(d);
+}
 export class TravelService {
     /**
      * Resolve location filter clause for SQL queries based on actor's allowed stores
      */
-    static async buildLocationFilter(user, requestedLocId, tablePrefix = 'b') {
+    static async buildLocationFilter(user, requestedLocId, tablePrefix = 'd') {
         const allowed = await allowedLocationIds(user);
         const params = [];
         let clause = '';
@@ -20,7 +38,7 @@ export class TravelService {
         }
         else if (allowed !== null) {
             if (allowed.length === 0) {
-                clause = ` AND ${tablePrefix}.location_id = 0`; // No access
+                clause = ` AND ${tablePrefix}.location_id = 0`;
             }
             else {
                 clause = ` AND ${tablePrefix}.location_id IN (${allowed.map(() => '?').join(',')})`;
@@ -33,55 +51,42 @@ export class TravelService {
      * Get Live Travel & Ticket Booking Summary for Dashboard
      */
     static async getSummary(user, locationId) {
-        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, locationId, 'b');
-        // 1. Today's live stats (based on booking_date)
+        const todayStr = getIndianToday();
+        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, locationId, 'd');
+        // 1. Today's live stats (Asia/Kolkata date)
         const todayStats = await queryOne(`SELECT
-        COALESCE(SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'bus' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'train' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS train_tickets,
-        COUNT(*) AS total_bookings,
-        COALESCE(SUM(b.status IN ('pending', 'requested')), 0) AS pending_bookings,
-        COALESCE(SUM(b.status = 'confirmed'), 0) AS confirmed_bookings,
-        COALESCE(SUM(b.status = 'cancelled'), 0) AS cancelled_bookings
-       FROM travel_bookings b
-       WHERE b.booking_date = CURDATE() ${locClause}`, locParams);
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COUNT(*) AS total_entries
+       FROM daily_ticket_counts d
+       WHERE d.booking_date = ? ${locClause}`, [todayStr, ...locParams]);
         // 2. This week stats
         const weekStats = await queryOne(`SELECT
-        COALESCE(SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'bus' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'train' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS train_tickets,
-        COUNT(*) AS total_bookings
-       FROM travel_bookings b
-       WHERE b.booking_date >= DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)
-         AND b.booking_date <= CURDATE() ${locClause}`, locParams);
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COUNT(*) AS total_entries
+       FROM daily_ticket_counts d
+       WHERE d.booking_date >= DATE_SUB(?, INTERVAL WEEKDAY(?) DAY)
+         AND d.booking_date <= ? ${locClause}`, [todayStr, todayStr, todayStr, ...locParams]);
         // 3. This month stats
         const monthStats = await queryOne(`SELECT
-        COALESCE(SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS total_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'bus' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'train' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS train_tickets,
-        COUNT(*) AS total_bookings,
-        COALESCE(SUM(CASE WHEN b.status != 'cancelled' THEN b.total_amount ELSE 0 END), 0) AS total_amount
-       FROM travel_bookings b
-       WHERE b.booking_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
-         AND b.booking_date <= CURDATE() ${locClause}`, locParams);
-        // 4. By status breakdown for current month
-        const statusRows = await query(`SELECT b.status, COUNT(*) AS count
-       FROM travel_bookings b
-       WHERE b.booking_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01') ${locClause}
-       GROUP BY b.status`, locParams);
-        const byStatus = {
-            requested: 0,
-            pending: 0,
-            confirmed: 0,
-            cancelled: 0,
-            rejected: 0,
-            completed: 0,
-        };
-        for (const row of statusRows) {
-            if (row.status in byStatus) {
-                byStatus[row.status] = Number(row.count);
-            }
-        }
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COUNT(*) AS total_entries
+       FROM daily_ticket_counts d
+       WHERE d.booking_date >= DATE_FORMAT(?, '%Y-%m-01')
+         AND d.booking_date <= ? ${locClause}`, [todayStr, todayStr, ...locParams]);
+        // 4. Overall stats
+        const overallStats = await queryOne(`SELECT
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COUNT(*) AS total_entries
+       FROM daily_ticket_counts d
+       WHERE 1 = 1 ${locClause}`, locParams);
         // 5. Store breakdown (comparison across BEL, DAV, SHI, HQ)
         const allowed = await allowedLocationIds(user);
         let storeLocFilter = "WHERE l.code IN ('BEL', 'DAV', 'SHI', 'HQ')";
@@ -100,57 +105,94 @@ export class TravelService {
         l.code,
         l.name,
         COALESCE((
-          SELECT SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END)
-          FROM travel_bookings b
-          WHERE b.location_id = l.id AND b.booking_date = CURDATE()
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id AND d.booking_date = ?
         ), 0) AS today_tickets,
         COALESCE((
-          SELECT SUM(CASE WHEN b.transport_type = 'bus' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END)
-          FROM travel_bookings b
-          WHERE b.location_id = l.id AND b.booking_date = CURDATE()
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'bus'
         ), 0) AS today_bus,
         COALESCE((
-          SELECT SUM(CASE WHEN b.transport_type = 'train' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END)
-          FROM travel_bookings b
-          WHERE b.location_id = l.id AND b.booking_date = CURDATE()
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id AND d.booking_date = ? AND d.ticket_type = 'train'
         ), 0) AS today_train,
         COALESCE((
-          SELECT SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END)
-          FROM travel_bookings b
-          WHERE b.location_id = l.id AND b.booking_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id
+            AND d.booking_date >= DATE_SUB(?, INTERVAL WEEKDAY(?) DAY)
+            AND d.booking_date <= ?
+        ), 0) AS week_tickets,
+        COALESCE((
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id
+            AND d.booking_date >= DATE_FORMAT(?, '%Y-%m-01')
+            AND d.booking_date <= ?
         ), 0) AS month_tickets,
         COALESCE((
+          SELECT SUM(d.ticket_count)
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id
+        ), 0) AS total_tickets,
+        COALESCE((
           SELECT COUNT(*)
-          FROM travel_bookings b
-          WHERE b.location_id = l.id AND b.status IN ('confirmed', 'pending', 'requested')
-        ), 0) AS active_bookings
+          FROM daily_ticket_counts d
+          WHERE d.location_id = l.id
+        ), 0) AS total_entries
        FROM locations l
        ${storeLocFilter}
-       ORDER BY l.id ASC`, storeLocParams);
+       ORDER BY l.id ASC`, [todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, todayStr, ...storeLocParams]);
+        // 6. User's assigned store
+        const userStoreRow = await queryOne(`SELECT l.id, l.code, l.name
+       FROM employees e
+       JOIN locations l ON l.id = e.location_id
+       WHERE e.id = ?`, [user.id]);
+        const totalTodayTickets = Number(todayStats?.total_tickets ?? 0);
+        const totalTodayEntries = Number(todayStats?.total_entries ?? 0);
         return {
             today: {
-                totalTickets: Number(todayStats?.total_tickets ?? 0),
+                totalTickets: totalTodayTickets,
                 busTickets: Number(todayStats?.bus_tickets ?? 0),
                 trainTickets: Number(todayStats?.train_tickets ?? 0),
-                totalBookings: Number(todayStats?.total_bookings ?? 0),
-                pendingBookings: Number(todayStats?.pending_bookings ?? 0),
-                confirmedBookings: Number(todayStats?.confirmed_bookings ?? 0),
-                cancelledBookings: Number(todayStats?.cancelled_bookings ?? 0),
+                totalBookings: totalTodayEntries,
+                totalEntries: totalTodayEntries,
+                pendingBookings: 0,
+                confirmedBookings: totalTodayTickets,
+                cancelledBookings: 0,
             },
             thisWeek: {
                 totalTickets: Number(weekStats?.total_tickets ?? 0),
                 busTickets: Number(weekStats?.bus_tickets ?? 0),
                 trainTickets: Number(weekStats?.train_tickets ?? 0),
-                totalBookings: Number(weekStats?.total_bookings ?? 0),
+                totalBookings: Number(weekStats?.total_entries ?? 0),
+                totalEntries: Number(weekStats?.total_entries ?? 0),
             },
             thisMonth: {
                 totalTickets: Number(monthStats?.total_tickets ?? 0),
                 busTickets: Number(monthStats?.bus_tickets ?? 0),
                 trainTickets: Number(monthStats?.train_tickets ?? 0),
-                totalBookings: Number(monthStats?.total_bookings ?? 0),
-                totalAmount: Number(monthStats?.total_amount ?? 0),
+                totalBookings: Number(monthStats?.total_entries ?? 0),
+                totalEntries: Number(monthStats?.total_entries ?? 0),
+                totalAmount: 0,
             },
-            byStatus,
+            overall: {
+                totalTickets: Number(overallStats?.total_tickets ?? 0),
+                busTickets: Number(overallStats?.bus_tickets ?? 0),
+                trainTickets: Number(overallStats?.train_tickets ?? 0),
+                totalEntries: Number(overallStats?.total_entries ?? 0),
+            },
+            byStatus: {
+                requested: 0,
+                pending: 0,
+                confirmed: totalTodayTickets,
+                cancelled: 0,
+                rejected: 0,
+                completed: 0,
+            },
             byStore: storeRows.map((r) => ({
                 locationId: Number(r.location_id),
                 code: r.code,
@@ -158,14 +200,419 @@ export class TravelService {
                 todayTickets: Number(r.today_tickets),
                 todayBus: Number(r.today_bus),
                 todayTrain: Number(r.today_train),
+                weekTickets: Number(r.week_tickets),
                 monthTickets: Number(r.month_tickets),
-                activeBookings: Number(r.active_bookings),
+                totalTickets: Number(r.total_tickets),
+                totalEntries: Number(r.total_entries),
+                activeBookings: Number(r.today_tickets),
             })),
+            serverToday: todayStr,
+            userStore: userStoreRow
+                ? {
+                    id: Number(userStoreRow.id),
+                    code: userStoreRow.code,
+                    name: userStoreRow.name,
+                }
+                : null,
         };
     }
     /**
-     * List travel bookings with pagination, store isolation, transport type, and date filters
+     * Record a simplified daily ticket count (Bus or Train)
+     * Automatically assigns today's Indian date and employee's store.
+     * Multiple submissions on the same day add to the day's total.
      */
+    static async recordDailyCount(user, input) {
+        if (!['bus', 'train'].includes(input.ticketType)) {
+            throw ApiError.badRequest("Ticket type must be either 'bus' or 'train'.");
+        }
+        const count = Math.floor(Number(input.ticketCount));
+        if (!Number.isFinite(count) || count < 1) {
+            throw ApiError.badRequest('Total number of tickets booked must be a positive whole number (minimum 1).');
+        }
+        // Resolve location
+        let targetLocationId;
+        const allowed = await allowedLocationIds(user);
+        if (input.locationId) {
+            const valid = await requestedLocation(user, input.locationId);
+            if (!valid) {
+                throw ApiError.forbidden('You do not have access to record tickets for the specified store location.');
+            }
+            targetLocationId = valid;
+        }
+        else {
+            const empRow = await queryOne('SELECT location_id FROM employees WHERE id = ?', [user.id]);
+            if (empRow?.location_id) {
+                targetLocationId = Number(empRow.location_id);
+            }
+            else if (allowed && allowed.length > 0) {
+                targetLocationId = allowed[0];
+            }
+            else {
+                targetLocationId = 1; // Default BEL
+            }
+        }
+        const bookingDate = getIndianToday();
+        const notes = input.notes ? input.notes.trim() : null;
+        const result = await execute(`INSERT INTO daily_ticket_counts (
+        booking_date, location_id, ticket_type, ticket_count, employee_id, notes
+      ) VALUES (?, ?, ?, ?, ?, ?)`, [bookingDate, targetLocationId, input.ticketType, count, user.id, notes]);
+        const insertedId = result.insertId;
+        broadcastEvent('travel:updated', {
+            action: 'ticket_recorded',
+            id: insertedId,
+            bookingDate,
+            locationId: targetLocationId,
+            ticketType: input.ticketType,
+            ticketCount: count,
+            recordedBy: user.id,
+        });
+        return {
+            success: true,
+            message: `Successfully recorded ${count} ${input.ticketType} ticket${count > 1 ? 's' : ''} for today (${bookingDate}).`,
+            recordId: insertedId,
+            bookingDate,
+            locationId: targetLocationId,
+            ticketType: input.ticketType,
+            ticketCount: count,
+        };
+    }
+    /**
+     * List date-wise ticket booking history aggregated by (booking_date, location_id)
+     */
+    static async listDailyHistory(user, filters = {}) {
+        const todayStr = getIndianToday();
+        const yesterdayStr = getIndianYesterday();
+        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, filters.locationId, 'd');
+        const conditions = ['1 = 1'];
+        const params = [...locParams];
+        if (locClause) {
+            conditions.push(locClause.replace(/^ AND /, ''));
+        }
+        // Date filters
+        if (filters.datePreset === 'today') {
+            conditions.push('d.booking_date = ?');
+            params.push(todayStr);
+        }
+        else if (filters.datePreset === 'yesterday') {
+            conditions.push('d.booking_date = ?');
+            params.push(yesterdayStr);
+        }
+        else if (filters.datePreset === 'this_week') {
+            conditions.push('d.booking_date >= DATE_SUB(?, INTERVAL WEEKDAY(?) DAY) AND d.booking_date <= ?');
+            params.push(todayStr, todayStr, todayStr);
+        }
+        else if (filters.datePreset === 'this_month') {
+            conditions.push("d.booking_date >= DATE_FORMAT(?, '%Y-%m-01') AND d.booking_date <= ?");
+            params.push(todayStr, todayStr);
+        }
+        else if (filters.startDate && filters.endDate) {
+            conditions.push('d.booking_date BETWEEN ? AND ?');
+            params.push(filters.startDate, filters.endDate);
+        }
+        else if (filters.startDate) {
+            conditions.push('d.booking_date >= ?');
+            params.push(filters.startDate);
+        }
+        else if (filters.endDate) {
+            conditions.push('d.booking_date <= ?');
+            params.push(filters.endDate);
+        }
+        if (filters.ticketType && filters.ticketType !== 'all') {
+            conditions.push('d.ticket_type = ?');
+            params.push(filters.ticketType);
+        }
+        if (filters.search && filters.search.trim()) {
+            const q = `%${filters.search.trim()}%`;
+            conditions.push('(l.name LIKE ? OR l.code LIKE ?)');
+            params.push(q, q);
+        }
+        const whereClause = conditions.join(' AND ');
+        // 1. Overall summary totals for the filtered range
+        const summaryRow = await queryOne(`SELECT
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS total_bus,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS total_train,
+        COALESCE(SUM(d.ticket_count), 0) AS grand_total,
+        COUNT(*) AS total_entries
+       FROM daily_ticket_counts d
+       JOIN locations l ON l.id = d.location_id
+       WHERE ${whereClause}`, params);
+        // 2. Count distinct (booking_date, location_id) groups
+        const countRow = await queryOne(`SELECT COUNT(DISTINCT CONCAT(d.booking_date, '-', d.location_id)) AS count
+       FROM daily_ticket_counts d
+       JOIN locations l ON l.id = d.location_id
+       WHERE ${whereClause}`, params);
+        const totalRows = Number(countRow?.count ?? 0);
+        const page = Math.max(1, Number(filters.page || 1));
+        const limit = Math.min(100, Math.max(1, Number(filters.limit || 20)));
+        const offset = (page - 1) * limit;
+        // 3. Paginated items
+        const rows = await query(`SELECT
+        DATE_FORMAT(d.booking_date, '%Y-%m-%d') AS booking_date,
+        d.location_id,
+        l.code AS store_code,
+        l.name AS store_name,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets,
+        COUNT(*) AS entry_count,
+        DATE_FORMAT(MAX(d.updated_at), '%Y-%m-%d %H:%i:%s') AS latest_updated_at,
+        (
+          SELECT e2.full_name
+          FROM daily_ticket_counts d2
+          JOIN employees e2 ON e2.id = d2.employee_id
+          WHERE d2.booking_date = d.booking_date AND d2.location_id = d.location_id
+          ORDER BY d2.updated_at DESC, d2.id DESC
+          LIMIT 1
+        ) AS updated_by_name,
+        (
+          SELECT e2.employee_code
+          FROM daily_ticket_counts d2
+          JOIN employees e2 ON e2.id = d2.employee_id
+          WHERE d2.booking_date = d.booking_date AND d2.location_id = d.location_id
+          ORDER BY d2.updated_at DESC, d2.id DESC
+          LIMIT 1
+        ) AS updated_by_code
+       FROM daily_ticket_counts d
+       JOIN locations l ON l.id = d.location_id
+       WHERE ${whereClause}
+       GROUP BY d.booking_date, d.location_id, l.code, l.name
+       ORDER BY d.booking_date DESC, d.location_id ASC
+       LIMIT ? OFFSET ?`, [...params, limit, offset]);
+        const items = rows.map((r) => ({
+            bookingDate: r.booking_date,
+            locationId: Number(r.location_id),
+            storeCode: r.store_code,
+            storeName: r.store_name,
+            busTickets: Number(r.bus_tickets),
+            trainTickets: Number(r.train_tickets),
+            totalTickets: Number(r.total_tickets),
+            entryCount: Number(r.entry_count),
+            latestUpdatedAt: r.latest_updated_at,
+            updatedByEmployeeName: r.updated_by_name || 'System',
+            updatedByEmployeeCode: r.updated_by_code || '',
+        }));
+        return {
+            summary: {
+                totalBus: Number(summaryRow?.total_bus ?? 0),
+                totalTrain: Number(summaryRow?.total_train ?? 0),
+                grandTotal: Number(summaryRow?.grand_total ?? 0),
+                totalEntries: Number(summaryRow?.total_entries ?? 0),
+            },
+            items,
+            totalRows,
+            page,
+            limit,
+            totalPages: Math.ceil(totalRows / limit) || 1,
+        };
+    }
+    /**
+     * Get detailed individual entries for a specific date and store
+     */
+    static async getDateEntries(user, bookingDate, locationId) {
+        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, locationId, 'd');
+        const rows = await query(`SELECT
+        d.id,
+        DATE_FORMAT(d.booking_date, '%Y-%m-%d') AS booking_date,
+        d.location_id,
+        l.code AS store_code,
+        l.name AS store_name,
+        d.ticket_type,
+        d.ticket_count,
+        d.employee_id,
+        e.full_name AS employee_name,
+        e.employee_code,
+        d.notes,
+        DATE_FORMAT(d.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+        DATE_FORMAT(d.updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
+       FROM daily_ticket_counts d
+       JOIN locations l ON l.id = d.location_id
+       JOIN employees e ON e.id = d.employee_id
+       WHERE d.booking_date = ? ${locClause}
+       ORDER BY d.id DESC`, [bookingDate, ...locParams]);
+        if (rows.length === 0)
+            return [];
+        const ids = rows.map((r) => r.id);
+        const editRows = await query(`SELECT
+        ed.id,
+        ed.ticket_count_id,
+        emp.full_name AS editor_name,
+        emp.employee_code AS editor_code,
+        ed.previous_count,
+        ed.new_count,
+        ed.reason,
+        DATE_FORMAT(ed.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+       FROM daily_ticket_count_edits ed
+       JOIN employees emp ON emp.id = ed.editor_id
+       WHERE ed.ticket_count_id IN (${ids.map(() => '?').join(',')})
+       ORDER BY ed.id ASC`, ids);
+        const editsByCountId = new Map();
+        for (const e of editRows) {
+            const arr = editsByCountId.get(e.ticket_count_id) || [];
+            arr.push(e);
+            editsByCountId.set(e.ticket_count_id, arr);
+        }
+        return rows.map((r) => ({
+            id: Number(r.id),
+            bookingDate: r.booking_date,
+            locationId: Number(r.location_id),
+            storeCode: r.store_code,
+            storeName: r.store_name,
+            ticketType: r.ticket_type,
+            ticketCount: Number(r.ticket_count),
+            employeeId: Number(r.employee_id),
+            employeeName: r.employee_name,
+            employeeCode: r.employee_code,
+            notes: r.notes,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            editHistory: (editsByCountId.get(r.id) || []).map((e) => ({
+                id: Number(e.id),
+                editorName: e.editor_name,
+                editorCode: e.editor_code,
+                previousCount: Number(e.previous_count),
+                newCount: Number(e.new_count),
+                reason: e.reason,
+                createdAt: e.created_at,
+            })),
+        }));
+    }
+    /**
+     * Edit and correct a previously entered ticket count
+     * Restricted to authorized HR users and store/central admins
+     */
+    static async editTicketCount(user, id, newCount, reason) {
+        const isAuthorized = user.roleSlug === 'admin' ||
+            user.roleSlug === 'super_admin' ||
+            user.roleSlug === 'hr_manager' ||
+            user.roleSlug === 'location_hr' ||
+            user.permissions.includes('travel.manage') ||
+            user.permissions.includes('employees.manage');
+        if (!isAuthorized) {
+            throw ApiError.forbidden('Only authorized HR administrators can correct ticket counts.');
+        }
+        const count = Math.floor(Number(newCount));
+        if (!Number.isFinite(count) || count < 1) {
+            throw ApiError.badRequest('Corrected ticket count must be a positive whole number (minimum 1).');
+        }
+        const existing = await queryOne('SELECT id, location_id, ticket_type, ticket_count, DATE_FORMAT(booking_date, "%Y-%m-%d") AS booking_date FROM daily_ticket_counts WHERE id = ?', [id]);
+        if (!existing) {
+            throw ApiError.notFound('Ticket count record not found.');
+        }
+        const allowed = await allowedLocationIds(user);
+        if (allowed !== null && !allowed.includes(Number(existing.location_id))) {
+            throw ApiError.forbidden('You do not have permission to modify ticket records for this store.');
+        }
+        const prevCount = Number(existing.ticket_count);
+        if (prevCount === count) {
+            return { success: true, message: 'Ticket count unchanged.' };
+        }
+        return transaction(async (conn) => {
+            await txExecute(conn, `INSERT INTO daily_ticket_count_edits (
+          ticket_count_id, editor_id, previous_count, new_count, reason
+        ) VALUES (?, ?, ?, ?, ?)`, [id, user.id, prevCount, count, reason?.trim() || 'Corrected by HR administrator']);
+            await txExecute(conn, 'UPDATE daily_ticket_counts SET ticket_count = ?, updated_at = NOW() WHERE id = ?', [count, id]);
+            broadcastEvent('travel:updated', {
+                action: 'count_corrected',
+                id,
+                locationId: Number(existing.location_id),
+                previousCount: prevCount,
+                newCount: count,
+                editorId: user.id,
+            });
+            return {
+                success: true,
+                message: `Successfully corrected ticket count from ${prevCount} to ${count}.`,
+                recordId: id,
+                previousCount: prevCount,
+                newCount: count,
+            };
+        });
+    }
+    /**
+     * Export daily history in Excel-compatible CSV format
+     */
+    static async exportDailyHistory(user, filters = {}) {
+        const result = await this.listDailyHistory(user, { ...filters, limit: 10000, page: 1 });
+        const escapeCsv = (val) => {
+            if (val === null || val === undefined)
+                return '';
+            const str = String(val).replace(/"/g, '""');
+            return str.includes(',') || str.includes('\n') || str.includes('"') ? `"${str}"` : str;
+        };
+        const headers = [
+            'Booking Date',
+            'Store Code',
+            'Store Name',
+            'Bus Tickets',
+            'Train Tickets',
+            'Total Tickets',
+            'Entries Recorded',
+            'Last Updated By',
+            'Last Updated At',
+        ];
+        const lines = ['\uFEFF' + headers.map(escapeCsv).join(',')];
+        for (const item of result.items) {
+            lines.push([
+                escapeCsv(item.bookingDate),
+                escapeCsv(item.storeCode),
+                escapeCsv(item.storeName),
+                escapeCsv(item.busTickets),
+                escapeCsv(item.trainTickets),
+                escapeCsv(item.totalTickets),
+                escapeCsv(item.entryCount),
+                escapeCsv(`${item.updatedByEmployeeName} (${item.updatedByEmployeeCode})`),
+                escapeCsv(item.latestUpdatedAt),
+            ].join(','));
+        }
+        // Add summary row at bottom
+        lines.push([
+            escapeCsv('TOTAL / SUMMARY'),
+            escapeCsv(''),
+            escapeCsv(''),
+            escapeCsv(result.summary.totalBus),
+            escapeCsv(result.summary.totalTrain),
+            escapeCsv(result.summary.grandTotal),
+            escapeCsv(result.summary.totalEntries),
+            escapeCsv(''),
+            escapeCsv(''),
+        ].join(','));
+        return lines.join('\n');
+    }
+    /**
+     * Get daily trend chart points for bus vs train tickets from daily_ticket_counts
+     */
+    static async getDailyChart(user, filters = {}) {
+        const todayStr = getIndianToday();
+        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, filters.locationId, 'd');
+        let dateFilter = 'd.booking_date >= DATE_SUB(?, INTERVAL 13 DAY) AND d.booking_date <= ?';
+        const params = [todayStr, todayStr, ...locParams];
+        if (filters.startDate && filters.endDate) {
+            dateFilter = 'd.booking_date BETWEEN ? AND ?';
+            params.splice(0, 2, filters.startDate, filters.endDate);
+        }
+        else if (filters.startDate) {
+            dateFilter = 'd.booking_date >= ? AND d.booking_date <= ?';
+            params.splice(0, 2, filters.startDate, todayStr);
+        }
+        const rows = await query(`SELECT
+        DATE_FORMAT(d.booking_date, '%Y-%m-%d') AS booking_date,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'bus' THEN d.ticket_count ELSE 0 END), 0) AS bus_tickets,
+        COALESCE(SUM(CASE WHEN d.ticket_type = 'train' THEN d.ticket_count ELSE 0 END), 0) AS train_tickets,
+        COALESCE(SUM(d.ticket_count), 0) AS total_tickets
+       FROM daily_ticket_counts d
+       WHERE ${dateFilter} ${locClause}
+       GROUP BY d.booking_date
+       ORDER BY d.booking_date ASC`, params);
+        return rows.map((r) => ({
+            date: r.booking_date,
+            bus: Number(r.bus_tickets),
+            train: Number(r.train_tickets),
+            total: Number(r.total_tickets),
+        }));
+    }
+    // =========================================================================
+    // Legacy Booking Methods (Maintained for backward compatibility and audits)
+    // =========================================================================
     static async listBookings(user, filters = {}) {
         const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, filters.locationId, 'b');
         const conditions = ['1 = 1'];
@@ -185,7 +632,6 @@ export class TravelService {
             conditions.push('b.employee_id = ?');
             params.push(filters.employeeId);
         }
-        // Date filters (on booking_date)
         if (filters.datePreset === 'today') {
             conditions.push('b.booking_date = CURDATE()');
         }
@@ -210,7 +656,6 @@ export class TravelService {
             conditions.push('b.booking_date <= ?');
             params.push(filters.endDate);
         }
-        // Search filter
         if (filters.search && filters.search.trim()) {
             const q = `%${filters.search.trim()}%`;
             conditions.push(`(
@@ -220,13 +665,11 @@ export class TravelService {
         b.source_location LIKE ? OR
         b.destination_location LIKE ? OR
         e.full_name LIKE ? OR
-        e.employee_code LIKE ? OR
-        EXISTS (SELECT 1 FROM travel_passengers tp WHERE tp.booking_id = b.id AND tp.passenger_name LIKE ?)
+        e.employee_code LIKE ?
       )`);
-            params.push(q, q, q, q, q, q, q, q);
+            params.push(q, q, q, q, q, q, q);
         }
         const whereClause = conditions.join(' AND ');
-        // Count
         const totalRow = await queryOne(`SELECT COUNT(*) AS count
        FROM travel_bookings b
        JOIN employees e ON e.id = b.employee_id
@@ -278,26 +721,18 @@ export class TravelService {
        WHERE ${whereClause}
        ORDER BY b.booking_date DESC, b.id DESC
        LIMIT ? OFFSET ?`, [...params, limit, offset]);
-        // Fetch passenger names snippet for listed bookings
         const bookingIds = rows.map((r) => r.id);
-        let passengerMap = {};
+        let passengers = [];
         if (bookingIds.length > 0) {
-            const pRows = await query(`SELECT id, booking_id, passenger_name, seat_berth, status
+            passengers = await query(`SELECT id, booking_id, passenger_name, age, gender, seat_berth, ticket_number, status
          FROM travel_passengers
-         WHERE booking_id IN (${bookingIds.map(() => '?').join(',')})
-         ORDER BY id ASC`, bookingIds);
-            passengerMap = pRows.reduce((acc, p) => {
-                const bid = Number(p.booking_id);
-                if (!acc[bid])
-                    acc[bid] = [];
-                acc[bid].push({
-                    id: Number(p.id),
-                    passengerName: p.passenger_name,
-                    seatBerth: p.seat_berth,
-                    status: p.status,
-                });
-                return acc;
-            }, {});
+         WHERE booking_id IN (${bookingIds.map(() => '?').join(',')})`, bookingIds);
+        }
+        const passByBooking = new Map();
+        for (const p of passengers) {
+            const arr = passByBooking.get(p.booking_id) || [];
+            arr.push(p);
+            passByBooking.set(p.booking_id, arr);
         }
         return {
             items: rows.map((r) => ({
@@ -336,17 +771,22 @@ export class TravelService {
                 cancelledAt: r.cancelled_at,
                 createdAt: r.created_at,
                 updatedAt: r.updated_at,
-                passengers: passengerMap[Number(r.id)] ?? [],
+                passengers: (passByBooking.get(r.id) || []).map((p) => ({
+                    id: Number(p.id),
+                    passengerName: p.passenger_name,
+                    age: p.age ? Number(p.age) : null,
+                    gender: p.gender,
+                    seatBerth: p.seat_berth,
+                    ticketNumber: p.ticket_number,
+                    status: p.status,
+                })),
             })),
             total,
             page,
             limit,
-            totalPages: Math.ceil(total / limit),
+            totalPages: Math.ceil(total / limit) || 1,
         };
     }
-    /**
-     * Get single booking with all passengers and full activity audit trail
-     */
     static async getBooking(user, id) {
         const row = await queryOne(`SELECT
         b.id,
@@ -391,18 +831,11 @@ export class TravelService {
        WHERE b.id = ?`, [id]);
         if (!row)
             throw ApiError.notFound('Travel booking not found.');
-        // Assert user has access to this location
         const allowed = await allowedLocationIds(user);
         if (allowed !== null && !allowed.includes(Number(row.location_id))) {
-            throw ApiError.forbidden('You do not have permission to view bookings for this store location.');
+            throw ApiError.forbidden('You do not have access to view bookings for this store location.');
         }
-        // Passengers
-        const passengers = await query(`SELECT id, passenger_name, age, gender, seat_berth, ticket_number, status,
-              DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
-       FROM travel_passengers
-       WHERE booking_id = ?
-       ORDER BY id ASC`, [id]);
-        // Audit logs
+        const passengers = await query('SELECT * FROM travel_passengers WHERE booking_id = ? ORDER BY id ASC', [id]);
         const logs = await query(`SELECT
         l.id,
         l.actor_id,
@@ -461,7 +894,6 @@ export class TravelService {
                 seatBerth: p.seat_berth,
                 ticketNumber: p.ticket_number,
                 status: p.status,
-                createdAt: p.created_at,
             })),
             logs: logs.map((l) => ({
                 id: Number(l.id),
@@ -476,27 +908,24 @@ export class TravelService {
             })),
         };
     }
-    /**
-     * Create a new travel booking with multi-passenger support & audit log
-     */
     static async createBooking(user, input) {
-        // 1. Validate employee & target location
-        const emp = await queryOne('SELECT id, location_id, full_name FROM employees WHERE id = ?', [input.employeeId]);
-        if (!emp)
-            throw ApiError.badRequest('Selected employee does not exist.');
-        const targetLocationId = input.locationId ? Number(input.locationId) : Number(emp.location_id);
-        const allowed = await allowedLocationIds(user);
-        if (allowed !== null && !allowed.includes(targetLocationId)) {
-            throw ApiError.forbidden('You cannot book travel for an employee outside your permitted store locations.');
+        let locationId = input.locationId;
+        if (!locationId) {
+            const emp = await queryOne('SELECT location_id FROM employees WHERE id = ?', [input.employeeId]);
+            locationId = emp?.location_id || 1;
         }
-        const passengerCount = Array.isArray(input.passengers) && input.passengers.length > 0 ? input.passengers.length : 1;
-        const bookingDate = input.bookingDate || new Date().toISOString().split('T')[0];
-        // Generate unique reference
-        const dateStr = bookingDate.replace(/-/g, '');
-        const randomSuffix = Math.floor(100 + Math.random() * 900);
-        const bookingReference = `TRV-${dateStr}-${randomSuffix}`;
+        const allowed = await allowedLocationIds(user);
+        if (allowed !== null && !allowed.includes(Number(locationId))) {
+            throw ApiError.forbidden('You do not have permission to book travel for this store location.');
+        }
         return transaction(async (conn) => {
-            const res = await txExecute(conn, `INSERT INTO travel_bookings (
+            const refCountRow = await queryOne('SELECT COUNT(*) AS count FROM travel_bookings');
+            const nextSeq = (Number(refCountRow?.count || 0) + 1).toString().padStart(4, '0');
+            const datePart = (input.bookingDate || getIndianToday()).replace(/-/g, '');
+            const bookingReference = `TRV-${datePart}-${nextSeq}`;
+            const passengerCount = Array.isArray(input.passengers) && input.passengers.length > 0 ? input.passengers.length : 1;
+            const status = input.status || 'confirmed';
+            const insertResult = await txExecute(conn, `INSERT INTO travel_bookings (
           booking_reference, employee_id, location_id, transport_type, status,
           booking_date, booked_at, journey_date, journey_time, return_date,
           source_location, destination_location, boarding_point, dropping_point,
@@ -505,71 +934,81 @@ export class TravelService {
         ) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
                 bookingReference,
                 input.employeeId,
-                targetLocationId,
+                locationId,
                 input.transportType,
-                input.status || 'confirmed',
-                bookingDate,
+                status,
+                input.bookingDate || getIndianToday(),
                 input.journeyDate,
                 input.journeyTime || null,
                 input.returnDate || null,
-                input.sourceLocation,
-                input.destinationLocation,
-                input.boardingPoint || null,
-                input.droppingPoint || null,
-                input.operatorOrTrainName || null,
-                input.trainNumber || null,
-                input.pnrOrTicketNumber || null,
-                input.seatClass || null,
-                input.seatNumbers || null,
+                input.sourceLocation.trim(),
+                input.destinationLocation.trim(),
+                input.boardingPoint?.trim() || null,
+                input.droppingPoint?.trim() || null,
+                input.operatorOrTrainName?.trim() || null,
+                input.trainNumber?.trim() || null,
+                input.pnrOrTicketNumber?.trim() || null,
+                input.seatClass?.trim() || null,
+                input.seatNumbers?.trim() || null,
                 passengerCount,
                 input.totalAmount || 0,
-                input.purpose || null,
+                input.purpose?.trim() || null,
                 user.id,
-                input.notes || null,
+                input.notes?.trim() || null,
                 input.attachmentUrl || null,
             ]);
-            const bookingId = Number(res.insertId);
-            // Insert passengers
-            const passengersToInsert = Array.isArray(input.passengers) && input.passengers.length > 0
-                ? input.passengers
-                : [{ passengerName: emp.full_name, status: input.status === 'cancelled' ? 'cancelled' : 'confirmed' }];
-            for (const p of passengersToInsert) {
-                await txExecute(conn, `INSERT INTO travel_passengers (
-            booking_id, passenger_name, age, gender, seat_berth, ticket_number, status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-                    bookingId,
-                    p.passengerName.trim(),
-                    p.age || null,
-                    p.gender || null,
-                    p.seatBerth || null,
-                    p.ticketNumber || input.pnrOrTicketNumber || null,
-                    p.status || (input.status === 'cancelled' ? 'cancelled' : 'confirmed'),
-                ]);
+            const bookingId = insertResult.insertId;
+            if (Array.isArray(input.passengers) && input.passengers.length > 0) {
+                for (const p of input.passengers) {
+                    await txExecute(conn, `INSERT INTO travel_passengers (
+              booking_id, passenger_name, age, gender, seat_berth, ticket_number, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+                        bookingId,
+                        p.passengerName.trim(),
+                        p.age || null,
+                        p.gender || null,
+                        p.seatBerth || null,
+                        p.ticketNumber || null,
+                        p.status || (status === 'confirmed' ? 'confirmed' : 'waitlisted'),
+                    ]);
+                }
             }
-            // Initial audit log
             await txExecute(conn, `INSERT INTO travel_booking_logs (
           booking_id, actor_id, action, previous_status, new_status, remarks
-        ) VALUES (?, ?, 'created', NULL, ?, ?)`, [bookingId, user.id, input.status || 'confirmed', input.notes || 'Booking entered into system']);
-            // Broadcast realtime event
+        ) VALUES (?, ?, 'created', NULL, ?, 'Travel booking created')`, [bookingId, user.id, status]);
+            // Also sync to daily_ticket_counts for aggregate reporting
+            await txExecute(conn, `INSERT INTO daily_ticket_counts (
+          booking_date, location_id, ticket_type, ticket_count, employee_id, notes
+        ) VALUES (?, ?, ?, ?, ?, ?)`, [
+                input.bookingDate || getIndianToday(),
+                locationId,
+                input.transportType,
+                passengerCount,
+                input.employeeId,
+                input.purpose || 'HR Booking',
+            ]);
             broadcastEvent('travel:updated', {
                 bookingId,
                 action: 'created',
-                locationId: targetLocationId,
                 transportType: input.transportType,
+                locationId: Number(locationId),
+                passengerCount,
             });
-            return { bookingId, bookingReference };
+            return {
+                id: bookingId,
+                bookingReference,
+                passengerCount,
+                status,
+            };
         });
     }
-    /**
-     * Update booking details
-     */
     static async updateBooking(user, id, input) {
         const existing = await queryOne('SELECT id, location_id, status FROM travel_bookings WHERE id = ?', [id]);
         if (!existing)
             throw ApiError.notFound('Travel booking not found.');
         const allowed = await allowedLocationIds(user);
         if (allowed !== null && !allowed.includes(Number(existing.location_id))) {
-            throw ApiError.forbidden('You do not have permission to modify bookings for this location.');
+            throw ApiError.forbidden('You do not have permission to update bookings for this store location.');
         }
         return transaction(async (conn) => {
             const updates = [];
@@ -645,7 +1084,6 @@ export class TravelService {
             if (Array.isArray(input.passengers) && input.passengers.length > 0) {
                 updates.push('passenger_count = ?');
                 params.push(input.passengers.length);
-                // Replace passengers
                 await txExecute(conn, 'DELETE FROM travel_passengers WHERE booking_id = ?', [id]);
                 for (const p of input.passengers) {
                     await txExecute(conn, `INSERT INTO travel_passengers (
@@ -676,9 +1114,6 @@ export class TravelService {
             return { success: true };
         });
     }
-    /**
-     * Change booking status (e.g. Confirm, Cancel, Reject, Complete)
-     */
     static async changeStatus(user, id, status, cancellationReason, remarks) {
         const existing = await queryOne('SELECT id, location_id, status FROM travel_bookings WHERE id = ?', [id]);
         if (!existing)
@@ -695,7 +1130,6 @@ export class TravelService {
             cancelled_at = NOW(),
             cancelled_by_id = ?
            WHERE id = ?`, [cancellationReason || 'Cancelled by manager/HR', user.id, id]);
-                // Also update passengers status to cancelled
                 await txExecute(conn, "UPDATE travel_passengers SET status = 'cancelled' WHERE booking_id = ?", [id]);
             }
             else {
@@ -716,41 +1150,6 @@ export class TravelService {
             return { success: true, status };
         });
     }
-    /**
-     * Get daily trend chart points for bus vs train tickets
-     */
-    static async getDailyChart(user, filters = {}) {
-        const { clause: locClause, params: locParams } = await this.buildLocationFilter(user, filters.locationId, 'b');
-        // Default to last 14 days up to today
-        let dateFilter = 'b.booking_date >= DATE_SUB(CURDATE(), INTERVAL 13 DAY) AND b.booking_date <= CURDATE()';
-        const params = [...locParams];
-        if (filters.startDate && filters.endDate) {
-            dateFilter = 'b.booking_date BETWEEN ? AND ?';
-            params.unshift(filters.startDate, filters.endDate);
-        }
-        else if (filters.startDate) {
-            dateFilter = 'b.booking_date >= ? AND b.booking_date <= CURDATE()';
-            params.unshift(filters.startDate);
-        }
-        const rows = await query(`SELECT
-        DATE_FORMAT(b.booking_date, '%Y-%m-%d') AS booking_date,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'bus' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS bus_tickets,
-        COALESCE(SUM(CASE WHEN b.transport_type = 'train' AND b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS train_tickets,
-        COALESCE(SUM(CASE WHEN b.status != 'cancelled' THEN b.passenger_count ELSE 0 END), 0) AS total_tickets
-       FROM travel_bookings b
-       WHERE ${dateFilter} ${locClause}
-       GROUP BY b.booking_date
-       ORDER BY b.booking_date ASC`, params);
-        return rows.map((r) => ({
-            date: r.booking_date,
-            bus: Number(r.bus_tickets),
-            train: Number(r.train_tickets),
-            total: Number(r.total_tickets),
-        }));
-    }
-    /**
-     * Export bookings as CSV format for Excel report download
-     */
     static async exportBookingsCsv(user, filters = {}) {
         const result = await this.listBookings(user, { ...filters, limit: 10000, page: 1 });
         const headers = [
@@ -783,7 +1182,7 @@ export class TravelService {
             const str = String(val).replace(/"/g, '""');
             return str.includes(',') || str.includes('\n') || str.includes('"') ? `"${str}"` : str;
         };
-        const lines = [headers.join(',')];
+        const lines = ['\uFEFF' + headers.map(escapeCsv).join(',')];
         for (const b of result.items) {
             const passengerNames = b.passengers.map((p) => p.passengerName).join('; ');
             lines.push([
