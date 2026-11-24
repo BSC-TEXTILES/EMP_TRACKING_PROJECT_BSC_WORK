@@ -91,7 +91,10 @@ export default function Dashboard() {
 
   useSocketEvent('task:updated', () => void reload());
   useSocketEvent('task:created', () => void reload());
-  useSocketEvent('attendance:update', () => void attendance.refresh());
+  useSocketEvent('attendance:update', () => {
+    void attendance.refresh();
+    void reload();
+  });
   useSocketEvent('report:updated', () => {
     void reload();
     loadTodayReport();
@@ -256,6 +259,257 @@ export default function Dashboard() {
           </div>
         </div>
       ) : null}
+
+      {/* Dedicated Daily Performance Section */}
+      <Card className="card-pad border-brand-300/80 bg-gradient-to-br from-white via-brand-50/20 to-ink-50/40 shadow-xs">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-ink-100">
+          <div className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-2xs">
+              <Icon name="activity" size={18} />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-ink-900">Daily Performance</h3>
+                <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[11px] font-bold text-brand-800">
+                  {data.dailyPerformance?.date ?? data.today.date}
+                </span>
+                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" /> Live
+                </span>
+              </div>
+              <p className="text-xs text-ink-500">
+                Live attendance, task execution metrics, EOD report review, and 100-point performance score
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link to="/tasks" className="btn-secondary btn-sm">
+              <Icon name="tasks" size={14} /> Store Tasks & SOP
+            </Link>
+            <Link to="/reports?tab=mine" className="btn-primary btn-sm">
+              <Icon name="report" size={14} /> EOD Report
+            </Link>
+          </div>
+        </div>
+
+        {/* Top Performance Score & Status Banner */}
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {/* 100-Point Score Card */}
+          <div className="rounded-xl border border-brand-200 bg-white p-3.5 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-500">100-Point Performance</span>
+              <Badge
+                tone={
+                  (data.dailyPerformance?.score?.totalScore ?? 0) >= 80
+                    ? 'success'
+                    : (data.dailyPerformance?.score?.totalScore ?? 0) >= 60
+                      ? 'warning'
+                      : 'danger'
+                }
+              >
+                {data.dailyPerformance?.score?.rating ?? 'Evaluating'}
+              </Badge>
+            </div>
+            <div className="my-2 flex items-baseline gap-2">
+              <span className="text-3xl font-black text-brand-950">
+                {data.dailyPerformance?.score?.totalScore !== null && data.dailyPerformance?.score?.totalScore !== undefined
+                  ? `${data.dailyPerformance.score.totalScore}`
+                  : '—'}
+              </span>
+              <span className="text-xs font-semibold text-ink-400">/ 100 pts</span>
+            </div>
+            <div className="text-[11px] text-ink-500 flex items-center justify-between">
+              <span>Points Earned:</span>
+              <strong className="text-ink-800">
+                {data.dailyPerformance?.score?.earnedPoints ?? 0} / {data.dailyPerformance?.score?.measuredMax ?? 100}
+              </strong>
+            </div>
+          </div>
+
+          {/* Today's Working Hours */}
+          <div className="rounded-xl border border-emerald-200 bg-white p-3.5 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Working Hours</span>
+              <StatusBadge status={data.dailyPerformance?.attendance?.status ?? data.today.attendance?.status ?? 'absent'} />
+            </div>
+            <div className="my-2">
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-2xl font-black text-emerald-950">
+                  {minutesToHours(data.dailyPerformance?.attendance?.totalMinutes ?? data.today.attendance?.totalMinutes ?? 0)}
+                </span>
+                <span className="text-xs font-medium text-emerald-700">net worked</span>
+              </div>
+            </div>
+            <div className="text-[11px] text-ink-500 flex items-center justify-between border-t border-ink-100 pt-1.5">
+              <span>Punch In: <strong>{formatTime(data.dailyPerformance?.attendance?.checkInAt ?? data.today.attendance?.checkInAt)}</strong></span>
+              <span>Break: <strong>{minutesToHours(data.dailyPerformance?.attendance?.breakMinutes ?? data.today.attendance?.breakMinutes ?? 0)}</strong></span>
+            </div>
+          </div>
+
+          {/* Daily Task Completion */}
+          <div className="rounded-xl border border-blue-200 bg-white p-3.5 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-500">Task Completion</span>
+              <span className="text-xs font-black text-blue-700">
+                {data.dailyPerformance?.tasks?.completionRate ?? 0}%
+              </span>
+            </div>
+            <div className="my-2">
+              <ProgressBar
+                value={data.dailyPerformance?.tasks?.completionRate ?? 0}
+                tone={(data.dailyPerformance?.tasks?.completionRate ?? 0) >= 80 ? 'success' : 'brand'}
+              />
+            </div>
+            <div className="text-[11px] text-ink-500 flex items-center justify-between">
+              <span>Completed Today:</span>
+              <strong className="text-ink-800">
+                {data.dailyPerformance?.tasks?.completed ?? 0} of {data.dailyPerformance?.tasks?.assigned ?? 0} assigned
+              </strong>
+            </div>
+          </div>
+
+          {/* EOD Report Status */}
+          <div className="rounded-xl border border-violet-200 bg-white p-3.5 shadow-2xs flex flex-col justify-between">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-ink-500">EOD Report Status</span>
+              <Badge
+                tone={
+                  data.dailyPerformance?.report?.status === 'approved'
+                    ? 'success'
+                    : data.dailyPerformance?.report?.status === 'submitted'
+                      ? 'brand'
+                      : data.dailyPerformance?.report?.status === 'changes_requested'
+                        ? 'warning'
+                        : 'neutral'
+                }
+              >
+                {data.dailyPerformance?.report?.status ? titleize(data.dailyPerformance.report.status) : 'Not Submitted'}
+              </Badge>
+            </div>
+            <div className="my-2 text-xs">
+              {data.dailyPerformance?.report?.submittedAt ? (
+                <p className="font-semibold text-ink-800">
+                  Submitted at {formatTime(data.dailyPerformance.report.submittedAt)}
+                </p>
+              ) : (
+                <p className="text-amber-800 font-medium">Pending submission before shift sign-off</p>
+              )}
+              {data.dailyPerformance?.report?.reviewNote && (
+                <p className="text-[11px] text-ink-500 truncate mt-0.5" title={data.dailyPerformance.report.reviewNote}>
+                  Reviewer: {data.dailyPerformance.report.reviewNote}
+                </p>
+              )}
+            </div>
+            <div className="text-[11px] text-ink-500">
+              <Link to="/reports?tab=mine" className="text-brand-600 hover:underline font-semibold">
+                Open Daily Report →
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* Task Workflow Metrics Grid */}
+        <div className="mt-3 grid gap-2.5 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="rounded-lg border border-ink-200/80 bg-white p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-ink-400">Assigned</span>
+            <p className="text-xl font-black text-ink-900 mt-0.5">{data.dailyPerformance?.tasks?.assigned ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-blue-800">In Progress</span>
+            <p className="text-xl font-black text-blue-900 mt-0.5">{data.dailyPerformance?.tasks?.inProgress ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-amber-800">Pending</span>
+            <p className="text-xl font-black text-amber-900 mt-0.5">{data.dailyPerformance?.tasks?.pending ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-purple-200 bg-purple-50/50 p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-purple-800">Under Review</span>
+            <p className="text-xl font-black text-purple-900 mt-0.5">{data.dailyPerformance?.tasks?.underReview ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-emerald-800">Completed</span>
+            <p className="text-xl font-black text-emerald-900 mt-0.5">{data.dailyPerformance?.tasks?.completed ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-rose-200 bg-rose-50/50 p-2.5 text-center shadow-2xs">
+            <span className="text-[11px] font-bold uppercase text-rose-800">Overdue</span>
+            <p className="text-xl font-black text-rose-900 mt-0.5">{data.dailyPerformance?.tasks?.overdue ?? 0}</p>
+          </div>
+        </div>
+
+        {/* 100-Point Score Breakdown (When Available) */}
+        {data.dailyPerformance?.score?.breakdown && data.dailyPerformance.score.breakdown.length > 0 && (
+          <div className="mt-3 rounded-xl border border-ink-200/80 bg-white p-3">
+            <p className="text-xs font-bold uppercase tracking-wider text-ink-600 mb-2">Performance Score Breakdown</p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              {data.dailyPerformance.score.breakdown.map((b) => (
+                <div key={b.key} className="rounded-lg border border-ink-100 bg-ink-50/50 p-2 text-xs">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="font-medium text-ink-700 truncate" title={b.label}>{b.label}</span>
+                    <strong className="text-ink-900 font-bold">{b.score !== null ? `${b.score}/${b.max}` : '—'}</strong>
+                  </div>
+                  <div className="mt-1">
+                    <ProgressBar
+                      value={b.score !== null ? Math.round((b.score / b.max) * 100) : 0}
+                      tone={b.score !== null && b.score / b.max >= 0.8 ? 'success' : 'brand'}
+                    />
+                  </div>
+                  <p className="mt-1 text-[10px] text-ink-400 truncate" title={b.basis}>{b.basis}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Daily Activity Timeline - 7 Checkpoints */}
+        {data.dailyPerformance?.timeline && data.dailyPerformance.timeline.length > 0 && (
+          <div className="mt-3 rounded-xl border border-ink-200/80 bg-white p-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-bold uppercase tracking-wider text-ink-600">Daily Activity Timeline · 7 Checkpoints</p>
+              <Link to="/tasks" className="text-xs font-medium text-brand-600 hover:underline">
+                View in Tasks →
+              </Link>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-7">
+              {data.dailyPerformance.timeline.map((cp) => (
+                <div
+                  key={cp.id}
+                  className={cx(
+                    'rounded-lg border p-2 text-xs transition',
+                    cp.status === 'verified'
+                      ? 'border-emerald-300 bg-emerald-50/60'
+                      : cp.status === 'submitted'
+                        ? 'border-blue-300 bg-blue-50/60'
+                        : 'border-ink-200 bg-ink-50/40'
+                  )}
+                >
+                  <div className="flex items-center justify-between text-[10px]">
+                    <span className="font-bold text-ink-700 truncate">{cp.time_slot}</span>
+                    <span
+                      className={cx(
+                        'rounded px-1.5 py-0.2 font-bold uppercase text-[9px]',
+                        cp.status === 'verified'
+                          ? 'bg-emerald-200 text-emerald-900'
+                          : cp.status === 'submitted'
+                            ? 'bg-blue-200 text-blue-900'
+                            : 'bg-ink-200 text-ink-700'
+                      )}
+                    >
+                      {cp.status}
+                    </span>
+                  </div>
+                  {cp.summary ? (
+                    <p className="mt-1 text-[11px] text-ink-600 line-clamp-2" title={cp.summary}>
+                      {cp.summary}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[10px] text-ink-400 italic">Pending checkpoint</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard

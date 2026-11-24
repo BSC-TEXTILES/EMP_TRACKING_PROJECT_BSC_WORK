@@ -530,5 +530,58 @@ export interface DashboardData {
   };
   myTasks?: TaskSummary[];
   teamTasks?: TaskSummary[];
+  dailyPerformance?: {
+    date: string;
+    attendance: {
+      status: string;
+      checkInAt: string | null;
+      checkOutAt: string | null;
+      totalMinutes: number;
+      breakMinutes: number;
+      elapsedSeconds: number;
+      isLate: boolean;
+      earlyDeparture: boolean;
+    };
+    tasks: {
+      assigned: number;
+      completed: number;
+      inProgress: number;
+      pending: number;
+      underReview: number;
+      approved: number;
+      overdue: number;
+      completionRate: number;
+    };
+    score: {
+      totalScore: number | null;
+      earnedPoints: number;
+      measuredMax: number;
+      rating: string;
+      breakdown: {
+        key: string;
+        label: string;
+        max: number;
+        score: number | null;
+        measured: boolean;
+        basis: string;
+      }[];
+    } | null;
+    report: {
+      status: string;
+      submittedAt: string | null;
+      reviewedBy: string | null;
+      reviewedAt: string | null;
+      reviewNote: string | null;
+    } | null;
+    timeline: {
+      id: number;
+      time_slot: string;
+      status: 'pending' | 'submitted' | 'verified';
+      summary: string | null;
+      issues_identified: string | null;
+      submitted_at: string | null;
+      verified_at: string | null;
+    }[];
+  };
   date: string;
 }

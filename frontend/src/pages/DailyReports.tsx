@@ -39,6 +39,7 @@ interface AssignedTaskItem {
   status: string;
   priority: string;
   dueDate: string | null;
+  timeSpentMinutes?: number;
 }
 
 interface Report {
@@ -83,6 +84,9 @@ interface Suggestions {
   tasksCompleted: number;
   tasksInProgress: number;
   tasksPending: number;
+  tasksUnderReview?: number;
+  tasksApproved?: number;
+  timeSpentMinutes?: number;
   totalAssigned?: number;
   hasAssignedTasks?: boolean;
   assignedTasks?: AssignedTaskItem[];
@@ -602,8 +606,8 @@ export default function DailyReports() {
                   </span>
                 </div>
 
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3.5">
+                <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-emerald-800">Tasks Completed</span>
                       <Icon name="check" size={16} className="text-emerald-600" />
@@ -612,16 +616,16 @@ export default function DailyReports() {
                     <p className="text-[11px] text-emerald-700">Finished in database today</p>
                   </div>
 
-                  <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3.5">
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-blue-800">In Progress</span>
                       <Icon name="clock" size={16} className="text-blue-600" />
                     </div>
                     <p className="mt-1 text-2xl font-black text-blue-900">{form.tasksInProgress}</p>
-                    <p className="text-[11px] text-blue-700">Currently active assignments</p>
+                    <p className="text-[11px] text-blue-700">Currently active</p>
                   </div>
 
-                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3.5">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-semibold text-amber-800">Tasks Pending</span>
                       <Icon name="alertTriangle" size={16} className="text-amber-600" />
@@ -629,13 +633,42 @@ export default function DailyReports() {
                     <p className="mt-1 text-2xl font-black text-amber-900">{form.tasksPending}</p>
                     <p className="text-[11px] text-amber-700">Awaiting action</p>
                   </div>
+
+                  <div className="rounded-xl border border-purple-200 bg-purple-50/60 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-purple-800">Under Review</span>
+                      <Icon name="help" size={16} className="text-purple-600" />
+                    </div>
+                    <p className="mt-1 text-2xl font-black text-purple-900">{suggestions?.tasksUnderReview ?? 0}</p>
+                    <p className="text-[11px] text-purple-700">Submitted for review</p>
+                  </div>
+
+                  <div className="rounded-xl border border-teal-200 bg-teal-50/60 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-teal-800">Approved</span>
+                      <Icon name="check" size={16} className="text-teal-600" />
+                    </div>
+                    <p className="mt-1 text-2xl font-black text-teal-900">{suggestions?.tasksApproved ?? form.tasksCompleted}</p>
+                    <p className="text-[11px] text-teal-700">Verified & signed off</p>
+                  </div>
+
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-indigo-800">Time Spent</span>
+                      <Icon name="clock" size={16} className="text-indigo-600" />
+                    </div>
+                    <p className="mt-1 text-xl font-black text-indigo-900">
+                      {suggestions?.timeSpentMinutes ? minutesToHours(suggestions.timeSpentMinutes) : '0m'}
+                    </p>
+                    <p className="text-[11px] text-indigo-700">Logged on tasks</p>
+                  </div>
                 </div>
 
                 {/* Assigned Tasks Drawer */}
                 {suggestions?.assignedTasks && suggestions.assignedTasks.length > 0 ? (
                   <div className="rounded-lg border border-ink-200/80 bg-ink-50/50 p-3">
                     <p className="text-xs font-bold text-ink-700 mb-2">Today&apos;s Assigned Tasks:</p>
-                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                       {suggestions.assignedTasks.map((t) => (
                         <div key={t.id} className="flex items-center justify-between gap-2 rounded bg-white p-2 text-xs border border-ink-100 shadow-2xs">
                           <div className="flex items-center gap-2 truncate">
@@ -643,6 +676,11 @@ export default function DailyReports() {
                             <span className="font-medium text-ink-800 truncate">{t.title}</span>
                           </div>
                           <div className="flex items-center gap-1.5 shrink-0">
+                            {Boolean(t.timeSpentMinutes) && (
+                              <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700 border border-indigo-200">
+                                {minutesToHours(t.timeSpentMinutes!)}
+                              </span>
+                            )}
                             <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-bold text-ink-700">{t.priority}</span>
                             <StatusBadge status={t.status} />
                           </div>
@@ -670,113 +708,6 @@ export default function DailyReports() {
                     placeholder="Provide a detailed summary of the operational responsibilities, sales, client queries, code, or tasks completed during your shift..."
                     minLength={10}
                     required
-                  />
-                </Field>
-
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="label mb-0">Problems Encountered (Optional)</span>
-                      {form.problems && (
-                        <button
-                          type="button"
-                          className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
-                          onClick={() => setForm((prev) => ({ ...prev, problems: '' }))}
-                        >
-                          Clear
-                        </button>
-                      )}
-                    </div>
-                    <textarea
-                      className="input min-h-[85px]"
-                      value={form.problems}
-                      onChange={(event) => setForm({ ...form, problems: event.target.value })}
-                      placeholder="Mention any delays, system bugs, or obstacles faced today..."
-                    />
-                    <span className="mt-1 block text-xs text-ink-400">Operational issues, client blockers, technical delays</span>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {COMMON_PROBLEMS.map((prob) => {
-                        const active = isChipActive(form.problems, prob);
-                        return (
-                          <button
-                            key={prob}
-                            type="button"
-                            className={cx(
-                              'rounded-full px-2.5 py-0.5 text-[11px] transition-colors border flex items-center gap-1',
-                              active
-                                ? 'bg-amber-50 text-amber-900 border-amber-300 font-semibold shadow-xs'
-                                : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent font-medium'
-                            )}
-                            onClick={() =>
-                              setForm((prev) => ({
-                                ...prev,
-                                problems: toggleChip(prev.problems, prob),
-                              }))
-                            }
-                          >
-                            <span className="font-bold">{active ? '−' : '+'}</span>
-                            <span>{prob}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="label mb-0">Support Required (Optional)</span>
-                      {form.supportRequired && (
-                        <button
-                          type="button"
-                          className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
-                          onClick={() => setForm((prev) => ({ ...prev, supportRequired: '' }))}
-                        >
-                          Clear
-                        </button>
-                      )}
-                    </div>
-                    <textarea
-                      className="input min-h-[85px]"
-                      value={form.supportRequired}
-                      onChange={(event) => setForm({ ...form, supportRequired: event.target.value })}
-                      placeholder="e.g. Need IT hardware replacement, Store Manager approval for stock return, HR clarification on leaves..."
-                    />
-                    <span className="mt-1 block text-xs text-ink-400">Specify the assistance or department/manager needed</span>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {COMMON_SUPPORT_REQUESTS.map((req) => {
-                        const active = isChipActive(form.supportRequired, req);
-                        return (
-                          <button
-                            key={req}
-                            type="button"
-                            className={cx(
-                              'rounded-full px-2.5 py-0.5 text-[11px] transition-colors border flex items-center gap-1',
-                              active
-                                ? 'bg-brand-50 text-brand-900 border-brand-300 font-semibold shadow-xs'
-                                : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent font-medium'
-                            )}
-                            onClick={() =>
-                              setForm((prev) => ({
-                                ...prev,
-                                supportRequired: toggleChip(prev.supportRequired, req),
-                              }))
-                            }
-                          >
-                            <span className="font-bold">{active ? '−' : '+'}</span>
-                            <span>{req}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <Field label="Tomorrow's Plan (Optional)" hint="Activities, follow-ups, and pending goals planned for next working day">
-                  <textarea
-                    className="input min-h-[80px]"
-                    value={form.tomorrowPlan}
-                    onChange={(event) => setForm({ ...form, tomorrowPlan: event.target.value })}
-                    placeholder="List planned activities, follow-ups with customers, or pending deliveries..."
                   />
                 </Field>
 
@@ -1486,111 +1417,6 @@ export default function DailyReports() {
                   onChange={(e) => setEditForm({ ...editForm, summary: e.target.value })}
                   placeholder="Summarise the work you completed, decisions made and outcomes delivered."
                   required
-                />
-              </Field>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="label mb-0">Problems encountered (optional)</span>
-                    {editForm.problems && (
-                      <button
-                        type="button"
-                        className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
-                        onClick={() => setEditForm((prev) => ({ ...prev, problems: '' }))}
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="input min-h-[75px]"
-                    value={editForm.problems}
-                    placeholder="Mention any technical or operational delays…"
-                    onChange={(e) => setEditForm({ ...editForm, problems: e.target.value })}
-                  />
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {COMMON_PROBLEMS.map((prob) => {
-                      const active = isChipActive(editForm.problems, prob);
-                      return (
-                        <button
-                          key={prob}
-                          type="button"
-                          className={cx(
-                            'rounded-full px-2 py-0.5 text-[10px] transition-colors border flex items-center gap-1',
-                            active
-                              ? 'bg-amber-50 text-amber-900 border-amber-300 font-semibold'
-                              : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent'
-                          )}
-                          onClick={() =>
-                            setEditForm((prev) => ({
-                              ...prev,
-                              problems: toggleChip(prev.problems, prob),
-                            }))
-                          }
-                        >
-                          <span className="font-bold">{active ? '−' : '+'}</span>
-                          <span>{prob}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="label mb-0">Support required (optional)</span>
-                    {editForm.supportRequired && (
-                      <button
-                        type="button"
-                        className="text-[11px] text-ink-400 hover:text-ink-600 font-medium"
-                        onClick={() => setEditForm((prev) => ({ ...prev, supportRequired: '' }))}
-                      >
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                  <textarea
-                    className="input min-h-[75px]"
-                    value={editForm.supportRequired}
-                    placeholder="Mention responsible department or manager…"
-                    onChange={(e) => setEditForm({ ...editForm, supportRequired: e.target.value })}
-                  />
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {COMMON_SUPPORT_REQUESTS.map((req) => {
-                      const active = isChipActive(editForm.supportRequired, req);
-                      return (
-                        <button
-                          key={req}
-                          type="button"
-                          className={cx(
-                            'rounded-full px-2 py-0.5 text-[10px] transition-colors border flex items-center gap-1',
-                            active
-                              ? 'bg-brand-50 text-brand-900 border-brand-300 font-semibold'
-                              : 'bg-ink-100 hover:bg-ink-200 text-ink-700 border-transparent'
-                          )}
-                          onClick={() =>
-                            setEditForm((prev) => ({
-                              ...prev,
-                              supportRequired: toggleChip(prev.supportRequired, req),
-                            }))
-                          }
-                        >
-                          <span className="font-bold">{active ? '−' : '+'}</span>
-                          <span>{req}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              <Field label="Tomorrow's plan (optional)">
-                <textarea
-                  className="input min-h-[75px]"
-                  value={editForm.tomorrowPlan}
-                  placeholder="Tasks and activities planned for next day…"
-                  onChange={(e) => setEditForm({ ...editForm, tomorrowPlan: e.target.value })}
                 />
               </Field>
 

@@ -507,7 +507,11 @@ export class AttendanceService {
         return AttendanceService.stateFor(employeeId);
     }
     static async history(employeeId, from, to) {
-        const rows = await query(`SELECT * FROM attendance WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date DESC, session_number DESC`, [employeeId, from, to]);
+        const rows = await query(`SELECT a.*,
+              (SELECT ac.status FROM attendance_corrections ac WHERE ac.employee_id = a.employee_id AND ac.work_date = a.work_date ORDER BY ac.id DESC LIMIT 1) AS regularization_status
+       FROM attendance a
+       WHERE a.employee_id = ? AND a.work_date BETWEEN ? AND ?
+       ORDER BY a.work_date DESC, a.session_number DESC`, [employeeId, from, to]);
         return rows.map((r) => ({
             id: Number(r.id),
             date: r.work_date,
@@ -518,9 +522,12 @@ export class AttendanceService {
             totalMinutes: Number(r.total_minutes),
             breakMinutes: Number(r.break_minutes),
             overtimeMinutes: Number(r.overtime_minutes),
+            grossMinutes: Number(r.total_minutes) + Number(r.break_minutes),
+            netMinutes: Number(r.total_minutes),
             isLate: Boolean(r.is_late),
             earlyDeparture: Boolean(r.early_departure),
             autoClosed: Boolean(r.auto_closed),
+            regularizationStatus: r.regularization_status ?? null,
             source: r.source,
         }));
     }
@@ -574,7 +581,8 @@ export class AttendanceService {
         const placeholders = employeeIds.map(() => '?').join(',');
         const rows = await query(`SELECT e.id AS employee_id, e.full_name, dg.title AS designation_title,
               COALESCE(a.status, 'absent') AS status, a.check_in_at, a.check_out_at, COALESCE(a.total_minutes, 0) AS total_minutes,
-              COALESCE(a.break_minutes, 0) AS break_minutes, COALESCE(a.is_late, 0) AS is_late
+              COALESCE(a.break_minutes, 0) AS break_minutes, COALESCE(a.is_late, 0) AS is_late,
+              COALESCE(a.early_departure, 0) AS early_departure, COALESCE(a.overtime_minutes, 0) AS overtime_minutes
        FROM employees e
        LEFT JOIN designations dg ON dg.id = e.designation_id
        LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = ?

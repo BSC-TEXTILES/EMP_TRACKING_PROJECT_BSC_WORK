@@ -6,35 +6,50 @@ import { NotificationService } from './NotificationService.js';
 import { MeetingService } from './MeetingService.js';
 import { DailyReportService } from './DailyReportService.js';
 import { TaskService } from './TaskService.js';
+import { DailyTaskService } from './DailyTaskService.js';
 export class DashboardService {
     static async personal(user) {
         const date = today();
         const period = periodOf(date);
-        const [attendance, taskStats, ticketStats, kpi, upcoming, unreadNotifications, unreadChat, reportStatus, weekly, attendanceSummary, myTasksList, teamTasksList] = await Promise.all([
+        const [attendance, taskStats, ticketStats, kpi, upcoming, unreadNotifications, unreadChat, reportStatus, weekly, attendanceSummary, myTasksList, teamTasksList, dailyScore, todayTasksStats, timelineCheckpoints,] = await Promise.all([
             AttendanceService.stateFor(user.id, date),
             queryOne(`SELECT SUM(t.status IN ('assigned','accepted','in_progress','on_hold')) AS active,
-                  SUM(t.status = 'completed') AS completed,
-                  SUM(t.status IN ('assigned','accepted','in_progress','on_hold','not_started','pending_approval')) AS pending,
-                  SUM(t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')) AS overdue,
-                  SUM(t.status = 'pending_approval') AS awaiting,
-                  SUM(t.status = 'completed' AND DATE(t.completed_at) >= DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS completed_month
-           FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
-           WHERE ta.employee_id = ? AND t.archived_at IS NULL`, [user.id]),
+                SUM(t.status = 'completed') AS completed,
+                SUM(t.status IN ('assigned','accepted','in_progress','on_hold','not_started','pending_approval')) AS pending,
+                SUM(t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')) AS overdue,
+                SUM(t.status = 'pending_approval') AS awaiting,
+                SUM(t.status = 'completed' AND DATE(t.completed_at) >= DATE_FORMAT(CURDATE(), '%Y-%m-01')) AS completed_month
+         FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND t.archived_at IS NULL`, [user.id]),
             queryOne(`SELECT COUNT(*) AS assigned, SUM(status NOT IN ('resolved','closed','cancelled')) AS open,
-                  SUM(status IN ('resolved','closed')) AS resolved
-           FROM tickets WHERE assignee_id = ?`, [user.id]),
+                SUM(status IN ('resolved','closed')) AS resolved
+         FROM tickets WHERE assignee_id = ?`, [user.id]),
             queryOne('SELECT id, period, total_score, category, status FROM employee_kpi_records WHERE employee_id = ? ORDER BY period DESC LIMIT 1', [user.id]),
             MeetingService.upcoming(user, 5),
             NotificationService.unreadCount(user.id),
             ChatService.unreadTotal(user.id),
             DailyReportService.todayStatus(user.id),
             query(`SELECT work_date AS day, total_minutes AS minutes FROM attendance
-           WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date`, [user.id, addDays(date, -6), date]),
+         WHERE employee_id = ? AND work_date BETWEEN ? AND ? ORDER BY work_date`, [user.id, addDays(date, -6), date]),
             AttendanceService.summary(user.id, period),
             TaskService.list(user, { view: 'mine', pageSize: 6 }),
             (user.permissions.includes('tasks.view.team') || user.permissions.includes('tasks.view.all'))
                 ? TaskService.list(user, { view: 'allocated', pageSize: 6 })
                 : Promise.resolve({ items: [] }),
+            DailyTaskService.calculateDailyScore(user.id, date).catch(() => null),
+            queryOne(`SELECT
+           COUNT(*) AS assigned_today,
+           COALESCE(SUM(t.status IN ('completed','verified')), 0) AS completed_today,
+           COALESCE(SUM(t.status IN ('in_progress','accepted','on_hold')), 0) AS in_progress,
+           COALESCE(SUM(t.status IN ('assigned','not_started')), 0) AS pending,
+           COALESCE(SUM(t.status = 'pending_approval'), 0) AS under_review,
+           COALESCE(SUM(t.status IN ('completed','verified')), 0) AS approved,
+           COALESCE(SUM(t.due_date < CURDATE() AND t.status NOT IN ('completed','cancelled','rejected')), 0) AS overdue
+         FROM tasks t
+         JOIN task_assignments ta ON ta.task_id = t.id
+         WHERE ta.employee_id = ? AND t.archived_at IS NULL
+           AND (t.start_date = ? OR t.due_date = ? OR DATE(t.created_at) = ?)`, [user.id, date, date, date]),
+            DailyTaskService.getTimelineCheckpoints(user.id, date).catch(() => []),
         ]);
         const holiday = await queryOne(`SELECT name, holiday_date FROM holidays WHERE holiday_date = ? AND location_id IS NULL LIMIT 1`, [date]);
         return {
@@ -90,6 +105,50 @@ export class DashboardService {
             attendanceSummary,
             myTasks: myTasksList.items,
             teamTasks: teamTasksList.items,
+            dailyPerformance: {
+                date,
+                attendance: {
+                    status: attendance.status,
+                    checkInAt: attendance.checkInAt,
+                    checkOutAt: attendance.checkOutAt,
+                    totalMinutes: attendance.totalMinutes,
+                    breakMinutes: attendance.breakMinutes,
+                    elapsedSeconds: attendance.elapsedSeconds,
+                    isLate: attendance.isLate,
+                    earlyDeparture: attendance.earlyDeparture,
+                },
+                tasks: {
+                    assigned: Number(todayTasksStats?.assigned_today ?? 0),
+                    completed: Number(todayTasksStats?.completed_today ?? 0),
+                    inProgress: Number(todayTasksStats?.in_progress ?? 0),
+                    pending: Number(todayTasksStats?.pending ?? 0),
+                    underReview: Number(todayTasksStats?.under_review ?? 0),
+                    approved: Number(todayTasksStats?.approved ?? 0),
+                    overdue: Number(todayTasksStats?.overdue ?? 0),
+                    completionRate: Number(todayTasksStats?.assigned_today ?? 0) > 0
+                        ? Math.round((Number(todayTasksStats?.completed_today ?? 0) / Number(todayTasksStats?.assigned_today ?? 0)) * 100)
+                        : 0,
+                },
+                score: dailyScore
+                    ? {
+                        totalScore: dailyScore.totalScore,
+                        earnedPoints: dailyScore.earnedPoints,
+                        measuredMax: dailyScore.measuredMax,
+                        rating: dailyScore.rating,
+                        breakdown: dailyScore.breakdown,
+                    }
+                    : null,
+                report: reportStatus
+                    ? {
+                        status: reportStatus.status,
+                        submittedAt: reportStatus.submittedAt,
+                        reviewedBy: reportStatus.reviewedBy,
+                        reviewedAt: reportStatus.reviewedAt,
+                        reviewNote: reportStatus.reviewNote,
+                    }
+                    : null,
+                timeline: timelineCheckpoints ?? [],
+            },
             date: localDate(),
         };
     }

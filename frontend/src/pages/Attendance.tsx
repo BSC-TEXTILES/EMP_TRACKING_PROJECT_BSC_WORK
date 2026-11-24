@@ -22,9 +22,12 @@ interface HistoryRecord {
   totalMinutes: number;
   breakMinutes: number;
   overtimeMinutes: number;
+  grossMinutes?: number;
+  netMinutes?: number;
   isLate: boolean;
   earlyDeparture: boolean;
   autoClosed: boolean;
+  regularizationStatus?: string | null;
   source: string;
 }
 
@@ -61,7 +64,10 @@ interface TeamRow {
   check_in_at: string | null;
   check_out_at: string | null;
   total_minutes: number;
+  break_minutes?: number;
   is_late: number;
+  early_departure?: number;
+  overtime_minutes?: number;
 }
 
 /** Attendance times are stored in UTC; always show them in IST (zone-less values are treated as UTC). */
@@ -236,11 +242,14 @@ export default function Attendance() {
                       <th>Date</th>
                       <th>Session</th>
                       <th>Status</th>
-                      <th>Check in</th>
-                      <th>Check out</th>
-                      <th>Worked</th>
+                      <th>Punch In</th>
+                      <th>Punch Out</th>
+                      <th>Total Duration</th>
                       <th>Break</th>
+                      <th>Net Working Hours</th>
+                      <th>Punctuality</th>
                       <th>Overtime</th>
+                      <th>Regularization</th>
                       <th>Source</th>
                     </tr>
                   </thead>
@@ -248,6 +257,7 @@ export default function Attendance() {
                     {history.map((record, index) => {
                       const isFirstSessionForDate = index === 0 || history[index - 1].date !== record.date;
                       const sessionsForDate = history.filter((r) => r.date === record.date);
+                      const grossMins = record.grossMinutes ?? (record.totalMinutes + record.breakMinutes);
                       return (
                         <tr key={record.id} className={isFirstSessionForDate ? 'border-t border-ink-200' : ''}>
                           <td className="whitespace-nowrap font-medium text-ink-800">{isFirstSessionForDate ? record.date : ''}</td>
@@ -262,9 +272,36 @@ export default function Attendance() {
                           </td>
                           <td className="whitespace-nowrap">{record.checkInAt ? istClock(record.checkInAt) : '—'}</td>
                           <td className="whitespace-nowrap">{record.checkOutAt ? istClock(record.checkOutAt) : '—'}</td>
-                          <td>{minutesToHours(record.totalMinutes)}</td>
-                          <td>{minutesToHours(record.breakMinutes)}</td>
-                          <td>{record.overtimeMinutes ? minutesToHours(record.overtimeMinutes) : '—'}</td>
+                          <td className="whitespace-nowrap font-medium text-ink-800">{minutesToHours(grossMins)}</td>
+                          <td className="whitespace-nowrap">{minutesToHours(record.breakMinutes)}</td>
+                          <td className="whitespace-nowrap font-bold text-ink-900">{minutesToHours(record.totalMinutes)}</td>
+                          <td>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {record.isLate ? <Badge tone="warning">Late arrival</Badge> : null}
+                              {record.earlyDeparture ? <Badge tone="danger">Early departure</Badge> : null}
+                              {!record.isLate && !record.earlyDeparture && ['present', 'checked_in'].includes(record.status) ? (
+                                <span className="text-xs text-ink-400">On time</span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap">{record.overtimeMinutes ? minutesToHours(record.overtimeMinutes) : '—'}</td>
+                          <td>
+                            {record.regularizationStatus ? (
+                              <Badge
+                                tone={
+                                  record.regularizationStatus === 'approved'
+                                    ? 'success'
+                                    : record.regularizationStatus === 'rejected'
+                                      ? 'danger'
+                                      : 'warning'
+                                }
+                              >
+                                {record.regularizationStatus.toUpperCase()}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-ink-400">—</span>
+                            )}
+                          </td>
                           <td className="text-xs text-ink-500">{record.source}</td>
                         </tr>
                       );
@@ -301,27 +338,47 @@ export default function Attendance() {
                       <th>Employee</th>
                       <th>Designation</th>
                       <th>Status</th>
-                      <th>Check in</th>
-                      <th>Check out</th>
-                      <th>Worked</th>
+                      <th>Punch In</th>
+                      <th>Punch Out</th>
+                      <th>Total Duration</th>
+                      <th>Break</th>
+                      <th>Net Working Hours</th>
+                      <th>Punctuality</th>
+                      <th>Overtime</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {team.map((row) => (
-                      <tr key={row.employee_id}>
-                        <td className="font-medium text-ink-800">{row.full_name}</td>
-                        <td className="text-ink-500">{row.designation_title ?? '—'}</td>
-                        <td>
-                          <div className="flex items-center gap-1">
-                            <StatusBadge status={row.status} />
-                            {row.is_late && row.status !== 'late' ? <Badge tone="warning">Late</Badge> : null}
-                          </div>
-                        </td>
-                        <td>{row.check_in_at ? istClock(row.check_in_at) : '—'}</td>
-                        <td>{row.check_out_at ? istClock(row.check_out_at) : '—'}</td>
-                        <td>{minutesToHours(row.total_minutes)}</td>
-                      </tr>
-                    ))}
+                    {team.map((row) => {
+                      const totalMins = Number(row.total_minutes ?? 0);
+                      const breakMins = Number(row.break_minutes ?? 0);
+                      const grossMins = totalMins + breakMins;
+                      return (
+                        <tr key={row.employee_id}>
+                          <td className="font-medium text-ink-800">{row.full_name}</td>
+                          <td className="text-ink-500">{row.designation_title ?? '—'}</td>
+                          <td>
+                            <div className="flex items-center gap-1">
+                              <StatusBadge status={row.status} />
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap">{row.check_in_at ? istClock(row.check_in_at) : '—'}</td>
+                          <td className="whitespace-nowrap">{row.check_out_at ? istClock(row.check_out_at) : '—'}</td>
+                          <td className="whitespace-nowrap font-medium text-ink-800">{minutesToHours(grossMins)}</td>
+                          <td className="whitespace-nowrap">{minutesToHours(breakMins)}</td>
+                          <td className="whitespace-nowrap font-bold text-ink-900">{minutesToHours(totalMins)}</td>
+                          <td>
+                            <div className="flex flex-wrap items-center gap-1">
+                              {Boolean(row.is_late) && <Badge tone="warning">Late arrival</Badge>}
+                              {Boolean(row.early_departure) && <Badge tone="danger">Early departure</Badge>}
+                              {!row.is_late && !row.early_departure && row.status === 'present' && (
+                                <span className="text-xs text-ink-400">On time</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="whitespace-nowrap">{row.overtime_minutes ? minutesToHours(row.overtime_minutes) : '—'}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -52,17 +52,23 @@ export class DailyReportService {
     /** Suggested task counts and live tasks for the report form, derived from live task state. */
     static async suggestions(employeeId, date = today()) {
         const row = await queryOne(`SELECT
-        SUM(t.status = 'completed' AND (DATE(t.completed_at) = ? OR t.completed_at IS NULL)) AS completed,
-        SUM(t.status IN ('in_progress','on_hold','accepted')) AS in_progress,
-        SUM(t.status IN ('assigned','not_started','pending_approval','overdue')) AS pending
+        COALESCE(SUM(t.status = 'completed' AND (DATE(t.completed_at) = ? OR t.completed_at IS NULL)), 0) AS completed,
+        COALESCE(SUM(t.status IN ('in_progress','on_hold','accepted')), 0) AS in_progress,
+        COALESCE(SUM(t.status IN ('assigned','not_started')), 0) AS pending,
+        COALESCE(SUM(t.status = 'pending_approval'), 0) AS under_review,
+        COALESCE(SUM(t.status IN ('completed','verified')), 0) AS approved
        FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
        WHERE ta.employee_id = ? AND t.archived_at IS NULL`, [date, employeeId]);
-        const assignedTasks = await query(`SELECT t.id, t.title, t.priority, t.status, t.completed_at, t.created_at
+        const timeSpent = await queryOne(`SELECT COALESCE(SUM(minutes), 0) AS minutes
+       FROM task_time_logs
+       WHERE employee_id = ? AND DATE(started_at) = ?`, [employeeId, date]);
+        const assignedTasks = await query(`SELECT t.id, t.task_no, t.title, t.priority, t.status, t.completed_at, t.due_date, t.created_at,
+              COALESCE((SELECT SUM(ttl.minutes) FROM task_time_logs ttl WHERE ttl.task_id = t.id AND ttl.employee_id = ?), 0) AS time_spent_minutes
        FROM tasks t
        JOIN task_assignments ta ON ta.task_id = t.id
        WHERE ta.employee_id = ? AND t.archived_at IS NULL
-       ORDER BY t.status = 'in_progress' DESC, t.status = 'assigned' DESC, t.created_at DESC
-       LIMIT 30`, [employeeId]);
+       ORDER BY t.status = 'in_progress' DESC, t.status = 'pending_approval' DESC, t.status = 'assigned' DESC, t.created_at DESC
+       LIMIT 30`, [employeeId, employeeId]);
         const attendance = await queryOne('SELECT check_in_at, check_out_at, total_minutes, status FROM attendance WHERE employee_id = ? AND work_date = ?', [employeeId, date]);
         const employee = await queryOne(`SELECT e.id, e.full_name, e.employee_code, l.name AS location_name, d.name AS department_name, dg.title AS designation_title, m.full_name AS manager_name, e.manager_id
        FROM employees e
@@ -74,20 +80,28 @@ export class DailyReportService {
         const completed = Number(row?.completed ?? 0);
         const inProgress = Number(row?.in_progress ?? 0);
         const pending = Number(row?.pending ?? 0);
-        const totalAssigned = completed + inProgress + pending;
+        const underReview = Number(row?.under_review ?? 0);
+        const approved = Number(row?.approved ?? 0);
+        const totalAssigned = completed + inProgress + pending + underReview;
         return {
             date,
             tasksCompleted: completed,
             tasksInProgress: inProgress,
             tasksPending: pending,
+            tasksUnderReview: underReview,
+            tasksApproved: approved,
+            timeSpentMinutes: Number(timeSpent?.minutes ?? 0),
             totalAssigned,
             hasAssignedTasks: totalAssigned > 0,
             assignedTasks: assignedTasks.map((t) => ({
                 id: Number(t.id),
+                taskCode: t.task_no || `TSK-${t.id}`,
                 title: t.title,
                 priority: t.priority,
                 status: t.status,
                 completedAt: toIso(t.completed_at),
+                dueDate: t.due_date ? String(t.due_date).slice(0, 10) : null,
+                timeSpentMinutes: Number(t.time_spent_minutes ?? 0),
                 createdAt: toIso(t.created_at),
             })),
             attendance,
@@ -442,8 +456,18 @@ export class DailyReportService {
         return DailyReportService.detail(reportId, user);
     }
     static async todayStatus(employeeId) {
-        const row = await queryOne('SELECT id, status, submitted_at, summary FROM daily_work_reports WHERE employee_id = ? AND report_date = ?', [employeeId, today()]);
-        return row ? { id: Number(row.id), status: row.status, submittedAt: toIso(row.submitted_at), summary: row.summary } : null;
+        const row = await queryOne('SELECT id, status, submitted_at, summary, reviewed_by, reviewed_at, review_note FROM daily_work_reports WHERE employee_id = ? AND report_date = ?', [employeeId, today()]);
+        return row
+            ? {
+                id: Number(row.id),
+                status: row.status,
+                submittedAt: toIso(row.submitted_at),
+                summary: row.summary,
+                reviewedBy: row.reviewed_by ? String(row.reviewed_by) : null,
+                reviewedAt: toIso(row.reviewed_at),
+                reviewNote: row.review_note ?? null,
+            }
+            : null;
     }
     /** Compliance and Missing Submission Inspector for Managers and HR/Admin. */
     static async compliance(user, filters) {
