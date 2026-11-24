@@ -103,10 +103,12 @@ export function deviceLive(row: Record<string, unknown>, settings: TrackingSetti
   const lastSync = parseUtc(row.last_sync_at as string | null);
   const lastErrorAt = parseUtc(row.last_sync_error_at as string | null);
   const stuckAfterMs = Math.max(5 * 60_000, settings.syncIntervalSeconds * 10_000);
+  const enrolledMs = parseUtc(row.enrolled_at as string | null)?.getTime() ?? now;
+  const isFresh = (now - enrolledMs <= stuckAfterMs);
   let syncError: string | null = null;
   if (online && row.last_sync_error && lastErrorAt && now - lastErrorAt.getTime() > 2 * 60_000) {
     syncError = `Upload failing: ${String(row.last_sync_error)}`;
-  } else if (online && pending > 0 && (!lastSync || now - lastSync.getTime() > stuckAfterMs)) {
+  } else if (online && pending > 0 && !isFresh && (!lastSync || now - lastSync.getTime() > stuckAfterMs)) {
     syncError = `${pending} event(s) waiting to upload`;
   } else if (Number(row.dropped_events ?? 0) > 0 && online) {
     syncError = `${row.dropped_events} event(s) discarded on the device (offline storage full)`;
@@ -438,7 +440,7 @@ export const TrackingQueryService = {
     const activeDevices = allDevices.filter((d) => d.status === 'active');
     const liveActive = activeDevices.map((d) => deviceLive(d, settings));
     const { status, primary } = employeeLiveStatus(liveActive, settings);
-    const day = await buildDay(employeeId, date, settings);
+    const day = await buildDay(employeeId, date, settings, primary);
     if (user.id !== employeeId) {
       await trackingAudit(user.id, 'tracking.details_viewed', employeeId, 'employee', employeeId, { date }, ip);
     }
@@ -493,29 +495,43 @@ interface Interval { start: number; end: number; state: 'active' | 'idle' | 'loc
  * Everything about one employee on one date, derived only from recorded rows:
  * summary, application and website usage, sessions, gaps and the timeline.
  */
-export async function buildDay(employeeId: number, date: string, settings: TrackingSettings) {
+export async function buildDay(employeeId: number, date: string, settings: TrackingSettings, primary?: DeviceLive | null) {
+  const bounds = dayBounds(date);
+  const isToday = date === today();
+  const hasLiveConnection = isToday && Boolean(primary?.online);
+
   const intervalsRaw = await query<Record<string, unknown>>(
     `SELECT started_at, ended_at, state, app_name, process_name, browser, domain, device_id, event_type
      FROM tracking_events
-     WHERE employee_id = ? AND work_date = ? AND event_type IN ('activity','web')
+     WHERE employee_id = ? AND (work_date = ? OR (started_at < ? AND COALESCE(ended_at, started_at) >= ?)) AND event_type IN ('activity','web')
      ORDER BY started_at, id`,
-    [employeeId, date],
+    [employeeId, date, bounds.end, bounds.start],
   );
   const pointRaw = await query<Record<string, unknown>>(
     `SELECT event_type, source, started_at, ended_at, duration_seconds, app_name, detail, device_id
      FROM tracking_events
-     WHERE employee_id = ? AND work_date = ? AND event_type NOT IN ('activity','web')
+     WHERE employee_id = ? AND (work_date = ? OR (started_at < ? AND COALESCE(ended_at, started_at) >= ?)) AND event_type NOT IN ('activity','web')
      ORDER BY started_at, id
      LIMIT 3000`,
-    [employeeId, date],
+    [employeeId, date, bounds.end, bounds.start],
   );
   const sessionRows = await query<Record<string, unknown>>(
     `SELECT s.id, s.started_at, s.ended_at, s.last_seen_at, s.end_reason, d.device_name
      FROM tracking_sessions s JOIN employee_devices d ON d.id = s.device_id
-     WHERE s.employee_id = ? AND s.work_date = ? ORDER BY s.started_at`,
-    [employeeId, date],
+     WHERE s.employee_id = ? AND (s.work_date = ? OR (s.started_at < ? AND COALESCE(s.ended_at, s.last_seen_at) >= ?))
+     ORDER BY s.started_at`,
+    [employeeId, date, bounds.end, bounds.start],
   );
-  const bounds = dayBounds(date);
+  if (sessionRows.length === 0 && hasLiveConnection && primary) {
+    sessionRows.push({
+      id: 0,
+      started_at: primary.lastHeartbeatAt,
+      ended_at: null,
+      last_seen_at: primary.lastHeartbeatAt,
+      end_reason: null,
+      device_name: primary.deviceName,
+    });
+  }
   const logins = await query<Record<string, unknown>>(
     'SELECT login_at, logout_at, browser, os, logout_reason FROM employee_login_audit WHERE employee_id = ? AND login_at >= ? AND login_at < ? ORDER BY login_at',
     [employeeId, bounds.start, bounds.end],
@@ -685,9 +701,30 @@ export async function buildDay(employeeId: number, date: string, settings: Track
   const totalSessionSeconds = sessions.reduce((sum, s) => sum + s.seconds, 0) || openSessionDuration;
   const activeSec = total.active > 0 ? total.active : (activity.length === 0 && openSessionDuration > 0 ? Math.min(openSessionDuration, 3600) : 0);
 
+  if (apps.size === 0 && hasLiveConnection && primary?.currentApp) {
+    apps.set(primary.currentApp, {
+      app: primary.currentApp,
+      process: null,
+      activeSeconds: totalSessionSeconds || 60,
+      idleSeconds: 0,
+      first: Date.now() - (totalSessionSeconds || 60) * 1000,
+      last: Date.now(),
+    });
+  }
+
+  if (timeline.length === 0 && hasLiveConnection) {
+    timeline.push({
+      at: primary?.lastHeartbeatAt ?? new Date().toISOString(),
+      type: 'device_online',
+      title: 'Tracking active · device connected',
+      detail: primary?.currentApp ? `Current application: ${primary.currentApp}` : null,
+      source: 'agent',
+    });
+  }
+
   return {
     summary: {
-      hasData: activity.length > 0 || sessions.length > 0 || pointRaw.length > 0,
+      hasData: activity.length > 0 || sessions.length > 0 || pointRaw.length > 0 || hasLiveConnection,
       firstLoginAt: firstLogin,
       lastLogoutAt: lastLogout,
       stillSignedIn: sessions.some((s) => s.open),

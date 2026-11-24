@@ -417,6 +417,8 @@ namespace BscTracker
                         if (!result.Ok)
                         {
                             // A permanent rejection of the whole batch: keeping it would block the queue forever.
+                            syncFailures++;
+                            lastError = !string.IsNullOrEmpty(result.Error) ? "Upload rejected: " + result.Error : "Server refused event batch";
                             Log.Error("Server refused a batch of " + chunk.Count + " event(s): " + result.Error + ". Batch discarded.");
                             continue;
                         }

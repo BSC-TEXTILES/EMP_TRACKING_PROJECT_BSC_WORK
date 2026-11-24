@@ -78,11 +78,10 @@ export class AnalyticsService {
                   SUM((SELECT COUNT(*) FROM task_assignments ta JOIN tasks t ON t.id = ta.task_id WHERE ta.employee_id = e.id AND t.status = 'completed')) AS completed_tasks,
                   SUM((SELECT COUNT(*) FROM task_assignments ta WHERE ta.employee_id = e.id)) AS total_tasks,
                   (SELECT AVG(k.total_score) FROM employee_kpi_records k
-                     JOIN employees e2 ON e2.id = k.employee_id WHERE e2.department_id = e.department_id AND k.period = ?) AS avg_score,
-                  (SELECT AVG(x.present) FROM (
-                      SELECT COUNT(*) AS present FROM attendance a JOIN employees e3 ON e3.id = a.employee_id
-                      WHERE e3.department_id = e.department_id AND a.work_date BETWEEN ? AND ? AND a.status IN ('present','late','half_day')
-                      GROUP BY a.employee_id) x) AS attendance
+                     JOIN employees e2 ON e2.id = k.employee_id WHERE (e2.department_id <=> e.department_id) AND k.period = ?) AS avg_score,
+                  (SELECT CASE WHEN COUNT(a.id) > 0 THEN ROUND((COUNT(CASE WHEN a.status IN ('present','late','half_day') THEN 1 END) / COUNT(a.id)) * 100, 1) ELSE NULL END
+                     FROM attendance a JOIN employees e3 ON e3.id = a.employee_id
+                     WHERE (e3.department_id <=> e.department_id) AND a.work_date BETWEEN ? AND ?) AS attendance
            FROM employees e LEFT JOIN departments d ON d.id = e.department_id
            WHERE ${empWhere}
            GROUP BY e.department_id, d.name

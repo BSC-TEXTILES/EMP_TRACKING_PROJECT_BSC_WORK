@@ -25,6 +25,7 @@ namespace BscTracker
         readonly Bridge bridge;
         Interval current;
         DateTime lastTickUtc = DateTime.MinValue;
+        DateTime sessionDateUtc = DateTime.MinValue;
         bool locked, suspended, enabled, disabledEventSent;
 
         public int IdleThresholdSeconds = 300;
@@ -67,6 +68,7 @@ namespace BscTracker
             if (Running) return;
             SessionId = "s-" + Guid.NewGuid().ToString("N");
             SessionStartedUtc = DateTime.UtcNow;
+            sessionDateUtc = SessionStartedUtc.Date;
             Running = true;
             Point("session_start", SessionStartedUtc, null);
             Point("agent_start", SessionStartedUtc, Product.Version);
@@ -120,6 +122,18 @@ namespace BscTracker
             }
             lastTickUtc = now;
             if (!enabled || suspended) return;
+
+            // Rollover session across calendar day boundary so every day has its own session and start event.
+            if (Running && sessionDateUtc != DateTime.MinValue && now.Date != sessionDateUtc)
+            {
+                Close(now);
+                Point("session_end", now, "day_rollover");
+                SessionId = "s-" + Guid.NewGuid().ToString("N");
+                SessionStartedUtc = now;
+                sessionDateUtc = now.Date;
+                Point("session_start", now, "day_rollover");
+                queue.Flush();
+            }
 
             long idleMs = Native.IdleMilliseconds();
             string state = locked ? "locked" : idleMs >= IdleThresholdSeconds * 1000L ? "idle" : "active";
@@ -261,7 +275,18 @@ namespace BscTracker
             DateTime now = DateTime.UtcNow;
             suspended = false;
             lastTickUtc = now;
-            if (Running) Point("resume", now, null);
+            if (Running)
+            {
+                if (sessionDateUtc != DateTime.MinValue && now.Date != sessionDateUtc)
+                {
+                    Point("session_end", now, "day_rollover");
+                    SessionId = "s-" + Guid.NewGuid().ToString("N");
+                    SessionStartedUtc = now;
+                    sessionDateUtc = now.Date;
+                    Point("session_start", now, "day_rollover");
+                }
+                Point("resume", now, null);
+            }
         }
     }
 }
