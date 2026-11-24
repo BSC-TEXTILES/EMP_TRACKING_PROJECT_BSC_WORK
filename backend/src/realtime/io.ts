@@ -176,7 +176,8 @@ export function initRealtime(server: HttpServer): Server {
     pingInterval: 25000,
     pingTimeout: 20000,
     maxHttpBufferSize: 1e6,
-    transports: ['polling', 'websocket'],
+    transports: ['websocket', 'polling'],
+    allowUpgrades: true,
   });
 
   io.use(async (socket, next) => {

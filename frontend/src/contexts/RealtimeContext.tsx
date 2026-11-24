@@ -122,13 +122,13 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       withCredentials: true,
       // This build confirms incoming calls (call:ring_ack), so the caller sees an honest "Ringing".
       auth: { ...CALL_HANDSHAKE },
-      // Polling first ensures handshake succeeds behind all reverse proxies, then upgrades cleanly to WebSocket
-      transports: ['polling', 'websocket'],
+      // Direct WebSocket first for instant, persistent connections; falls back to polling if blocked
+      transports: ['websocket', 'polling'],
       tryAllTransports: true,
       upgrade: true,
       reconnection: true,
       reconnectionDelay: 1_000,
-      reconnectionDelayMax: 30_000,
+      reconnectionDelayMax: 10_000,
       randomizationFactor: 0.25,
       reconnectionAttempts: MAX_RECONNECT_ATTEMPTS,
       timeout: 15_000,
@@ -150,6 +150,33 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       if (socket.connected) socket.emit('client:visibility', { visible: document.visibilityState === 'visible' });
     };
 
+    // When backend process restarts (e.g. deployments), in-memory engine.io sessions expire.
+    // Discard stale session ID immediately and reconnect fresh to avoid infinite 400 loops.
+    const handleStaleSession = (err?: unknown) => {
+      setStatus('connecting');
+      const errStr = String(
+        (err as any)?.message ||
+        (err as any)?.description ||
+        (err as any)?.context?.status ||
+        ''
+      );
+      if (
+        errStr.includes('400') ||
+        errStr.includes('Session ID unknown') ||
+        errStr.includes('xhr poll error') ||
+        errStr.includes('websocket error')
+      ) {
+        setTimeout(() => {
+          if (!socket.connected) {
+            try {
+              socket.disconnect();
+              socket.connect();
+            } catch {}
+          }
+        }, 500);
+      }
+    };
+
     socket.on('connect', () => {
       setStatus('online');
       reportVisibility();
@@ -157,8 +184,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     });
     socket.on('disconnect', (reason) => {
       setStatus(reason === 'io client disconnect' ? 'offline' : 'connecting');
+      if (reason === 'transport error' || reason === 'transport close') {
+        handleStaleSession();
+      }
     });
-    socket.on('connect_error', () => setStatus('connecting'));
+    socket.on('connect_error', handleStaleSession);
+    socket.io.on('error', handleStaleSession);
     socket.on('reconnect_attempt', () => setStatus('connecting'));
     socket.on('reconnect_failed', () => setStatus('offline'));
     socket.on('session:ended', () => {
