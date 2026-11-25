@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/ToastContext';
 import { Badge, Card, EmptyState, Field, Modal, PageHeader, SectionHeader, Skeleton, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { cx, formatDate, formatDateTime, statusTone, titleize } from '../lib/format';
+import { cx, formatDate, formatDateTime, statusTone, titleize, todayDateString } from '../lib/format';
 import type { LeaveItem } from '../lib/types';
 import { useSocketEvent } from '../contexts/RealtimeContext';
 import { MonthPicker, WeeklyOffPanel, useWeeklyOffSummary, type WeeklyOffDateStatus } from '../components/WeeklyOffPanel';
@@ -108,8 +108,7 @@ function RequestStatus({ status }: { status: string }) {
 }
 
 function localToday(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return todayDateString();
 }
 
 function requestTitle(leave: LeaveItem): string {
@@ -152,18 +151,20 @@ export default function Leave() {
   const [types, setTypes] = useState<LeaveType[]>([]);
   const [balances, setBalances] = useState<Balance[]>([]);
   const [selectedLeaveTypeId, setSelectedLeaveTypeId] = useState<string>('');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>(() => todayDateString());
+  const [endDate, setEndDate] = useState<string>(() => todayDateString());
   const [breakdown, setBreakdown] = useState<DayBreakdown | null>(null);
   const [breakdownError, setBreakdownError] = useState<string>('');
 
   // Weekly Off State (only user with saved weekly off can take)
-  const now = new Date();
-  const [woPeriod, setWoPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [woPeriod, setWoPeriod] = useState(() => {
+    const today = todayDateString();
+    return { year: Number(today.slice(0, 4)), month: Number(today.slice(5, 7)) };
+  });
   const [woMode, setWoMode] = useState<'single' | 'range'>('single');
-  const [woDate, setWoDate] = useState('');
-  const [woStartDate, setWoStartDate] = useState('');
-  const [woEndDate, setWoEndDate] = useState('');
+  const [woDate, setWoDate] = useState(() => todayDateString());
+  const [woStartDate, setWoStartDate] = useState(() => todayDateString());
+  const [woEndDate, setWoEndDate] = useState(() => todayDateString());
   const { data: woSummary, error: woError, loading: woLoading } = useWeeklyOffSummary(undefined, woPeriod.year, woPeriod.month);
 
   // Helper to calculate requested week-off days
@@ -175,28 +176,41 @@ export default function Leave() {
   };
 
   // Half Day State (0.5 day)
-  const [hdDate, setHdDate] = useState('');
+  const [hdDate, setHdDate] = useState(() => todayDateString());
   const [hdSlot, setHdSlot] = useState<HalfDaySlot>('first_half');
   const [halfPreview, setHalfPreview] = useState<HalfDayPreview | null>(null);
   const [halfPreviewError, setHalfPreviewError] = useState('');
 
   const resetForm = () => {
+    const today = todayDateString();
     setRequestType('regular');
     setReason('');
     setDocument(null);
     setWoMode('single');
-    setWoDate('');
-    setWoStartDate('');
-    setWoEndDate('');
-    setHdDate('');
+    setWoDate(today);
+    setWoStartDate(today);
+    setWoEndDate(today);
+    setHdDate(today);
     setHdSlot('first_half');
     setHalfPreview(null);
     setHalfPreviewError('');
-    setStartDate('');
-    setEndDate('');
+    setStartDate(today);
+    setEndDate(today);
     setBreakdown(null);
     setBreakdownError('');
   };
+
+  useEffect(() => {
+    if (applyOpen) {
+      const today = todayDateString();
+      if (!startDate) setStartDate(today);
+      if (!endDate) setEndDate(today);
+      if (!woDate) setWoDate(today);
+      if (!woStartDate) setWoStartDate(today);
+      if (!woEndDate) setWoEndDate(today);
+      if (!hdDate) setHdDate(today);
+    }
+  }, [applyOpen]);
 
   const load = async () => {
     try {
@@ -1241,7 +1255,7 @@ export default function Leave() {
                       type="date"
                       className="input font-bold text-sm text-ink-900"
                       value={woDate}
-                      min={localToday()}
+                      min={`${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
                       max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                       onChange={(e) => setWoDate(e.target.value)}
                       required
@@ -1299,7 +1313,8 @@ export default function Leave() {
                         type="date"
                         className="input font-bold text-sm text-ink-900"
                         value={woStartDate}
-                        min={localToday()}
+                        min={`${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
+                        max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                         onChange={(e) => {
                           setWoStartDate(e.target.value);
                           if (!woEndDate || woEndDate < e.target.value) setWoEndDate(e.target.value);
@@ -1312,7 +1327,8 @@ export default function Leave() {
                         type="date"
                         className="input font-bold text-sm text-ink-900"
                         value={woEndDate}
-                        min={woStartDate || localToday()}
+                        min={woStartDate || `${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
+                        max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                         onChange={(e) => setWoEndDate(e.target.value)}
                         required
                       />
@@ -1382,7 +1398,7 @@ export default function Leave() {
                     type="date"
                     className="input font-medium"
                     value={startDate}
-                    min={localToday()}
+                    min={`${todayDateString().slice(0, 7)}-01`}
                     onChange={(e) => {
                       setStartDate(e.target.value);
                       if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
@@ -1395,7 +1411,7 @@ export default function Leave() {
                     type="date"
                     className="input font-medium"
                     value={endDate}
-                    min={startDate || localToday()}
+                    min={startDate || `${todayDateString().slice(0, 7)}-01`}
                     onChange={(e) => setEndDate(e.target.value)}
                     required
                   />
@@ -1461,7 +1477,7 @@ export default function Leave() {
                   type="date"
                   className="input font-medium"
                   value={hdDate}
-                  min={localToday()}
+                  min={`${todayDateString().slice(0, 7)}-01`}
                   onChange={(e) => setHdDate(e.target.value)}
                   required
                 />

@@ -376,9 +376,10 @@ export class LeaveService {
       if (isSingleDay && !balance.allDates.includes(sDate)) {
         throw ApiError.badRequest(`${sDate} is not your scheduled weekly-off day.`);
       }
+      const currentMonthStart = `${today().slice(0, 7)}-01`;
       for (const d of requestedDates) {
-        if (d < today()) {
-          throw ApiError.badRequest('Week-off cannot be requested for past dates.');
+        if (d < currentMonthStart) {
+          throw ApiError.badRequest('Week-off cannot be requested for dates in closed previous months.');
         }
         const entry = balance.dates?.find((item) => item.date === d);
         if (entry?.status === 'not_eligible' || (balance.joiningDate && d < balance.joiningDate)) {

@@ -19,7 +19,7 @@ import {
 } from '../components/ui';
 import { Icon } from '../components/icons';
 import { InstallAppButton } from '../components/InstallAppButton';
-import { cx, formatDate, formatDateTime, minutesToHours } from '../lib/format';
+import { cx, formatDate, formatDateTime, minutesToHours, todayDateString } from '../lib/format';
 
 interface ReportHistoryEntry {
   id: number;
@@ -183,7 +183,7 @@ export default function DailyReports() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState('');
   const [locationFilter, setLocationFilter] = useState('');
-  const [dateFilter, setDateFilter] = useState(new Date().toISOString().slice(0, 10));
+  const [dateFilter, setDateFilter] = useState(() => todayDateString());
   const [employeeSearch, setEmployeeSearch] = useState('');
 
   // Modal & Edit states
@@ -318,7 +318,7 @@ export default function DailyReports() {
     setSubmitting(true);
     try {
       await api.post('/reports', {
-        reportDate: new Date().toISOString().slice(0, 10),
+        reportDate: todayDateString(),
         ...form,
         summary: form.summary.trim(),
         problems: form.problems.trim() || undefined,
@@ -577,7 +577,7 @@ export default function DailyReports() {
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-100 pb-3">
                 <SectionHeader
                   title="Submit End-of-Day Work Report"
-                  description={`${formatDate(new Date().toISOString())} · Live task and attendance verification`}
+                  description={`${formatDate(todayDateString())} · Live task and attendance verification`}
                 />
                 {suggestions?.employee && (
                   <div className="flex items-center gap-2 text-xs text-ink-600 bg-ink-50 px-3 py-1.5 rounded-lg border border-ink-200">

@@ -13,6 +13,17 @@ const dateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
   hour12: true,
 });
 const weekdayFormatter = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+const kolkataDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/** Returns today's ISO date string (YYYY-MM-DD) in Indian Standard Time (Asia/Kolkata) */
+export function todayDateString(): string {
+  return kolkataDateFormatter.format(new Date());
+}
 
 export function formatDate(value?: string | null): string {
   if (!value) return '—';
