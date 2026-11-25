@@ -139,6 +139,54 @@ export function formatDuration(totalMinutes) {
     const rest = minutes % 60;
     return `${hours}h ${String(rest).padStart(2, '0')}m`;
 }
+/** Formats duration in hours and minutes: e.g. '10 Hours 30 Minutes' or '9 Hours' */
+export function formatWorkingDuration(secondsOrMinutes, unit = 'seconds') {
+    const totalSeconds = unit === 'minutes' ? secondsOrMinutes * 60 : secondsOrMinutes;
+    const s = Math.max(0, Math.round(totalSeconds || 0));
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    if (hours > 0 && minutes > 0) {
+        return `${hours} Hour${hours === 1 ? '' : 's'} ${minutes} Minute${minutes === 1 ? '' : 's'}`;
+    }
+    if (hours > 0) {
+        return `${hours} Hour${hours === 1 ? '' : 's'}`;
+    }
+    return `${minutes} Minute${minutes === 1 ? '' : 's'}`;
+}
+const IST_ZONE = 'Asia/Kolkata';
+const timeFormatter12 = new Intl.DateTimeFormat('en-US', { timeZone: IST_ZONE, hour: '2-digit', minute: '2-digit', hour12: true });
+const dateFormatterDDMMYYYY = new Intl.DateTimeFormat('en-GB', { timeZone: IST_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' });
+/** Formats a timestamp into 12-hour AM/PM format (e.g. '09:00 AM', '07:30 PM') in Asia/Kolkata */
+export function formatTime12(value) {
+    if (!value)
+        return '—';
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+        const [hStr, mStr] = trimmed.split(':');
+        let h = parseInt(hStr, 10);
+        const ampm = h >= 12 ? 'PM' : 'AM';
+        h = h % 12 || 12;
+        return `${String(h).padStart(2, '0')}:${mStr} ${ampm}`;
+    }
+    const date = parseUtc(value);
+    if (!date)
+        return '—';
+    return timeFormatter12.format(date);
+}
+/** Formats a timestamp into DD-MM-YYYY in Asia/Kolkata */
+export function formatDateDDMMYYYY(value) {
+    if (!value)
+        return '—';
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        const [y, m, d] = trimmed.split('-');
+        return `${d}-${m}-${y}`;
+    }
+    const date = parseUtc(value);
+    if (!date)
+        return '—';
+    return dateFormatterDDMMYYYY.format(date).replace(/\//g, '-');
+}
 export function weekRange(dateStr) {
     const [y, m, d] = dateStr.split('-').map(Number);
     const base = new Date(Date.UTC(y, m - 1, d));

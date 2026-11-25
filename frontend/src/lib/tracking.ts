@@ -101,16 +101,39 @@ export interface DetailsResponse {
 }
 
 export const IST = 'Asia/Kolkata';
-const time = new Intl.DateTimeFormat('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', hour12: true });
-const timeSeconds = new Intl.DateTimeFormat('en-IN', { timeZone: IST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-const dateTime = new Intl.DateTimeFormat('en-IN', { timeZone: IST, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
-const dateOnly = new Intl.DateTimeFormat('en-IN', { timeZone: IST, weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+const time = new Intl.DateTimeFormat('en-US', { timeZone: IST, hour: '2-digit', minute: '2-digit', hour12: true });
+const timeSeconds = new Intl.DateTimeFormat('en-US', { timeZone: IST, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+const dateTime = new Intl.DateTimeFormat('en-GB', { timeZone: IST, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+const dateOnly = new Intl.DateTimeFormat('en-GB', { timeZone: IST, day: '2-digit', month: '2-digit', year: 'numeric' });
 
 const valid = (value?: string | null) => (value ? !Number.isNaN(new Date(value).getTime()) : false);
 export const istTime = (value?: string | null) => (valid(value) ? time.format(new Date(value!)).toUpperCase() : '—');
 export const istTimeSeconds = (value?: string | null) => (valid(value) ? timeSeconds.format(new Date(value!)).toUpperCase() : '—');
-export const istDateTime = (value?: string | null) => (valid(value) ? dateTime.format(new Date(value!)).replace(/am|pm/, (m) => m.toUpperCase()) : '—');
-export const istDateLabel = (date: string) => dateOnly.format(new Date(`${date}T12:00:00+05:30`));
+export const istDateTime = (value?: string | null) => (valid(value) ? dateTime.format(new Date(value!)).replace(/\//g, '-').replace(/am|pm/, (m) => m.toUpperCase()) : '—');
+export const istDateLabel = (date: string) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    const [y, m, d] = date.split('-');
+    return `${d}-${m}-${y}`;
+  }
+  const dt = new Date(`${date}T12:00:00+05:30`);
+  return Number.isNaN(dt.getTime()) ? date : dateOnly.format(dt).replace(/\//g, '-');
+};
+
+/** Formats duration into e.g. "10 Hours 30 Minutes", "9 Hours", or "45 Minutes" */
+export function formatWorkingDuration(secondsOrMinutes?: number | null, unit: 'seconds' | 'minutes' = 'seconds'): string {
+  if (secondsOrMinutes == null || Number.isNaN(secondsOrMinutes)) return '0 Minutes';
+  const totalSeconds = unit === 'minutes' ? secondsOrMinutes * 60 : secondsOrMinutes;
+  const s = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (hours > 0 && minutes > 0) {
+    return `${hours} Hour${hours === 1 ? '' : 's'} ${minutes} Minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (hours > 0) {
+    return `${hours} Hour${hours === 1 ? '' : 's'}`;
+  }
+  return `${minutes} Minute${minutes === 1 ? '' : 's'}`;
+}
 
 /** Today's business date in IST (YYYY-MM-DD). */
 export function istToday(): string {

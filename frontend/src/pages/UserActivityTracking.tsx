@@ -192,11 +192,13 @@ export default function UserActivityTracking() {
                         <Th label="Employee Name" k="name" sort={sort} order={order} onSort={toggleSort} />
                         <Th label="Location" k="location" sort={sort} order={order} onSort={toggleSort} />
                         <Th label="Device" k="device" sort={sort} order={order} onSort={toggleSort} />
-                        <Th label="Login Time" k="login" sort={sort} order={order} onSort={toggleSort} />
+                        <Th label="Login Time (12-hr)" k="login" sort={sort} order={order} onSort={toggleSort} />
+                        <Th label="Logout Time (12-hr)" k="login" sort={sort} order={order} onSort={toggleSort} />
+                        <Th label="Total Duration" k="active" sort={sort} order={order} onSort={toggleSort} right />
                         <Th label="Active Time" k="active" sort={sort} order={order} onSort={toggleSort} right />
                         <Th label="Idle Time" k="idle" sort={sort} order={order} onSort={toggleSort} right />
                         <Th label="Last Activity" k="lastActivity" sort={sort} order={order} onSort={toggleSort} />
-                        <Th label="Tracking Status" k="status" sort={sort} order={order} onSort={toggleSort} />
+                        <Th label="Current Status" k="status" sort={sort} order={order} onSort={toggleSort} />
                         <th className="px-4 py-2.5 text-right">Action</th>
                       </tr>
                     </thead>
@@ -215,9 +217,21 @@ export default function UserActivityTracking() {
                           </td>
                           <td className="px-3 py-2.5" title={item.locationName ?? undefined}>{item.locationCode ?? '—'}</td>
                           <td className="whitespace-nowrap px-3 py-2.5">{item.device ? <span title={item.device.os}>{item.device.name}{item.deviceCount > 1 && <span className="text-ink-400"> +{item.deviceCount - 1}</span>}</span> : <span className="text-ink-400">—</span>}</td>
-                          <td className="whitespace-nowrap px-3 py-2.5">{item.loginAt ? istTime(item.loginAt) : <span className="text-ink-400">—</span>}</td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums font-medium text-ink-900">{item.hasData ? duration(item.activeSeconds) : <span className="text-ink-400">—</span>}</td>
-                          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{item.hasData ? duration(item.idleSeconds) : <span className="text-ink-400">—</span>}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 font-medium text-ink-900">{item.loginAt ? istTime(item.loginAt) : (item.hrmsLoginAt ? istTime(item.hrmsLoginAt) : <span className="text-ink-400">—</span>)}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5">
+                            {item.logoutAt ? (
+                              <span className="font-medium text-ink-700">{istTime(item.logoutAt)}</span>
+                            ) : item.loginAt || item.status === 'active' ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" /> Currently Logged In
+                              </span>
+                            ) : (
+                              <span className="text-ink-400">—</span>
+                            )}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums font-semibold text-ink-900">{item.hasData ? duration(item.activeSeconds + item.idleSeconds) : <span className="text-ink-400">—</span>}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums font-medium text-emerald-700">{item.hasData ? duration(item.activeSeconds) : <span className="text-ink-400">—</span>}</td>
+                          <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-amber-700">{item.hasData ? duration(item.idleSeconds) : <span className="text-ink-400">—</span>}</td>
                           <td className="whitespace-nowrap px-3 py-2.5" title={istDateTime(item.lastActivityAt)}>{item.lastActivityAt ? (isToday ? ago(item.lastActivityAt) : istTime(item.lastActivityAt)) : <span className="text-ink-400">—</span>}</td>
                           <td className="whitespace-nowrap px-3 py-2.5"><StatusPill status={item.status} syncError={item.syncError} /></td>
                           <td className="px-4 py-2.5 text-right">

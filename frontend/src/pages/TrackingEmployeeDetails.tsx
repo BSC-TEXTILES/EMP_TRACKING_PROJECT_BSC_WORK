@@ -153,16 +153,16 @@ export default function TrackingEmployeeDetails() {
         ) : (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              <Stat label="First login" value={istTime(summary.firstLoginAt)} />
-              <Stat label="Last logout" value={summary.stillSignedIn ? 'Signed in' : istTime(summary.lastLogoutAt)} hint={summary.stillSignedIn ? 'Session still open' : undefined} />
-              <Stat label="Total session" value={duration(summary.sessionSeconds)} hint={`${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}`} />
-              <Stat label="Observed active" value={duration(summary.activeSeconds)} tone="success" />
-              <Stat label="Observed idle" value={duration(summary.idleSeconds)} tone="warning" />
+              <Stat label="Login Time (12-hr)" value={istTime(summary.firstLoginAt)} />
+              <Stat label="Logout Time (12-hr)" value={summary.stillSignedIn ? 'Currently Logged In' : (summary.lastLogoutAt ? istTime(summary.lastLogoutAt) : 'Not Yet Logged Out')} hint={summary.stillSignedIn ? 'Session still open' : undefined} />
+              <Stat label="Total Working Duration" value={duration(summary.sessionSeconds)} hint={`${summary.sessionCount} session${summary.sessionCount === 1 ? '' : 's'}`} />
+              <Stat label="Observed Active" value={duration(summary.activeSeconds)} tone="success" />
+              <Stat label="Observed Idle" value={duration(summary.idleSeconds)} tone="warning" />
               <Stat label="Locked" value={duration(summary.lockedSeconds)} />
-              <Stat label="Longest active run" value={summary.longestActive ? duration(summary.longestActive.seconds) : '—'} hint={summary.longestActive ? `${istTime(summary.longestActive.start)}–${istTime(summary.longestActive.end)}` : undefined} />
-              <Stat label="Longest idle run" value={summary.longestIdle ? duration(summary.longestIdle.seconds) : '—'} hint={summary.longestIdle ? `${istTime(summary.longestIdle.start)}–${istTime(summary.longestIdle.end)}` : undefined} />
-              <Stat label="Untracked / offline" value={duration(summary.offlineSeconds)} hint="Within the observed span" tone={summary.offlineSeconds > 0 ? 'danger' : undefined} />
-              <Stat label="Observed span" value={duration(summary.observedSpanSeconds)} hint="First to last recorded activity" />
+              <Stat label="Longest Active Run" value={summary.longestActive ? duration(summary.longestActive.seconds) : '—'} hint={summary.longestActive ? `${istTime(summary.longestActive.start)} – ${istTime(summary.longestActive.end)}` : undefined} />
+              <Stat label="Longest Idle Run" value={summary.longestIdle ? duration(summary.longestIdle.seconds) : '—'} hint={summary.longestIdle ? `${istTime(summary.longestIdle.start)} – ${istTime(summary.longestIdle.end)}` : undefined} />
+              <Stat label="Untracked / Offline" value={duration(summary.offlineSeconds)} hint="Within the observed span" tone={summary.offlineSeconds > 0 ? 'danger' : undefined} />
+              <Stat label="Observed Span" value={duration(summary.observedSpanSeconds)} hint="First to last recorded activity" />
             </div>
             <div className="mt-4 max-w-xl">
               <ProgressBar value={summary.completenessPercent ?? 0} tone={(summary.completenessPercent ?? 0) >= 90 ? 'success' : (summary.completenessPercent ?? 0) >= 70 ? 'warning' : 'danger'} label="Tracking data completeness" />

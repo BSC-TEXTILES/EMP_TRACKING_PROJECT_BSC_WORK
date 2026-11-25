@@ -2,17 +2,18 @@ export function cx(...values: (string | false | null | undefined)[]): string {
   return values.filter(Boolean).join(' ');
 }
 
-const dateFormatter = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-const timeFormatter = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true });
+const dateFormatter = new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Kolkata' });
+const timeFormatter = new Intl.DateTimeFormat('en-US', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
 const dateTimeFormatter = new Intl.DateTimeFormat('en-GB', {
   day: '2-digit',
-  month: 'short',
+  month: '2-digit',
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
   hour12: true,
+  timeZone: 'Asia/Kolkata',
 });
-const weekdayFormatter = new Intl.DateTimeFormat('en-GB', { weekday: 'short' });
+const weekdayFormatter = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'Asia/Kolkata' });
 const kolkataDateFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Kolkata',
   year: 'numeric',
@@ -25,22 +26,43 @@ export function todayDateString(): string {
   return kolkataDateFormatter.format(new Date());
 }
 
+/** Formats a date into DD-MM-YYYY format in Asia/Kolkata */
 export function formatDate(value?: string | null): string {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : dateFormatter.format(date);
+  const trimmed = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const [y, m, d] = trimmed.split('-');
+    return `${d}-${m}-${y}`;
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return '—';
+  return dateFormatter.format(date).replace(/\//g, '-');
 }
 
+/** Formats a time into 12-hour hh:mm AM/PM format in Asia/Kolkata */
 export function formatTime(value?: string | null): string {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : timeFormatter.format(date);
+  const trimmed = String(value).trim();
+  if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+    const [hStr, mStr] = trimmed.split(':');
+    let h = parseInt(hStr, 10);
+    const m = mStr;
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return `${String(h).padStart(2, '0')}:${m} ${ampm}`;
+  }
+  const date = new Date(trimmed);
+  if (Number.isNaN(date.getTime())) return '—';
+  return timeFormatter.format(date);
 }
 
+/** Formats date and time into DD-MM-YYYY hh:mm AM/PM format in Asia/Kolkata */
 export function formatDateTime(value?: string | null): string {
   if (!value) return '—';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : dateTimeFormatter.format(date);
+  const d = formatDate(value);
+  const t = formatTime(value);
+  if (d === '—' || t === '—') return '—';
+  return `${d} ${t}`;
 }
 
 export function formatDayLabel(value?: string | null): string {
@@ -53,6 +75,22 @@ export function formatDayLabel(value?: string | null): string {
   if (date.toDateString() === today.toDateString()) return 'Today';
   if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
   return new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' }).format(date);
+}
+
+/** Formats duration into e.g. "10 Hours 30 Minutes", "9 Hours", or "45 Minutes" */
+export function formatWorkingDuration(secondsOrMinutes?: number | null, unit: 'seconds' | 'minutes' = 'seconds'): string {
+  if (secondsOrMinutes == null || Number.isNaN(secondsOrMinutes)) return '0 Minutes';
+  const totalSeconds = unit === 'minutes' ? secondsOrMinutes * 60 : secondsOrMinutes;
+  const s = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  if (hours > 0 && minutes > 0) {
+    return `${hours} Hour${hours === 1 ? '' : 's'} ${minutes} Minute${minutes === 1 ? '' : 's'}`;
+  }
+  if (hours > 0) {
+    return `${hours} Hour${hours === 1 ? '' : 's'}`;
+  }
+  return `${minutes} Minute${minutes === 1 ? '' : 's'}`;
 }
 
 export function weekday(value: string): string {

@@ -610,29 +610,53 @@ export class UserActivityTrackingService {
                 { header: 'Department', key: 'dept', width: 20 },
                 { header: 'Date', key: 'date', width: 14 },
                 { header: 'Status', key: 'status', width: 12 },
-                { header: 'Check In', key: 'checkIn', width: 14 },
-                { header: 'Check Out', key: 'checkOut', width: 14 },
-                { header: 'Total Hours', key: 'totalHours', width: 14 },
-                { header: 'Active Hours', key: 'activeHours', width: 14 },
-                { header: 'Break Hours', key: 'breakHours', width: 14 },
+                { header: 'Login Time', key: 'checkIn', width: 16 },
+                { header: 'Logout Time', key: 'checkOut', width: 16 },
+                { header: 'Total Working Duration', key: 'totalHours', width: 24 },
+                { header: 'Active Duration', key: 'activeHours', width: 20 },
+                { header: 'Break Duration', key: 'breakHours', width: 20 },
             ];
             for (const a of attendance) {
                 const emp = employees.find((e) => Number(e.id) === Number(a.employee_id));
                 const totalMins = Number(a.total_minutes || 0);
                 const breakMins = Number(a.break_minutes || 0);
                 const activeMins = Math.max(0, totalMins - breakMins);
+                const formatDateStr = (dStr) => {
+                    if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+                        const [y, m, d] = dStr.split('-');
+                        return `${d}-${m}-${y}`;
+                    }
+                    return dStr;
+                };
+                const formatTimeStr = (val) => {
+                    if (!val)
+                        return '—';
+                    const dt = new Date(String(val));
+                    if (Number.isNaN(dt.getTime()))
+                        return '—';
+                    return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).format(dt);
+                };
+                const formatDur = (mins) => {
+                    const h = Math.floor(mins / 60);
+                    const m = mins % 60;
+                    if (h > 0 && m > 0)
+                        return `${h} Hours ${m} Minutes`;
+                    if (h > 0)
+                        return `${h} Hours`;
+                    return `${m} Minutes`;
+                };
                 sheet1.addRow({
                     code: emp?.employee_code || '',
                     name: emp?.full_name || '',
                     location: emp?.location_code || '',
                     dept: emp?.department_name || '',
-                    date: String(a.work_date).slice(0, 10),
+                    date: formatDateStr(String(a.work_date).slice(0, 10)),
                     status: String(a.status || 'present'),
-                    checkIn: a.check_in_at ? String(a.check_in_at).slice(11, 19) : '—',
-                    checkOut: a.check_out_at ? String(a.check_out_at).slice(11, 19) : '—',
-                    totalHours: (totalMins / 60).toFixed(2),
-                    activeHours: (activeMins / 60).toFixed(2),
-                    breakHours: (breakMins / 60).toFixed(2),
+                    checkIn: a.check_in_at ? formatTimeStr(a.check_in_at) : '—',
+                    checkOut: a.check_out_at ? formatTimeStr(a.check_out_at) : 'Active Session',
+                    totalHours: formatDur(totalMins),
+                    activeHours: formatDur(activeMins),
+                    breakHours: formatDur(breakMins),
                 });
             }
             // Sheet 2: Application Usage
@@ -718,9 +742,18 @@ export class UserActivityTrackingService {
             doc.on('end', () => resolve({ buffer: Buffer.concat(chunks), filename, mimeType: 'application/pdf' }));
             doc.on('error', reject);
             // Title & Header
+            const formatPeriodDate = (dStr) => {
+                if (/^\d{4}-\d{2}-\d{2}$/.test(dStr)) {
+                    const [y, m, d] = dStr.split('-');
+                    return `${d}-${m}-${y}`;
+                }
+                return dStr;
+            };
+            const genTimeStr = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date());
+            const genDateStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date()).replace(/\//g, '-');
             doc.fontSize(18).fillColor('#1e293b').text('BSC TEXTILES – EMPLOYEE ACTIVITY & TRACKING REPORT', { align: 'center' });
             doc.moveDown(0.4);
-            doc.fontSize(10).fillColor('#64748b').text(`Report Period: ${options.from} to ${options.to}  |  Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+            doc.fontSize(10).fillColor('#64748b').text(`Report Period: ${formatPeriodDate(options.from)} to ${formatPeriodDate(options.to)}  |  Generated on: ${genDateStr} ${genTimeStr} (IST)`, { align: 'center' });
             doc.moveDown(1);
             doc.strokeColor('#e2e8f0').lineWidth(1).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
             doc.moveDown(1);

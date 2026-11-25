@@ -13,17 +13,21 @@ const MAX_EMPLOYEE_DAYS = 2500;
 
 function fmtDateTime(value: string | null | undefined): string {
   if (!value) return '';
-  return new Intl.DateTimeFormat('en-IN', { timeZone: TZ, day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(value));
+  const d = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value)).replace(/\//g, '-');
+  const t = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(value));
+  return `${d} ${t}`;
 }
 function fmtTime(value: string | null | undefined): string {
   if (!value) return '';
-  return new Intl.DateTimeFormat('en-IN', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(value));
+  return new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(value));
 }
 export function fmtDuration(seconds: number | null | undefined): string {
   const s = Math.max(0, Math.round(seconds ?? 0));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
-  return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (h > 0 && m > 0) return `${h} Hours ${m} Minutes`;
+  if (h > 0) return `${h} Hours`;
+  return `${m} Minutes`;
 }
 
 export interface ReportRequest {

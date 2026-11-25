@@ -751,17 +751,34 @@ activityRouter.get(
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="bsc-login-history-${date || 'all'}.csv"`);
 
-    const header = 'ID,Employee Code,Full Name,Location,Login Time,Logout Time,Duration (Mins),Status,Browser,OS,IP\n';
+    const formatT12 = (val?: string | null) => {
+      if (!val) return '';
+      const dt = new Date(val);
+      if (Number.isNaN(dt.getTime())) return val;
+      const d = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', day: '2-digit', month: '2-digit', year: 'numeric' }).format(dt).replace(/\//g, '-');
+      const t = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }).format(dt);
+      return `${d} ${t}`;
+    };
+
+    const formatWorkingDur = (mins: number) => {
+      const h = Math.floor(mins / 60);
+      const m = mins % 60;
+      if (h > 0 && m > 0) return `${h} Hours ${m} Minutes`;
+      if (h > 0) return `${h} Hours`;
+      return `${m} Minutes`;
+    };
+
+    const header = 'ID,Employee Code,Full Name,Location,Login Time,Logout Time,Session Duration,Status,Browser,OS,IP\n';
     const rows = history.items.map((i) =>
       [
         i.id,
         `"${i.employeeCode}"`,
         `"${i.employeeName.replace(/"/g, '""')}"`,
         `"${(i.location || 'Main Store').replace(/"/g, '""')}"`,
-        `"${i.loginAt || ''}"`,
-        `"${i.logoutAt || (i.terminationStatus === 'active' ? 'Active' : '')}"`,
-        i.durationMinutes,
-        `"${i.terminationStatus}"`,
+        `"${formatT12(i.loginAt)}"`,
+        `"${i.terminationStatus === 'active' && !i.logoutAt ? 'Active Session' : formatT12(i.logoutAt)}"`,
+        `"${formatWorkingDur(i.durationMinutes)}"`,
+        `"${i.terminationStatus === 'active' && !i.logoutAt ? 'Logged In' : 'Logged Out'}"`,
         `"${i.browser || ''}"`,
         `"${i.os || ''}"`,
         `"${i.ip || ''}"`,

@@ -6,7 +6,7 @@ import { useRealtime, useSocketEvent } from '../contexts/RealtimeContext';
 import { useToast } from '../contexts/ToastContext';
 import { Badge, Card, EmptyState, Field, Modal, ProgressBar, SectionHeader, Skeleton, Tabs } from '../components/ui';
 import { Icon } from '../components/icons';
-import { cx, formatDate, formatDateTime, titleize } from '../lib/format';
+import { cx, formatDate, formatDateTime, formatWorkingDuration, titleize } from '../lib/format';
 import type { PickerEmployee } from '../lib/types';
 
 // LiveGuard and Monitor Components
@@ -772,11 +772,11 @@ export default function Activity() {
                       <tr>
                         <th>Employee</th>
                         <th>Store Location</th>
-                        <th>Login Time</th>
-                        <th>Logout Time</th>
-                        <th>Session Duration</th>
+                        <th>Login Time (12-hr)</th>
+                        <th>Logout Time (12-hr)</th>
+                        <th>Total Working Duration</th>
                         <th>Browser & OS</th>
-                        <th>Status</th>
+                        <th>Current Status</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -812,7 +812,7 @@ export default function Activity() {
                             </td>
                             <td>
                               <span className="text-xs font-semibold text-ink-800">
-                                {item.durationMinutes ? `${item.durationMinutes} mins` : isLive ? 'Live' : '—'}
+                                {item.durationMinutes ? formatWorkingDuration(item.durationMinutes, 'minutes') : isLive ? 'Currently Logged In' : '—'}
                               </span>
                             </td>
                             <td>
