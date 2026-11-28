@@ -149,6 +149,16 @@ async function conversationRoomIds(employeeId) {
     return rows.map((r) => Number(r.conversation_id));
 }
 export function initRealtime(server) {
+    // Global upgrade error guard: prevents unhandled socket ECONNRESET crashes on invalid upgrade requests (GHSA-v775-f652-7rv6)
+    server.on('upgrade', (_req, socket) => {
+        socket.on('error', (err) => {
+            // In Engine.IO, abrupt client disconnection on non-engine paths or before upgrade completes
+            // emits an 'error' event on the socket. Having this listener ensures Node never crashes.
+            if (process.env.NODE_ENV !== 'production') {
+                console.debug(`[realtime] Handled socket upgrade error: ${err.message}`);
+            }
+        });
+    });
     io = new Server(server, {
         path: '/socket.io',
         cors: { origin: config.appOrigin.split(','), credentials: true },
