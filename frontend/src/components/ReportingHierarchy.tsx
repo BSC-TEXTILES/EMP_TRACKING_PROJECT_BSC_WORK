@@ -571,26 +571,58 @@ function TreeView({
       return;
     }
 
-    if (draggedNode.locationId !== targetManager.locationId && !targetManager.isRoot) {
-      toast.error(`Store boundary: ${draggedNode.name} is in ${draggedNode.locationName ?? 'store'}, while ${targetManager.name} is in ${targetManager.locationName ?? 'store'}. Transfer location first.`);
-      setDraggedNode(null);
-      return;
-    }
-
+    const isCrossStore = !targetManager.isRoot && targetManager.locationId && draggedNode.locationId !== targetManager.locationId;
     const empId = draggedNode.id;
     const empName = draggedNode.name;
     const previousManagerId = draggedNode.managerId;
     const previousManagerName = draggedNode.managerName;
+    const previousLocationId = draggedNode.locationId;
     const targetName = targetManager.name;
 
     try {
       const res = await api.put<{ changed: boolean }>(`/hierarchy/employees/${empId}/assignment`, {
         managerId: targetManager.id,
-        reason: `Reassigned under ${targetName} via organisation drag-and-drop`,
+        locationId: isCrossStore ? targetManager.locationId : undefined,
+        reason: isCrossStore
+          ? `Transferred to ${targetManager.locationName ?? 'store'} and reassigned under ${targetName} via organisation drag-and-drop`
+          : `Reassigned under ${targetName} via organisation drag-and-drop`,
       });
       if (res.changed) {
-        toast.success(`Moved ${empName} under ${targetName}.`);
+        toast.success(
+          isCrossStore
+            ? `Transferred ${empName} to ${targetManager.locationName ?? 'store'} under ${targetName}.`
+            : `Moved ${empName} under ${targetName}.`
+        );
         setUndoItem({ empId, restoreManagerId: previousManagerId, prevManagerName: previousManagerName, empName, targetName });
+        onReload();
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setDraggedNode(null);
+    }
+  };
+
+  const handleDropOnLocation = async (targetLoc: LocationSummary) => {
+    setDragOverNodeId(null);
+    if (!draggedNode) return;
+    const empId = draggedNode.id;
+    const empName = draggedNode.name;
+    if (draggedNode.locationId === targetLoc.id) {
+      setDraggedNode(null);
+      return;
+    }
+
+    try {
+      const locMgr = targetLoc.locationManagers[0] ?? data.employees.find((e) => e.locationId === targetLoc.id && e.directReports > 0);
+      const newManagerId = locMgr ? locMgr.id : (data.root ? data.root.id : null);
+      const res = await api.put<{ changed: boolean }>(`/hierarchy/employees/${empId}/assignment`, {
+        locationId: targetLoc.id,
+        managerId: newManagerId,
+        reason: `Transferred to ${targetLoc.code} – ${targetLoc.name} via organisation drag-and-drop`,
+      });
+      if (res.changed) {
+        toast.success(`Transferred ${empName} to ${targetLoc.code} – ${targetLoc.name}.`);
         onReload();
       }
     } catch (err) {
@@ -760,47 +792,90 @@ function TreeView({
         const members = nodes.filter((n) => n.locationId === l.id && !n.isRoot);
         const key = `loc:${l.id}`;
         const isCollapsed = !searching && collapsed.has(key);
+        const isLocOver = dragOverNodeId === -l.id;
         return (
-          <Card key={l.id} className="overflow-hidden">
-            <div className="flex flex-wrap items-center gap-3 border-b border-ink-100 bg-ink-50/70 px-4 py-3">
-              <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onToggle(key)} aria-expanded={!isCollapsed}>
-                <Icon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={16} className="text-ink-500" />
-                <span className="flex h-9 w-12 items-center justify-center rounded-lg bg-brand-600 text-xs font-bold text-white">{l.code}</span>
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-ink-900">{l.code} – {l.name}</span>
-                  <span className="block text-xs text-ink-500">{l.total} employees · {l.managers} managers · {l.present} present · {l.working} working · {l.onLeave} on leave</span>
-                  <span className="block truncate text-xs text-ink-500">
-                    HR: {l.hr.length ? l.hr.map((p) => p.name).join(', ') : <span className="text-amber-600">not assigned</span>}
-                    {l.locationManagers.length > 0 && <> · Managers: {l.locationManagers.map((p) => p.name).join(', ')}</>}
-                  </span>
-                </span>
-              </button>
-              <div className="flex flex-wrap gap-2">
-                {actions.onHr && (
-                  <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onHr!(l)}>
-                    <Icon name="users" size={14} /> Location HR
-                  </button>
-                )}
-                {actions.onManagers && (
-                  <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onManagers!(l)}>
-                    <Icon name="userCheck" size={14} /> Location managers
-                  </button>
-                )}
-                {actions.onDelete && (
-                  <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => actions.onDelete!(l)} aria-label={`Delete ${l.code}`}>
-                    <Icon name="trash" size={14} /> Delete
-                  </button>
-                )}
-              </div>
-            </div>
-            {!isCollapsed && (
-              <div className="p-3 sm:p-4">
-                {members.length === 0
-                  ? <p className="py-4 text-center text-sm text-ink-400">{searching ? 'No matching employees here.' : 'No employees assigned to this location yet.'}</p>
-                  : groupBy === 'department' ? renderDepartments(members, key) : renderReporting(members, key)}
-              </div>
+          <div
+            key={l.id}
+            className={cx(
+              'rounded-2xl transition-all duration-200',
+              isLocOver && 'ring-2 ring-brand-500 shadow-md bg-brand-50/20'
             )}
-          </Card>
+            onDragOver={(e: React.DragEvent) => {
+              if (canManage && draggedNode && draggedNode.locationId !== l.id) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                if (dragOverNodeId !== -l.id) setDragOverNodeId(-l.id);
+              }
+            }}
+            onDragLeave={() => {
+              if (dragOverNodeId === -l.id) setDragOverNodeId(null);
+            }}
+            onDrop={(e: React.DragEvent) => {
+              e.preventDefault();
+              setDragOverNodeId(null);
+              void handleDropOnLocation(l);
+            }}
+          >
+            <Card className="overflow-hidden">
+              <div className="flex flex-wrap items-center gap-3 border-b border-ink-100 bg-ink-50/70 px-4 py-3">
+                <button type="button" className="flex min-w-0 flex-1 items-center gap-3 text-left" onClick={() => onToggle(key)} aria-expanded={!isCollapsed}>
+                  <Icon name={isCollapsed ? 'chevronRight' : 'chevronDown'} size={16} className="text-ink-500" />
+                  <span className="flex h-9 w-12 items-center justify-center rounded-lg bg-brand-600 text-xs font-bold text-white">{l.code}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-ink-900">{l.code} – {l.name}</span>
+                    <span className="block text-xs text-ink-500">{l.total} employees · {l.managers} managers · {l.present} present · {l.working} working · {l.onLeave} on leave</span>
+                    <span className="block truncate text-xs text-ink-500">
+                      HR: {l.hr.length ? l.hr.map((p) => p.name).join(', ') : <span className="text-amber-600">not assigned</span>}
+                      {l.locationManagers.length > 0 && <> · Managers: {l.locationManagers.map((p) => p.name).join(', ')}</>}
+                    </span>
+                  </span>
+                </button>
+                <div className="flex flex-wrap gap-2">
+                  {actions.onHr && (
+                    <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onHr!(l)}>
+                      <Icon name="users" size={14} /> Location HR
+                    </button>
+                  )}
+                  {actions.onManagers && (
+                    <button type="button" className="btn-secondary btn-sm" onClick={() => actions.onManagers!(l)}>
+                      <Icon name="userCheck" size={14} /> Location managers
+                    </button>
+                  )}
+                  {actions.onDelete && (
+                    <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => actions.onDelete!(l)} aria-label={`Delete ${l.code}`}>
+                      <Icon name="trash" size={14} /> Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+              {!isCollapsed && (
+                <div className="p-3 sm:p-4">
+                  {members.length === 0 ? (
+                    <div
+                      className={cx(
+                        'rounded-xl border-2 border-dashed py-8 px-4 text-center transition-all',
+                        isLocOver
+                          ? 'border-brand-500 bg-brand-50/80 text-brand-900 shadow-inner ring-2 ring-brand-300'
+                          : 'border-ink-200 bg-ink-50/40 text-ink-500'
+                      )}
+                    >
+                      <Icon name="users" size={26} className="mx-auto mb-2 text-ink-400" />
+                      <p className="text-sm font-semibold text-ink-800">
+                        {searching ? 'No matching employees here.' : 'No employees assigned to this location yet.'}
+                      </p>
+                      {canManage && (
+                        <p className="mt-1 text-xs text-brand-700 font-medium">
+                          Drag and drop employee cards here to assign them to {l.name} ({l.code}).
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    groupBy === 'department' ? renderDepartments(members, key) : renderReporting(members, key)
+                  )}
+                </div>
+              )}
+            </Card>
+          </div>
         );
       })}
       {unassigned.length > 0 && location === 'all' && (
@@ -829,38 +904,55 @@ function MoveEmployeeModal({
   onMoved: () => void;
 }) {
   const toast = useToast();
+  const [targetLocationId, setTargetLocationId] = useState<string>(employee.locationId ? String(employee.locationId) : '');
   const [managerId, setManagerId] = useState<string>(employee.managerId ? String(employee.managerId) : '');
   const [reason, setReason] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Eligible managers: employees in the same location (or root), excluding self and direct/indirect reports
+  // Eligible managers: employees in the selected location (or root), excluding self and direct/indirect reports
   const isDescendant = (parentId: number, targetId: number): boolean => {
     if (parentId === targetId) return true;
     const directReports = employees.filter((e) => e.managerId === parentId);
     return directReports.some((r) => isDescendant(r.id, targetId));
   };
 
+  const locIdToUse = targetLocationId ? Number(targetLocationId) : employee.locationId;
   const eligibleManagers = employees.filter(
     (m) =>
       m.id !== employee.id &&
       !isDescendant(employee.id, m.id) &&
-      (m.isRoot || m.locationId === employee.locationId),
+      (m.isRoot || (locIdToUse ? m.locationId === locIdToUse : true)),
   );
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!managerId) {
-      toast.error('Please select a reporting manager.');
+    if (!managerId && !targetLocationId) {
+      toast.error('Please select a target store location or reporting manager.');
       return;
     }
     setSaving(true);
     try {
-      const selectedManager = employees.find((m) => m.id === Number(managerId));
+      const selectedManager = managerId ? employees.find((m) => m.id === Number(managerId)) : null;
+      const selectedLoc = targetLocationId ? locations.find((l) => l.id === Number(targetLocationId)) : null;
+      const newLocId = targetLocationId ? Number(targetLocationId) : undefined;
+      const newMgrId = managerId ? Number(managerId) : null;
+
       await api.put(`/hierarchy/employees/${employee.id}/assignment`, {
-        managerId: Number(managerId),
-        reason: reason.trim() || `Reassigned reporting manager to ${selectedManager?.name ?? 'manager'}`,
+        managerId: newMgrId,
+        locationId: newLocId,
+        reason:
+          reason.trim() ||
+          (selectedLoc && selectedManager
+            ? `Transferred to ${selectedLoc.code} and reassigned under ${selectedManager.name}`
+            : selectedLoc
+              ? `Transferred to ${selectedLoc.code} – ${selectedLoc.name}`
+              : `Reassigned reporting manager to ${selectedManager?.name ?? 'manager'}`),
       });
-      toast.success(`Successfully reassigned ${employee.name} to report to ${selectedManager?.name ?? 'manager'}.`);
+      toast.success(
+        selectedLoc
+          ? `Transferred ${employee.name} to ${selectedLoc.code} – ${selectedLoc.name}.`
+          : `Successfully reassigned ${employee.name} to report to ${selectedManager?.name ?? 'manager'}.`
+      );
       onMoved();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -870,7 +962,7 @@ function MoveEmployeeModal({
   };
 
   return (
-    <Modal open title="Move / Reassign Reporting Manager" onClose={onClose} size="md">
+    <Modal open title="Move / Reassign Reporting Manager & Store" onClose={onClose} size="md">
       <form onSubmit={handleSave} className="space-y-4">
         <div className="flex items-center gap-3 rounded-xl border border-ink-200 bg-ink-50/50 p-3">
           <Avatar name={employee.name} src={employee.photoUrl} size={42} />
@@ -885,7 +977,26 @@ function MoveEmployeeModal({
           </div>
         </div>
 
-        <Field label="Select Target Reporting Manager" required hint="Choose an authorized manager within the same store location or the Software Manager.">
+        <Field label="Target Store Location" hint="Move or transfer employee to another store location (e.g. BEL, DAV, SHI).">
+          <select
+            className="input w-full"
+            value={targetLocationId}
+            onChange={(e) => {
+              setTargetLocationId(e.target.value);
+              setManagerId('');
+            }}
+            disabled={saving}
+          >
+            <option value="">-- Keep Current Location ({employee.locationCode ?? 'None'}) --</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.id}>
+                {loc.code} – {loc.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Select Target Reporting Manager" required hint="Choose an authorized manager within the selected store location or the Software Manager.">
           <select
             className="input w-full"
             value={managerId}

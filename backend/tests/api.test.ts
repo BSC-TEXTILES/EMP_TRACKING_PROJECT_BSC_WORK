@@ -7,17 +7,22 @@ import { enqueueEmail, processEmailQueue } from '../src/lib/mailer.js';
 import { today } from '../src/lib/dates.js';
 import { AuthService } from '../src/services/AuthService.js';
 import { config } from '../src/config.js';
+import { resetRateLimits } from '../src/middleware/security.js';
 
 let app: Express;
 
 const PASSWORD = 'Workforce@2026';
 
 async function login(identifier: string) {
+  resetRateLimits();
   const agent = request.agent(app);
   const response = await agent
     .post('/api/auth/login')
     .set('Origin', 'http://localhost:5173')
     .send({ identifier, password: PASSWORD });
+  if (response.status !== 200) {
+    throw new Error(`Login failed for ${identifier} (${response.status}): ${JSON.stringify(response.body)}`);
+  }
   return { agent, response };
 }
 
@@ -619,32 +624,38 @@ describe('email delivery', () => {
   it('queues, processes and reports a transactional email without exposing credentials', async () => {
     const admin = await login('admin@workforce.test');
     await execute("UPDATE email_deliveries SET status = 'skipped' WHERE status IN ('queued', 'failed')");
-    const id = await enqueueEmail({
-      to: 'qa.email@workforce.test',
-      toName: 'QA Mailbox',
-      template: 'test',
-      data: { name: 'QA Mailbox' },
-      dedupeKey: `qa-email-${Date.now()}`,
-    });
-    expect(id).toBeTruthy();
+    const prevSending = config.email.sendingEnabled;
+    config.email.sendingEnabled = true;
+    try {
+      const id = await enqueueEmail({
+        to: 'qa.email@workforce.test',
+        toName: 'QA Mailbox',
+        template: 'test',
+        data: { name: 'QA Mailbox' },
+        dedupeKey: `qa-email-${Date.now()}`,
+      });
+      expect(id).toBeTruthy();
 
-    await processEmailQueue(50);
+      await processEmailQueue(50);
 
-    const overview = await admin.agent.get('/api/admin/email?limit=50');
-    expect(overview.status).toBe(200);
-    expect(overview.body.status).not.toHaveProperty('password');
-    expect(overview.body.templates.length).toBeGreaterThan(5);
+      const overview = await admin.agent.get('/api/admin/email?limit=50');
+      expect(overview.status).toBe(200);
+      expect(overview.body.status).not.toHaveProperty('password');
+      expect(overview.body.templates.length).toBeGreaterThan(5);
 
-    const row = (overview.body.deliveries as { id: number; status: string; template: string; attempts: number }[]).find(
-      (entry) => entry.id === id,
-    );
-    expect(row).toBeDefined();
-    expect(row!.template).toBe('test');
-    expect(row!.attempts).toBeGreaterThan(0);
-    expect(['sent', 'skipped', 'failed']).toContain(row!.status);
+      const row = (overview.body.deliveries as { id: number; status: string; template: string; attempts: number }[]).find(
+        (entry) => entry.id === id,
+      );
+      expect(row).toBeDefined();
+      expect(row!.template).toBe('test');
+      expect(row!.attempts).toBeGreaterThan(0);
+      expect(['sent', 'skipped', 'failed']).toContain(row!.status);
 
-    const stored = await queryOne<{ status: string }>('SELECT status FROM email_deliveries WHERE id = ?', [id]);
-    expect(stored?.status).toBe(row!.status);
+      const stored = await queryOne<{ status: string }>('SELECT status FROM email_deliveries WHERE id = ?', [id]);
+      expect(stored?.status).toBe(row!.status);
+    } finally {
+      config.email.sendingEnabled = prevSending;
+    }
   });
 });
 
@@ -748,6 +759,7 @@ describe('refresh token rotation', () => {
   }
 
   it('rotates refresh tokens and detects reuse of a consumed token', async () => {
+    resetRateLimits();
     const agent = request.agent(app);
     const loginResponse = await agent
       .post('/api/auth/login')

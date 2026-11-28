@@ -73,11 +73,13 @@ async function login(identifier: string) {
 }
 
 const original = { ...config.smtp };
+const originalSending = config.email.sendingEnabled;
 function useSmtp(enabled: boolean) {
   Object.assign(config.smtp, enabled
     ? { host: '127.0.0.1', port: smtpPort, secure: false, user: '', password: '', from: 'Workforce <no-reply@bsc.test>' }
     : { host: '' });
   vi.spyOn(config.smtp, 'configured', 'get').mockReturnValue(enabled);
+  config.email.sendingEnabled = enabled;
   resetMailTransport();
 }
 
@@ -88,6 +90,7 @@ beforeAll(async () => {
 afterEach(() => { captured = []; rejectAll = false; });
 afterAll(async () => {
   Object.assign(config.smtp, { host: original.host, port: original.port, secure: original.secure, user: original.user, password: original.password, from: original.from });
+  config.email.sendingEnabled = originalSending;
   resetMailTransport();
   vi.restoreAllMocks();
   smtp.close();
@@ -188,7 +191,7 @@ describe('mailbox email delivery', () => {
     expect(send.status).toBe(201);
     expect(send.body.deliveryConfigured).toBe(false);
     expect(send.body.success).toBe(false);
-    expect(send.body.error).toMatch(/not configured/i);
+    expect(send.body.error).toMatch(/not configured|turned off/i);
     expect(captured).toHaveLength(0);
   });
 });

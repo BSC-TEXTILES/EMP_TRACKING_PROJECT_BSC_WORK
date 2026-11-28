@@ -148,13 +148,13 @@ async function deliver(row: {
   payload: string | null;
 }): Promise<void> {
   if (!emailSendingEnabled()) {
-    await execute("UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?", [EMAIL_OFF_REASON, row.id]);
+    await execute("UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ? WHERE id = ?", [EMAIL_OFF_REASON, row.id]);
     return;
   }
   const transport = buildTransporter();
   if (!transport) {
     await execute(
-      "UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?",
+      "UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ? WHERE id = ?",
       ['SMTP is not configured', row.id],
     );
     console.log(`[mail:dev] ${row.subject} → ${row.recipient_email} (SMTP not configured, not sent)`);
@@ -567,7 +567,7 @@ export async function processEmailQueue(limit = 10): Promise<{ sent: number; fai
   if (!emailSendingEnabled()) {
     // Backlog is marked skipped so it cannot flood out later when sending is switched back on.
     const result = await execute(
-      `UPDATE email_deliveries SET status = 'skipped', last_error = ?
+      `UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ?
         WHERE status IN ('queued', 'failed') AND template <> 'otp'`,
       [EMAIL_OFF_REASON],
     );

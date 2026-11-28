@@ -91,8 +91,8 @@ export async function enqueueEmail(input) {
             (input.subject ?? rendered.subject).slice(0, 255),
             input.template.slice(0, 60),
             JSON.stringify(input.data).slice(0, 60_000),
-            emailSendingEnabled() ? 'queued' : 'skipped',
-            emailSendingEnabled() ? null : EMAIL_OFF_REASON,
+            'queued',
+            null,
             input.dedupeKey?.slice(0, 160) ?? null,
             input.relatedType?.slice(0, 40) ?? null,
             input.relatedId ?? null,
@@ -107,12 +107,12 @@ export async function enqueueEmail(input) {
 }
 async function deliver(row) {
     if (!emailSendingEnabled()) {
-        await execute("UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?", [EMAIL_OFF_REASON, row.id]);
+        await execute("UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ? WHERE id = ?", [EMAIL_OFF_REASON, row.id]);
         return;
     }
     const transport = buildTransporter();
     if (!transport) {
-        await execute("UPDATE email_deliveries SET status = 'skipped', last_error = ? WHERE id = ?", ['SMTP is not configured', row.id]);
+        await execute("UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ? WHERE id = ?", ['SMTP is not configured', row.id]);
         console.log(`[mail:dev] ${row.subject} → ${row.recipient_email} (SMTP not configured, not sent)`);
         return;
     }
@@ -439,7 +439,7 @@ export async function deliverNow(id) {
 export async function processEmailQueue(limit = 10) {
     if (!emailSendingEnabled()) {
         // Backlog is marked skipped so it cannot flood out later when sending is switched back on.
-        const result = await execute(`UPDATE email_deliveries SET status = 'skipped', last_error = ?
+        const result = await execute(`UPDATE email_deliveries SET status = 'skipped', attempts = attempts + 1, last_error = ?
         WHERE status IN ('queued', 'failed') AND template <> 'otp'`, [EMAIL_OFF_REASON]);
         return { sent: 0, failed: 0, skipped: result.affectedRows };
     }

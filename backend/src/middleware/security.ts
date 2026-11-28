@@ -21,6 +21,10 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
 
 const buckets = new Map<string, { count: number; resetAt: number }>();
 
+export function resetRateLimits(): void {
+  buckets.clear();
+}
+
 export function rateLimit(options: { windowMs: number; max: number; keyPrefix?: string }) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const key = `${options.keyPrefix ?? 'global'}:${clientIp(req)}:${req.method}:${req.path}`;

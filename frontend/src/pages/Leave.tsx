@@ -1255,8 +1255,6 @@ export default function Leave() {
                       type="date"
                       className="input font-bold text-sm text-ink-900"
                       value={woDate}
-                      min={`${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
-                      max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                       onChange={(e) => setWoDate(e.target.value)}
                       required
                     />
@@ -1313,8 +1311,6 @@ export default function Leave() {
                         type="date"
                         className="input font-bold text-sm text-ink-900"
                         value={woStartDate}
-                        min={`${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
-                        max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                         onChange={(e) => {
                           setWoStartDate(e.target.value);
                           if (!woEndDate || woEndDate < e.target.value) setWoEndDate(e.target.value);
@@ -1327,8 +1323,6 @@ export default function Leave() {
                         type="date"
                         className="input font-bold text-sm text-ink-900"
                         value={woEndDate}
-                        min={woStartDate || `${woPeriod.year}-${String(woPeriod.month).padStart(2, '0')}-01`}
-                        max={woSummary ? `${woSummary.year}-${String(woSummary.month).padStart(2, '0')}-${String(woSummary.daysInMonth).padStart(2, '0')}` : undefined}
                         onChange={(e) => setWoEndDate(e.target.value)}
                         required
                       />
@@ -1398,7 +1392,6 @@ export default function Leave() {
                     type="date"
                     className="input font-medium"
                     value={startDate}
-                    min={`${todayDateString().slice(0, 7)}-01`}
                     onChange={(e) => {
                       setStartDate(e.target.value);
                       if (!endDate || endDate < e.target.value) setEndDate(e.target.value);
@@ -1411,7 +1404,6 @@ export default function Leave() {
                     type="date"
                     className="input font-medium"
                     value={endDate}
-                    min={startDate || `${todayDateString().slice(0, 7)}-01`}
                     onChange={(e) => setEndDate(e.target.value)}
                     required
                   />
@@ -1477,7 +1469,6 @@ export default function Leave() {
                   type="date"
                   className="input font-medium"
                   value={hdDate}
-                  min={`${todayDateString().slice(0, 7)}-01`}
                   onChange={(e) => setHdDate(e.target.value)}
                   required
                 />
